@@ -4,9 +4,11 @@
 # after a .py file in this project changes. Makes a broken test VISIBLE the
 # instant it breaks. Python-based so it doesn't depend on jq.
 #
-# This gate deliberately fails OPEN (missing pytest, malformed event, hung
-# suite → allow): it is a visibility aid, not a security control. Don't "fix"
-# it into fail-closed — that would block all edits on a broken venv.
+# This gate deliberately fails OPEN (missing pytest, malformed event →
+# allow): it is a visibility aid, not a security control. A hung suite
+# (timeout) DOES block — silence there would hide a real problem. Don't
+# "fix" the open cases into fail-closed — that would block all edits on a
+# broken venv.
 import json
 import os
 import subprocess

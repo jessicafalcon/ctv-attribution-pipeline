@@ -23,6 +23,12 @@ One entry per non-obvious choice. Newest last.
   `.claude/settings.local.json`), inherited ruling from trial-signal-assistant:
   a committed settings.json would auto-execute an inbound PR branch's hook +
   pytest + conftest.py for anyone opening it in Claude Code.
+- **Compose ports bind 127.0.0.1** (security-review finding): the stack runs
+  passwordless local-dev services (ClickHouse default user, Grafana
+  admin/admin, Redpanda admin API); binding to localhost keeps them off the
+  LAN. In-network services are unaffected (compose DNS).
+- **GitHub Actions pinned by tag, not SHA** — accepted for now: this CI
+  holds zero secrets. Revisit (SHA-pin) before the Phase 3 integration job.
 - **`tests/test_smoke.py` instead of a truly empty suite.** Bare `pytest`
   exits 5 on "no tests collected", which would make `make test` red; one
   layout assertion keeps the suite meaningfully green.
