@@ -279,10 +279,9 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-- Phase 0 complete locally on `phase-0-skeleton` (2026-08-17): skeleton,
-  compose stack, CI, tooling wired; all review findings resolved incl.
-  exit-code Redpanda healthcheck. Awaiting developer go-ahead to push/PR —
-  review verdicts always go to the developer before any push.
+- Phase 0 (2026-08-17): PR #2 open on `phase-0-skeleton`, CI green, review
+  verdicts approved by developer. Awaiting developer squash-merge; then
+  Phase 1 (producer + contracts) branches from main.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
