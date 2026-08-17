@@ -36,3 +36,33 @@ One entry per non-obvious choice. Newest last.
 - **`tests/test_smoke.py` instead of a truly empty suite.** Bare `pytest`
   exits 5 on "no tests collected", which would make `make test` red; one
   layout assertion keeps the suite meaningfully green.
+
+## Phase 1
+
+- **Schema registration via stdlib urllib, not confluent-kafka's
+  schemaregistry extra.** Registration is one POST per subject; the extra
+  pulls httpx/authlib/etc. (not on the allowlist) to do the same thing.
+  Validation on produce is done by the pydantic models the schemas were
+  generated from, so the contract enforced is identical.
+- **Profiles are JSON, not YAML.** YAML would add a dependency; JSON is
+  stdlib and profiles are small flat config.
+- **Counter IDs (`e-000042`) and a fixed profile `sim_start`, no UUIDs or
+  wall clock.** Byte-identical output per seed is the phase's core
+  guarantee; any wall-clock or entropy source breaks it. Readable IDs also
+  make fixture diffs debuggable.
+- **Emit order = arrival order (sorted by `ingest_time`), duplicates
+  re-sent later with identical bytes.** Mirrors how a real stream hits the
+  broker: late events appear late in the stream, duplicates are true
+  re-sends. Gives the engine (Phase 5) realistic input for lateness and
+  dedup without extra machinery.
+- **Single-partition topics at tiny scale.** Keyed partitioning is already
+  in place (household_id / device_id); partition count is the documented
+  scaling lever (ARCHITECTURE.md), and one partition keeps cross-partition
+  ordering out of fixture comparisons.
+- **Co-view multiplier = per-genre factor on the caused-conversion rate.**
+  Simplest producer-side meaning that creates genre-skewed conversion
+  volume for the read-time co-view factor and Phase 8's multiplier-bug
+  fault to work against.
+- **`data/out/<profile>/` mirror of every produced payload.** Byte-identity
+  across runs and against `fixtures/tiny/` becomes a `diff -r`, with no
+  topic-consuming harness needed in Phase 1.

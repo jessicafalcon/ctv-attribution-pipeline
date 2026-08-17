@@ -1,0 +1,27 @@
+{
+  "name": "tiny",
+  "seed": 42,
+  "sim_start": "2026-08-01T00:00:00Z",
+  "n_campaigns": 3,
+  "spend_range": [0.02, 0.15],
+  "app_ids": ["app-01", "app-02", "app-03"],
+  "genres": ["sports", "news", "drama", "comedy"],
+  "graph": {
+    "n_households": 10,
+    "devices_per_household": [2, 4],
+    "ips_per_household": [1, 2],
+    "shared_ip_fraction": 0.2
+  },
+  "events": {
+    "n_exposures": 150,
+    "events_per_hour": 4,
+    "caused_conversion_rate": 0.2,
+    "organic_conversions": 20,
+    "conversion_delay_minutes": [10, 2880],
+    "purchase_fraction": 0.4,
+    "revenue_range": [20.0, 120.0],
+    "late": {"fraction": 0.1, "min_minutes": 30, "max_minutes": 180},
+    "duplicate_fraction": 0.05,
+    "co_view_multiplier": {"sports": 1.5, "news": 1.0, "drama": 1.0, "comedy": 1.2}
+  }
+}
