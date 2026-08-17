@@ -69,6 +69,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   RESULTS.md, demo_checklist.md.
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
+- `BACKLOG.md` — deferred findings with revisit triggers. Review at every
+  phase exit (alongside the coherence audit): do due items or re-defer with
+  a new trigger, never silently drop.
 
 ## Commands (macOS, uv)
 
@@ -190,6 +193,8 @@ standard way over the clever way.
   fixture, or ARCHITECTURE.md seems wrong, STOP and report — never silently
   repair.
 - Before a phase: restate its "Done when" from docs/PHASES.md.
+- At each phase exit: run the coherence audit and review BACKLOG.md for due
+  items.
 - Build at tiny scale first (fixtures/tiny), prove correctness, then turn
   up the profile.
 - Fixtures in fixtures/tiny/ are read-only after Phase 1.
@@ -206,12 +211,18 @@ standard way over the clever way.
 
 ## Git workflow (one branch + one PR per phase)
 
-- `main` is protected. Never commit to main directly; never force-push.
+- Treat `main` as protected: never commit to it directly; never force-push.
+- Review gate BEFORE the remote: run the review agents (code-reviewer,
+  security-reviewer, functionality-tester) on the finished work, apply or
+  get explicit acceptance for their findings, and report the verdicts to
+  the developer. Do NOT push and do NOT open a PR until the developer has
+  seen the verdicts and explicitly says to. Commits stay local until then.
 - Start each phase on a fresh branch from up-to-date main:
   `git checkout main && git pull && git checkout -b phase-N-<slug>`
   (e.g. `phase-2-resolve-stage`). One phase = one branch = one PR.
 - Commit small, at green states, message prefixed `phase-N:`.
-- Open the PR with `gh pr create` when the phase's Done-when passes.
+- Open the PR with `gh pr create` when the phase's Done-when passes AND the
+  developer has approved the review verdicts (see review gate above).
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
 - CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
