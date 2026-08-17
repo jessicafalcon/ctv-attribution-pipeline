@@ -1,0 +1,246 @@
+# CLAUDE.md — CTV Attribution Pipeline
+
+## What this is
+
+A portfolio-grade streaming data pipeline: a seeded producer emits TV
+ad-exposure and conversion events into Redpanda, a resolve stage maps
+conversions to households through a device graph, a Bytewax engine does a
+windowed, late-tolerant, cross-device stream join, a periodic reconciliation
+job closes the long-window tail, ClickHouse serves ROAS/CPA/CVR/site-visit
+rate with restatements, and a read-only AI agent triages attribution
+integrity from Prometheus/Alertmanager alerts. Ground-truth causal links let
+attribution accuracy and agent accuracy be scored against reality.
+
+Built by a developer who is NEW to Redpanda, stream processing (Bytewax),
+and ClickHouse — see Teaching rule below.
+
+`docs/ARCHITECTURE.md` is the spec. `docs/PHASES.md` is the plan. Read both
+before design decisions.
+
+## Architecture
+
+```
+PRODUCER (seeded)  ── device graph (compacted topic) ── truth links (side file, never read)
+   │ exposures (key household_id)      │ conversions (key device_id)
+   ▼                                   ▼
+REDPANDA  exposures | conversions | conversions_resolved  + schema registry
+                                       │
+                                  RESOLVE STAGE  device → household (IP fallback, fan-out)
+                                       │  → conversions_resolved (key household_id)
+   exposures ──────────────────────────┤
+                                       ▼
+ATTRIBUTION ENGINE (Bytewax)  hot window (7d) · last-touch + assists · dedup (TTL)
+                              watermarks + allowed lateness · emits attributed/unattributed
+                                       ▼
+CLICKHOUSE  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
+            exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
+                                       ▲
+RECONCILIATION JOB (periodic)  unattributed in long window (≤90d) → match vs
+                               exposures_landed → corrected rows → refresh → snapshot
+                                       │
+REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
+──── off the critical path ──────────────────────────────────────────────
+PROMETHEUS → GRAFANA · ALERTMANAGER ──webhook──► AGENT (SELECT-only user, probe registry,
+                                                  typed AttributionFinding)
+```
+Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
+
+## Repo map
+
+- `specs/` — one spec per phase task. Each has ONE done command. Read fully
+  first. `docs/PHASES.md` is the phase list; specs are the executable
+  contracts derived from it.
+- `producer/` — pydantic event models (source of truth for schemas), device
+  graph generator, seeded stream generator, `profiles/` (tiny, medium, fault
+  scenarios). Truth links written to `data/truth/`, never read by the pipeline.
+- `resolve/` — conversion → household stage. Loads the graph from the
+  compacted topic; emits to `conversions_resolved`.
+- `streaming/` — Bytewax dataflow: join, hot window, dedup, lateness.
+- `reconcile/` — periodic long-window matcher, rollup refresh, snapshot writer.
+- `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
+- `queries/` — reporting SQL, restatement view, benchmark harness.
+- `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
+- `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
+  `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
+- `tests/` — pytest unit (no services); `tests/integration/` needs `make up`.
+- `fixtures/tiny/` — golden producer output + expected resolved/attributed
+  rows. READ-ONLY ground truth after Phase 1.
+- `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
+  RESULTS.md, demo_checklist.md.
+- `data/` — gitignored. `data/truth/` side files.
+- `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
+
+## Commands (macOS, uv)
+
+- `make setup` — uv sync, pre-commit install
+- `make up` / `make down` — compose up with health checks / down with volumes
+  (`down` is the ONLY sanctioned destructive path)
+- `make seed PROFILE=tiny|medium|<fault>` — run producer (deterministic per
+  PRODUCER_SEED; writes truth to data/truth/<profile>/)
+- `make run` — resolve stage + engine + reconciliation scheduler
+- `make eval` — attribution precision/recall vs truth for the last profile
+- `make report` — 4 metrics + restatement view
+- `make bench` — naive vs optimized: latency, rows read, bytes read
+- `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
+- `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
+  (API tokens; ask first)
+- `make test` — pytest, no services, no network
+- `make test-int` — pytest against running compose stack
+- `make lint` — ruff via pre-commit
+
+Canonical clean-state demo:
+`make down && make up && make seed PROFILE=tiny && make run && make eval && make report`
+
+## Event model facts (from ARCHITECTURE.md; update if empirical findings differ)
+
+- Exposure: exposure_id, event_time, ingest_time, campaign_id, household_id,
+  ip, app_id, program_genre, spend. Key: household_id.
+- Conversion: conversion_id, event_time, ingest_time, device_id, ip,
+  conversion_type (site_visit | purchase), revenue, order_id. Key: device_id.
+- Resolved conversion adds: household_id, resolution (device | ip),
+  ambiguous (bool), candidate_count.
+- Attributed record adds: exposure_id (nullable), assists (list),
+  attributed (bool), processed_at, path (hot | reconciled).
+- Lateness = ingest_time − event_time. Hot path handles minutes–hours;
+  reconciliation handles days.
+- Shared IPs across households are the ONLY source of wrong-household
+  matches. Keep it that way so the fault is isolatable.
+
+## Determinism policy (core design principle)
+
+AI sits at the edge; the pipeline is deterministic.
+- Same PRODUCER_SEED + profile → byte-identical topics and identical
+  attribution output. Break this and it's a bug.
+- Anything computable is computed in Python/SQL, never asked of an LLM:
+  match rates, deltas, IP-cluster stats, restatement magnitudes. Collectors
+  build AttributionContext with zero LLM calls.
+- The agent is read-only (DB-enforced SELECT-only user), off the critical
+  path, and outputs are pydantic-validated. Pipeline output with the agent
+  disabled is byte-identical.
+- The pipeline NEVER reads truth links.
+- Every write to attributed_conversions is idempotent (ReplacingMergeTree
+  keyed conversion_id, version processed_at). Rollups are refreshed on
+  schedule, never insert-triggered summing MVs (corrections would double-count).
+- Test question for any design choice: "could this step give a different
+  answer on a re-run?" If yes, justify in DECISIONS.md or fix it.
+
+## Engineering contracts
+
+- Schema contract: pydantic models in producer/ are the source of truth;
+  JSON Schemas are generated from them and registered — never hand-edited.
+  Producer and every consumer validate.
+- Probe contract: `agent/probes.py` entries are (name, parameterized SQL,
+  pydantic result type). The model never writes SQL.
+- Output contract: AttributionContext and AttributionFinding are pydantic
+  models; validation failure → escalate AMBIGUOUS_NEEDS_HUMAN, never silent
+  retry.
+- Idempotency: replaying any topic from offset 0 converges to the same
+  ClickHouse state.
+- Minimal but scalable: simplest standard solution now; the scaling path is
+  a SCALING.md / DECISIONS.md note, not speculative code. Do not claim scale
+  we don't run.
+
+## Communication style (applies to chat replies, comments, docs, commits)
+
+- Result first: lead with what changed / passed / failed, then details.
+- Plain English, short sentences. No task restatement, no "I will now..."
+  preambles, no closing summaries that repeat the middle.
+- If it fits in one sentence, one sentence. Explanations max 4 sentences
+  (Teaching-rule explanations included).
+- Ban filler adjectives: "robust", "comprehensive", "production-ready",
+  "seamless", "powerful". Show the property; don't claim it.
+- Code comments only where the code can't say it (a quirk, a why).
+  Docstrings: one line unless the function has non-obvious behavior.
+- Reports after a task: files touched, commands run, result, open risks,
+  next step. Nothing else.
+
+## Conventions
+
+- Python 3.12. Type hints everywhere. No JVM anywhere.
+- Dependencies: ask before adding ANY new package. Current allowlist:
+  bytewax, confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
+  anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit.
+- Prometheus metric names prefixed by stage: producer_, resolve_, engine_,
+  reconcile_, agent_.
+- Fault scenarios are producer profiles under producer/profiles/, not
+  ad-hoc scripts.
+- Engine features (dedup, lateness, eviction) are added one at a time, each
+  with a test that uses a producer knob to exercise it.
+- SQL keywords lowercase, one column per line in select lists.
+- Secrets: never commit .env, data/, credentials. ANTHROPIC_API_KEY lives
+  in .env only, never CI. Same block-secrets hook and security-reviewer
+  rule as previous projects (see Project tooling).
+
+## Teaching rule (IMPORTANT)
+
+The developer is learning Redpanda/Kafka, stream processing (Bytewax), and
+ClickHouse. The first time any concept from these tools appears in a
+session (e.g. partitions and keys, consumer groups and offsets, compacted
+topics, watermarks and allowed lateness, stateful operators and eviction,
+ReplacingMergeTree and FINAL, async inserts, refreshable materialized
+views, sort keys), add a 2-4 sentence plain-language explanation of what
+it is and why it's used here, BEFORE the implementation. Every line merged
+must be explainable by the developer in a job interview. Prefer the simple,
+standard way over the clever way.
+
+## Workflow rules
+
+- Agent-loop tasks: the spec in `specs/` is the contract. Its DONE command
+  is the only definition of done. Do not weaken failing tests. If a spec,
+  fixture, or ARCHITECTURE.md seems wrong, STOP and report — never silently
+  repair.
+- Before a phase: restate its "Done when" from docs/PHASES.md.
+- Build at tiny scale first (fixtures/tiny), prove correctness, then turn
+  up the profile.
+- Fixtures in fixtures/tiny/ are read-only after Phase 1.
+- Stack surprises (Bytewax, ClickHouse, Redpanda): check official docs
+  before working around; log the finding under ARCHITECTURE.md "Gotchas".
+- Do not add features outside ARCHITECTURE.md without asking. Out of scope
+  v1: co-viewing inside the engine, Iceberg landing, multi-touch models.
+- Destructive commands (volume removal, DROP, TRUNCATE): only via `make
+  down`, or with explicit confirmation.
+- API-token commands (`make agent-run`, `make agent-eval`): ask first.
+- Commit at every green state with a descriptive message.
+- End each loop with a summary: what changed + decisions the spec didn't
+  cover, listed explicitly for human review.
+
+## Git workflow (one branch + one PR per phase)
+
+- `main` is protected. Never commit to main directly; never force-push.
+- Start each phase on a fresh branch from up-to-date main:
+  `git checkout main && git pull && git checkout -b phase-N-<slug>`
+  (e.g. `phase-2-resolve-stage`). One phase = one branch = one PR.
+- Commit small, at green states, message prefixed `phase-N:`.
+- Open the PR with `gh pr create` when the phase's Done-when passes.
+  PR body: Done-when check + command output, files touched, decisions
+  the spec didn't cover, open risks. Title `Phase N — <name>`.
+- CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
+  `make up && make seed PROFILE=tiny && make run && make test-int`.
+  A PR is mergeable only when CI is green and code-reviewer +
+  functionality-tester have run.
+- The developer merges (squash), never Claude. After merge:
+  `git checkout main && git pull` before the next phase.
+- Hotfixes on a merged phase go on `fix/<slug>` from main, same PR rules.
+- Never open a PR that mixes two phases. If a phase reveals a needed
+  change in an earlier phase, STOP and report; it becomes its own fix PR.
+
+## Project tooling
+
+TO BE FILLED IN DURING PHASE 0. Review the hooks, agents, commands, and
+skills in `~/dev/trail-signal-assistant/.claude/` (and the user-level
+`~/.claude/hooks/` and `~/.claude/skills/`) plus that repo's CLAUDE.md
+"Project tooling" section. For each item decide: adopt as-is, adapt (say
+what changes for this stack), or not needed (say why). Report the table
+to the developer, wait for approval, copy/adapt the approved items into
+`.claude/` here, then replace this section with the index of what is
+actually wired. Rules that carry over regardless: all agents are
+report-only (no Write/Edit); hook wiring lives in the gitignored
+`.claude/settings.local.json`; a finding is fixed in the main session or
+explicitly accepted, never auto-fixed.
+
+## Current status
+
+- Phase 0 not started. ARCHITECTURE.md and PHASES.md finalized 2026-08-17.
+- No infra provisioned; no API keys in repo.
+
+(Update this section at the end of every working day.)
