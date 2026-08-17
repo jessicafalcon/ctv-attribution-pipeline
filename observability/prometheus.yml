@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# Alert rule files arrive in Phase 7 (observability/rules/).
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: redpanda
+    metrics_path: /public_metrics
+    static_configs:
+      - targets: ["redpanda:9644"]
+
+  # Pipeline stages (producer_, resolve_, engine_, reconcile_, agent_)
+  # are added as they gain /metrics endpoints in later phases.
