@@ -17,7 +17,10 @@ services:
     volumes:
       - redpanda-data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      # -w -e exits 0 the moment the cluster reports healthy; if unhealthy it
+      # blocks until the 3s timeout kills it (fail). Exit-code based — no
+      # dependence on rpk's text output format.
+      test: ["CMD", "rpk", "cluster", "health", "-w", "-e"]
       interval: 5s
       timeout: 3s
       retries: 24

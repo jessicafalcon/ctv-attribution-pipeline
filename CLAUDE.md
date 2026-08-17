@@ -269,9 +269,9 @@ never auto-fixed, ignored, or committed around.
 ## Current status
 
 - Phase 0 in progress on `phase-0-skeleton` (2026-08-17): skeleton, compose
-  stack, CI, tooling wired per approved review.
-- Branch protection on main unavailable (private repo, free plan) — enable
-  by making the repo public or upgrading; until then it's discipline-only.
+  stack, CI, tooling wired per approved review. PR pending resolution of the
+  Redpanda healthcheck finding; review verdicts go to the developer before
+  any push/PR.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

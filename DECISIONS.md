@@ -23,6 +23,10 @@ One entry per non-obvious choice. Newest last.
   `.claude/settings.local.json`), inherited ruling from trial-signal-assistant:
   a committed settings.json would auto-execute an inbound PR branch's hook +
   pytest + conftest.py for anyone opening it in Claude Code.
+- **Redpanda healthcheck uses `rpk cluster health -w -e`, not output grep.**
+  The flags make health an exit code (0 when healthy; blocks past the
+  timeout when not), so an rpk text-format change can't silently break
+  `make up`.
 - **Compose ports bind 127.0.0.1** (security-review finding): the stack runs
   passwordless local-dev services (ClickHouse default user, Grafana
   admin/admin, Redpanda admin API); binding to localhost keeps them off the
