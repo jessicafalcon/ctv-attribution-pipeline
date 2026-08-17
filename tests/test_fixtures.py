@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "tiny"
         ("truth_links.jsonl", "truth_links"),
     ],
 )
-def test_tiny_fixture_is_reproducible(filename: str, field: str):
+def test_tiny_fixture_is_reproducible(filename: str, field: str) -> None:
     profile = load_profile("tiny")
     stream = generate(profile, profile.seed)
     data = stream.graph.households if field == "graph" else getattr(stream, field)

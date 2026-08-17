@@ -1,11 +1,13 @@
 """One test per producer knob, plus determinism of the whole stream."""
 
+from typing import Any
+
 from producer.config import Profile, load_profile
-from producer.generate import generate
+from producer.generate import ON_TIME_MAX_JITTER_S, generate
 from producer.serialize import jsonl
 
 
-def profile(**event_overrides) -> Profile:
+def profile(**event_overrides: Any) -> Profile:
     base = load_profile("tiny").model_dump()
     # Larger stream than tiny so knob effects are statistically visible.
     base["graph"]["n_households"] = 50
@@ -19,14 +21,14 @@ def profile(**event_overrides) -> Profile:
     return Profile.model_validate(base)
 
 
-def test_same_seed_byte_identical_different_seed_not():
+def test_same_seed_byte_identical_different_seed_not() -> None:
     a, b, c = generate(profile(), 42), generate(profile(), 42), generate(profile(), 43)
     for field in ("exposures", "conversions", "truth_links"):
         assert jsonl(getattr(a, field)) == jsonl(getattr(b, field))
     assert jsonl(a.exposures) != jsonl(c.exposures)
 
 
-def test_throughput_knob_sets_event_time_spacing():
+def test_throughput_knob_sets_event_time_spacing() -> None:
     stream = generate(profile(events_per_hour=60), 1)
     originals = {e.exposure_id: e for e in stream.exposures}
     times = [
@@ -36,19 +38,27 @@ def test_throughput_knob_sets_event_time_spacing():
     assert deltas == {60.0}
 
 
-def test_late_injector_fraction_and_bounds():
+def test_late_injector_fraction_and_bounds() -> None:
     stream = generate(
         profile(late={"fraction": 0.3, "min_minutes": 30, "max_minutes": 180}), 1
     )
     events = list({e.exposure_id: e for e in stream.exposures}.values())
     lateness = [(e.ingest_time - e.event_time).total_seconds() for e in events]
-    late = [s for s in lateness if s > 60]
+    late = [s for s in lateness if s > ON_TIME_MAX_JITTER_S]
     assert all(30 * 60 <= s <= 180 * 60 for s in late)
     assert 0.2 < len(late) / len(events) < 0.4
-    assert all(0 < s <= 60 for s in lateness if s <= 60)
+    assert all(0 < s <= ON_TIME_MAX_JITTER_S for s in lateness if s not in late)
 
 
-def test_duplicate_injector_reemits_identical_payloads():
+def test_caused_conversion_rate_scales_truth_links() -> None:
+    low = generate(profile(caused_conversion_rate=0.1), 1)
+    high = generate(profile(caused_conversion_rate=0.4), 1)
+    zero = generate(profile(caused_conversion_rate=0.0, organic_conversions=0), 1)
+    assert len(high.truth_links) > 2 * len(low.truth_links)
+    assert not zero.truth_links and not zero.conversions
+
+
+def test_duplicate_injector_reemits_identical_payloads() -> None:
     stream = generate(profile(duplicate_fraction=0.2), 1)
     by_id: dict[str, list] = {}
     for e in stream.exposures:
@@ -60,13 +70,13 @@ def test_duplicate_injector_reemits_identical_payloads():
         assert by_id[i][0] == by_id[i][1]  # byte-identical re-send, same ingest_time
 
 
-def test_no_duplicates_when_fraction_zero():
+def test_no_duplicates_when_fraction_zero() -> None:
     stream = generate(profile(duplicate_fraction=0.0), 1)
     ids = [e.exposure_id for e in stream.exposures]
     assert len(ids) == len(set(ids))
 
 
-def test_co_view_multiplier_scales_caused_conversions_per_genre():
+def test_co_view_multiplier_scales_caused_conversions_per_genre() -> None:
     stream = generate(
         profile(co_view_multiplier={"sports": 2.0}, caused_conversion_rate=0.2), 1
     )
@@ -86,7 +96,7 @@ def test_co_view_multiplier_scales_caused_conversions_per_genre():
     assert sports_rate > 1.4 * news_rate
 
 
-def test_truth_links_reference_real_events_and_same_household():
+def test_truth_links_reference_real_events_and_same_household() -> None:
     stream = generate(profile(), 42)
     exposures = {e.exposure_id: e for e in stream.exposures}
     conversions = {c.conversion_id: c for c in stream.conversions}
@@ -101,9 +111,33 @@ def test_truth_links_reference_real_events_and_same_household():
         assert conversion.event_time > exposure.event_time
 
 
-def test_emit_order_is_arrival_order():
+def test_emit_order_is_arrival_order() -> None:
     stream = generate(
         profile(late={"fraction": 0.3, "min_minutes": 30, "max_minutes": 180}), 1
     )
     ingest_times = [e.ingest_time for e in stream.exposures]
+    assert ingest_times == sorted(ingest_times)
+
+
+def test_emit_order_with_duplicates() -> None:
+    # A duplicate carries the original ingest_time but arrives later, so the
+    # raw ingest sequence is non-monotonic; originals (first occurrence of
+    # each id) must still be in arrival order, and each duplicate must come
+    # after its original.
+    stream = generate(
+        profile(
+            duplicate_fraction=0.2,
+            late={"fraction": 0.3, "min_minutes": 30, "max_minutes": 180},
+        ),
+        1,
+    )
+    first_seen: dict[str, int] = {}
+    for idx, e in enumerate(stream.exposures):
+        if e.exposure_id in first_seen:
+            assert idx > first_seen[e.exposure_id]
+        else:
+            first_seen[e.exposure_id] = idx
+    originals = sorted(first_seen.items(), key=lambda kv: kv[1])
+    by_id = {e.exposure_id: e for e in stream.exposures}
+    ingest_times = [by_id[eid].ingest_time for eid, _ in originals]
     assert ingest_times == sorted(ingest_times)

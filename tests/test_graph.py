@@ -4,7 +4,7 @@ from producer.config import GraphConfig
 from producer.graph import build_graph
 
 
-def cfg(**overrides) -> GraphConfig:
+def cfg(**overrides: object) -> GraphConfig:
     base = dict(
         n_households=50,
         devices_per_household=(2, 4),
@@ -14,7 +14,7 @@ def cfg(**overrides) -> GraphConfig:
     return GraphConfig(**{**base, **overrides})
 
 
-def test_counts_and_shape():
+def test_counts_and_shape() -> None:
     graph = build_graph(cfg(), random.Random(1))
     assert len(graph.households) == 50
     for h in graph.households:
@@ -24,7 +24,7 @@ def test_counts_and_shape():
         assert len({d.device_id for d in h.devices}) == len(h.devices)
 
 
-def test_same_seed_identical_different_seed_not():
+def test_same_seed_identical_different_seed_not() -> None:
     a = build_graph(cfg(), random.Random(7))
     b = build_graph(cfg(), random.Random(7))
     c = build_graph(cfg(), random.Random(8))
@@ -32,7 +32,7 @@ def test_same_seed_identical_different_seed_not():
     assert a != c
 
 
-def test_shared_ip_fraction_zero_means_no_shared_ips():
+def test_shared_ip_fraction_zero_means_no_shared_ips() -> None:
     graph = build_graph(cfg(shared_ip_fraction=0.0), random.Random(1))
     owners: dict[str, int] = {}
     for h in graph.households:
@@ -41,7 +41,7 @@ def test_shared_ip_fraction_zero_means_no_shared_ips():
     assert all(count == 1 for count in owners.values())
 
 
-def test_shared_ip_fraction_produces_cross_household_ips():
+def test_shared_ip_fraction_produces_cross_household_ips() -> None:
     graph = build_graph(cfg(n_households=200, shared_ip_fraction=0.3), random.Random(1))
     owners: dict[str, set[str]] = {}
     for h in graph.households:

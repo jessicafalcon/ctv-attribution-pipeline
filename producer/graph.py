@@ -10,8 +10,9 @@ PERSONAL_KINDS = ["phone", "laptop", "tablet"]
 
 def build_graph(cfg: GraphConfig, rng: random.Random) -> DeviceGraph:
     # Shared IPs come from a small CGNAT-style pool so several households can
-    # collide on one address.
-    pool_size = max(1, round(cfg.n_households * cfg.shared_ip_fraction / 2))
+    # collide on one address. Sized to the expected number of shared slots so
+    # multiple distinct shared IPs exist even at tiny scale.
+    pool_size = max(1, round(cfg.n_households * cfg.shared_ip_fraction))
     shared_pool = [f"100.64.0.{i + 1}" for i in range(pool_size)]
     unique_counter = 0
 

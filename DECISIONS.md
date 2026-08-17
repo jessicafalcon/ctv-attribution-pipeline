@@ -65,4 +65,24 @@ One entry per non-obvious choice. Newest last.
   fault to work against.
 - **`data/out/<profile>/` mirror of every produced payload.** Byte-identity
   across runs and against `fixtures/tiny/` becomes a `diff -r`, with no
-  topic-consuming harness needed in Phase 1.
+  topic-consuming harness needed in Phase 1. Truth links are NOT in the
+  mirror (they are never produced to a topic); they live only under
+  `data/truth/`, with a committed golden copy in `fixtures/tiny/` for eval.
+- **Duplicate re-sends carry the original `ingest_time`.** A duplicate is
+  the same bytes sent again, so its payload cannot record its later
+  arrival. Consequence for later phases: `ingest_time − event_time`
+  understates a duplicate's true arrival lateness. Lateness metrics
+  (Phase 5+) must be computed on first-seen events, after dedup.
+- **`tiny` stays inside the 7-day hot window (max lateness 3h).** Phases
+  2–4 prove hot-path correctness on it, so every event must be attributable
+  without reconciliation. Days-late arrivals (ARCHITECTURE: "minutes to
+  days") are exercised by the `medium`/fault profiles from Phase 5 on —
+  the late-injector knob already supports it; `tiny` deliberately doesn't
+  use it.
+- **Review-driven hardening (Phase 1 review gate).** Delivery callbacks +
+  checked flush (a partially delivered seed now fails instead of exiting
+  0), `enable.idempotence` on the producer, request timeout + scheme check
+  on schema registration, profile-name allowlisting in `load_profile`,
+  min≤max validators and timezone-aware `sim_start` in the profile schema,
+  `uv sync --locked` in CI, and a structural test that pipeline-stage code
+  never mentions truth links.

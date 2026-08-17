@@ -18,7 +18,7 @@ down:
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
-	uv run python -m producer.seed --profile $(PROFILE)
+	uv run python -m producer.seed --profile "$(PROFILE)"
 
 test:
 	uv run pytest

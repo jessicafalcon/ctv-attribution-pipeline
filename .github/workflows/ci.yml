@@ -13,7 +13,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.12.5" # match local; bump deliberately
-      - run: uv sync
+      # --locked: fail on a stale lock instead of silently re-resolving to
+      # versions whose hashes nobody reviewed (security-review finding).
+      - run: uv sync --locked
       - run: make lint
       - run: make test
   # Integration job (make up + seed + run + test-int) is added in Phase 3.

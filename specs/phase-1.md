@@ -8,14 +8,21 @@ Contract for the `phase-1-producer-contracts` branch. Source: `docs/PHASES.md`
 ```
 make down && make up && \
 make seed PROFILE=tiny && cp -r data/out/tiny /tmp/seed-run-1 && \
+make down && make up && \
 make seed PROFILE=tiny && diff -r /tmp/seed-run-1 data/out/tiny && \
-diff -r fixtures/tiny data/out/tiny && \
+for f in device_graph exposures conversions; do \
+  diff fixtures/tiny/$f.jsonl data/out/tiny/$f.jsonl || exit 1; done && \
+diff fixtures/tiny/truth_links.jsonl data/truth/tiny/truth_links.jsonl && \
 make test && make lint
 ```
 
-Passes when: two seed runs produce byte-identical output, that output matches
-the committed golden fixtures, the schema registry holds a subject per topic
-(seed fails loudly if registration fails), and tests + lint are green.
+Passes when: two seed runs from a clean broker produce byte-identical
+output, that output matches the committed golden fixtures (produced payloads
+against data/out, truth links against data/truth — they are never produced
+to a topic), the schema registry holds a subject per topic (seed fails
+loudly if registration or delivery fails), and tests + lint are green. The
+`make down && make up` between runs keeps the second run from appending a
+second copy of every message to the topics.
 
 ## Scope
 
@@ -37,8 +44,8 @@ the committed golden fixtures, the schema registry holds a subject per topic
 - `producer/seed.py` — entrypoint for `make seed`: builds graph, registers
   schemas, creates topics (`exposures`, `conversions` — `device_graph`
   compacted), publishes graph + events to Redpanda, validates every payload
-  against its model on produce, writes truth links to
-  `data/truth/<profile>/`, mirrors all emitted records to
+  against its model on produce, fails on any delivery error, writes truth
+  links to `data/truth/<profile>/` only, mirrors all produced records to
   `data/out/<profile>/` as jsonl for determinism checks.
 - `producer/profiles/tiny.json` — ≈10 households, ≈200 events, all knobs
   exercised. Fixed `sim_start`; no wall-clock anywhere.

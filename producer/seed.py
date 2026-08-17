@@ -1,17 +1,19 @@
 """Entrypoint for `make seed`: generate, register schemas, publish, mirror.
 
 Every payload is re-validated against its model just before produce (the
-"validate on produce" contract). All emitted bytes are mirrored to
+"validate on produce" contract). All produced bytes are mirrored to
 data/out/<profile>/ so byte-identity between runs is checkable with diff.
 Truth links go only to data/truth/<profile>/ — the pipeline never reads them.
 """
 
 import argparse
 import os
+import shutil
 from pathlib import Path
 
 from confluent_kafka import KafkaError, KafkaException, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
+from pydantic import BaseModel
 
 from producer.config import Profile, load_profile
 from producer.generate import GeneratedStream, generate
@@ -38,34 +40,50 @@ def create_topics(admin: AdminClient) -> None:
 
 
 def produce_all(producer: Producer, stream: GeneratedStream) -> int:
-    """Produce graph + events; returns message count. Validates every payload."""
+    """Produce graph + events; returns delivered count. Validates every payload;
+    raises if any message fails delivery."""
+    errors: list[str] = []
+    delivered = 0
 
-    def send(topic: str, key: str, event) -> None:
+    def on_delivery(err: object, msg: object) -> None:
+        nonlocal delivered
+        if err is not None:
+            errors.append(str(err))
+        else:
+            delivered += 1
+
+    def send(topic: str, key: str, event: BaseModel) -> None:
         payload = canonical_bytes(event)
         TOPIC_MODELS[topic].model_validate_json(payload)  # validate on produce
-        producer.produce(topic, key=key.encode(), value=payload)
+        producer.produce(
+            topic, key=key.encode(), value=payload, on_delivery=on_delivery
+        )
 
-    n = 0
     for household in stream.graph.households:
         send("device_graph", household.household_id, household)
-        n += 1
     for exposure in stream.exposures:
         send("exposures", exposure.household_id, exposure)
-        n += 1
     for conversion in stream.conversions:
         send("conversions", conversion.device_id, conversion)
-        n += 1
-    producer.flush()
-    return n
+    undelivered = producer.flush(60)
+    if errors or undelivered:
+        raise RuntimeError(
+            f"produce failed: {len(errors)} delivery errors, "
+            f"{undelivered} undelivered. first error: {errors[0] if errors else 'n/a'}"
+        )
+    return delivered
 
 
 def write_mirrors(profile: Profile, stream: GeneratedStream) -> None:
+    # Mirror holds exactly the produced payloads — truth links are NOT produced
+    # and live only under data/truth/. Cleared first so stale files can't
+    # confuse a fixture diff.
     out = REPO_ROOT / "data" / "out" / profile.name
-    out.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
     (out / "device_graph.jsonl").write_text(jsonl(stream.graph.households))
     (out / "exposures.jsonl").write_text(jsonl(stream.exposures))
     (out / "conversions.jsonl").write_text(jsonl(stream.conversions))
-    (out / "truth_links.jsonl").write_text(jsonl(stream.truth_links))
 
     truth_dir = REPO_ROOT / "data" / "truth" / profile.name
     truth_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +106,11 @@ def main(argv: list[str] | None = None) -> None:
     stream = generate(profile, seed)
     schema_ids = register_schemas(registry)
     create_topics(AdminClient({"bootstrap.servers": broker}))
-    n = produce_all(Producer({"bootstrap.servers": broker}), stream)
+    # Idempotent producer: broker-side dedup on retry, so a transient retry
+    # can't duplicate or reorder messages within a partition.
+    n = produce_all(
+        Producer({"bootstrap.servers": broker, "enable.idempotence": True}), stream
+    )
     write_mirrors(profile, stream)
 
     caused = len(stream.truth_links)

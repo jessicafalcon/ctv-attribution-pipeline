@@ -5,6 +5,7 @@ of the data, not of dict ordering.
 """
 
 import json
+from collections.abc import Sequence
 
 from pydantic import BaseModel
 
@@ -15,5 +16,5 @@ def canonical_bytes(model: BaseModel) -> bytes:
     ).encode()
 
 
-def jsonl(models: list) -> str:
+def jsonl(models: Sequence[BaseModel]) -> str:
     return "".join(canonical_bytes(m).decode() + "\n" for m in models)

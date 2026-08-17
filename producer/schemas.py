@@ -7,6 +7,7 @@ extra would pull extra dependencies for one POST per topic (see DECISIONS.md).
 
 import json
 import urllib.request
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -18,13 +19,17 @@ TOPIC_MODELS: dict[str, type[BaseModel]] = {
     "device_graph": Household,
 }
 
+REQUEST_TIMEOUT_S = 10
 
-def topic_schema(topic: str) -> dict:
+
+def topic_schema(topic: str) -> dict[str, Any]:
     return TOPIC_MODELS[topic].model_json_schema()
 
 
 def register_schemas(registry_url: str) -> dict[str, int]:
     """Register every topic schema; returns subject → schema id. Raises on failure."""
+    if not registry_url.startswith(("http://", "https://")):
+        raise ValueError(f"registry url must be http(s), got {registry_url!r}")
     ids: dict[str, int] = {}
     for topic in TOPIC_MODELS:
         subject = f"{topic}-value"
@@ -37,6 +42,6 @@ def register_schemas(registry_url: str) -> dict[str, int]:
             headers={"Content-Type": "application/vnd.schemaregistry.v1+json"},
             method="POST",
         )
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
             ids[subject] = json.load(resp)["id"]
     return ids

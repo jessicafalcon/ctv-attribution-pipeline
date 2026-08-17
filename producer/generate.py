@@ -11,7 +11,17 @@ from typing import NamedTuple
 
 from producer.config import Profile
 from producer.graph import build_graph
-from producer.models import Conversion, DeviceGraph, Exposure, Household, TruthLink
+from producer.models import (
+    Conversion,
+    Device,
+    DeviceGraph,
+    Exposure,
+    Household,
+    TruthLink,
+)
+
+# On-time events get up to this much ingest jitter; anything beyond is "late".
+ON_TIME_MAX_JITTER_S = 60
 
 
 class GeneratedStream(NamedTuple):
@@ -28,26 +38,30 @@ def _ingest_time(
     if late.fraction > 0 and rng.random() < late.fraction:
         delay_s = rng.uniform(late.min_minutes * 60, late.max_minutes * 60)
     else:
-        delay_s = rng.uniform(1, 60)
+        delay_s = rng.uniform(1, ON_TIME_MAX_JITTER_S)
     return event_time + timedelta(seconds=round(delay_s, 3))
 
 
-def _conversion_device(household: Household, rng: random.Random):
+def _conversion_device(household: Household, rng: random.Random) -> Device:
     personal = [d for d in household.devices if d.kind != "tv"]
     return rng.choice(personal or household.devices)
 
 
-def _with_duplicates(events: list, ingest, rng: random.Random, fraction: float):
+def _with_duplicates[E: (Exposure, Conversion)](
+    events: list[E], rng: random.Random, fraction: float
+) -> list[E]:
     """Assign an arrival slot per event; duplicates re-send the same payload later."""
-    arrivals = [(ingest(e), 0, e) for e in events]
+    arrivals = [(e.ingest_time, 0, e) for e in events]
     for e in events:
         if fraction > 0 and rng.random() < fraction:
-            arrivals.append((ingest(e) + timedelta(seconds=rng.uniform(10, 300)), 1, e))
+            arrivals.append(
+                (e.ingest_time + timedelta(seconds=rng.uniform(10, 300)), 1, e)
+            )
     arrivals.sort(key=lambda t: (t[0], _event_id(t[2]), t[1]))
     return [e for _, _, e in arrivals]
 
 
-def _event_id(e) -> str:
+def _event_id(e: Exposure | Conversion) -> str:
     return e.exposure_id if isinstance(e, Exposure) else e.conversion_id
 
 
@@ -123,10 +137,9 @@ def generate(profile: Profile, seed: int) -> GeneratedStream:
         )
         make_conversion(household, event_time, caused_by=None)
 
-    ingest = lambda e: e.ingest_time  # noqa: E731
     return GeneratedStream(
         graph=graph,
-        exposures=_with_duplicates(exposures, ingest, rng, ev.duplicate_fraction),
-        conversions=_with_duplicates(conversions, ingest, rng, ev.duplicate_fraction),
+        exposures=_with_duplicates(exposures, rng, ev.duplicate_fraction),
+        conversions=_with_duplicates(conversions, rng, ev.duplicate_fraction),
         truth_links=truth_links,
     )

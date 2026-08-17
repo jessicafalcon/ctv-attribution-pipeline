@@ -2,8 +2,8 @@
 {"devices":[{"device_id":"d-0001-0","kind":"tv"},{"device_id":"d-0001-1","kind":"tablet"},{"device_id":"d-0001-2","kind":"tablet"},{"device_id":"d-0001-3","kind":"phone"}],"household_id":"h-0001","ips":["100.64.0.1","10.0.0.2"]}
 {"devices":[{"device_id":"d-0002-0","kind":"tv"},{"device_id":"d-0002-1","kind":"tablet"},{"device_id":"d-0002-2","kind":"phone"},{"device_id":"d-0002-3","kind":"tablet"}],"household_id":"h-0002","ips":["10.0.0.3"]}
 {"devices":[{"device_id":"d-0003-0","kind":"tv"},{"device_id":"d-0003-1","kind":"tablet"},{"device_id":"d-0003-2","kind":"laptop"},{"device_id":"d-0003-3","kind":"phone"}],"household_id":"h-0003","ips":["10.0.0.4","10.0.0.5"]}
-{"devices":[{"device_id":"d-0004-0","kind":"tv"},{"device_id":"d-0004-1","kind":"phone"}],"household_id":"h-0004","ips":["10.0.0.6","100.64.0.1"]}
-{"devices":[{"device_id":"d-0005-0","kind":"tv"},{"device_id":"d-0005-1","kind":"phone"}],"household_id":"h-0005","ips":["100.64.0.1","10.0.0.7"]}
+{"devices":[{"device_id":"d-0004-0","kind":"tv"},{"device_id":"d-0004-1","kind":"phone"}],"household_id":"h-0004","ips":["10.0.0.6","100.64.0.2"]}
+{"devices":[{"device_id":"d-0005-0","kind":"tv"},{"device_id":"d-0005-1","kind":"phone"}],"household_id":"h-0005","ips":["100.64.0.2","10.0.0.7"]}
 {"devices":[{"device_id":"d-0006-0","kind":"tv"},{"device_id":"d-0006-1","kind":"tablet"}],"household_id":"h-0006","ips":["10.0.0.8","10.0.0.9"]}
 {"devices":[{"device_id":"d-0007-0","kind":"tv"},{"device_id":"d-0007-1","kind":"phone"},{"device_id":"d-0007-2","kind":"tablet"}],"household_id":"h-0007","ips":["10.0.0.10","10.0.0.11"]}
 {"devices":[{"device_id":"d-0008-0","kind":"tv"},{"device_id":"d-0008-1","kind":"tablet"},{"device_id":"d-0008-2","kind":"phone"}],"household_id":"h-0008","ips":["100.64.0.1"]}
