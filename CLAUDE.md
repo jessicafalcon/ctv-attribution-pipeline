@@ -69,6 +69,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   RESULTS.md, demo_checklist.md.
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
+- `BACKLOG.md` — deferred findings with revisit triggers. Review at every
+  phase exit (alongside the coherence audit): do due items or re-defer with
+  a new trigger, never silently drop.
 
 ## Commands (macOS, uv)
 
@@ -190,6 +193,8 @@ standard way over the clever way.
   fixture, or ARCHITECTURE.md seems wrong, STOP and report — never silently
   repair.
 - Before a phase: restate its "Done when" from docs/PHASES.md.
+- At each phase exit: run the coherence audit and review BACKLOG.md for due
+  items.
 - Build at tiny scale first (fixtures/tiny), prove correctness, then turn
   up the profile.
 - Fixtures in fixtures/tiny/ are read-only after Phase 1.
@@ -206,12 +211,18 @@ standard way over the clever way.
 
 ## Git workflow (one branch + one PR per phase)
 
-- `main` is protected. Never commit to main directly; never force-push.
+- Treat `main` as protected: never commit to it directly; never force-push.
+- Review gate BEFORE the remote: run the review agents (code-reviewer,
+  security-reviewer, functionality-tester) on the finished work, apply or
+  get explicit acceptance for their findings, and report the verdicts to
+  the developer. Do NOT push and do NOT open a PR until the developer has
+  seen the verdicts and explicitly says to. Commits stay local until then.
 - Start each phase on a fresh branch from up-to-date main:
   `git checkout main && git pull && git checkout -b phase-N-<slug>`
   (e.g. `phase-2-resolve-stage`). One phase = one branch = one PR.
 - Commit small, at green states, message prefixed `phase-N:`.
-- Open the PR with `gh pr create` when the phase's Done-when passes.
+- Open the PR with `gh pr create` when the phase's Done-when passes AND the
+  developer has approved the review verdicts (see review gate above).
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
 - CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
@@ -226,21 +237,51 @@ standard way over the clever way.
 
 ## Project tooling
 
-TO BE FILLED IN DURING PHASE 0. Review the hooks, agents, commands, and
-skills in `~/dev/trail-signal-assistant/.claude/` (and the user-level
-`~/.claude/hooks/` and `~/.claude/skills/`) plus that repo's CLAUDE.md
-"Project tooling" section. For each item decide: adopt as-is, adapt (say
-what changes for this stack), or not needed (say why). Report the table
-to the developer, wait for approval, copy/adapt the approved items into
-`.claude/` here, then replace this section with the index of what is
-actually wired. Rules that carry over regardless: all agents are
-report-only (no Write/Edit); hook wiring lives in the gitignored
-`.claude/settings.local.json`; a finding is fixed in the main session or
-explicitly accepted, never auto-fixed.
+Index only — hooks fire from the developer's local, gitignored
+`.claude/settings.local.json`; agents and commands self-describe in their
+own files. All agents are report-only by contract: none carry Write/Edit,
+and their instructions forbid fixing, committing, or working around
+findings. A finding is fixed in the main session or explicitly accepted —
+never auto-fixed, ignored, or committed around.
+
+- `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
+  from trial-signal-assistant); after any .py edit inside this repo, runs
+  pytest and blocks on red; treats "no tests collected" as skip. WIRING is
+  local-only by design (a committed settings.json would auto-execute an
+  inbound PR branch's hook + pytest + conftest.py for anyone opening it in
+  Claude Code). One-time re-enable — copy into the gitignored
+  `.claude/settings.local.json`:
+  `{"hooks": {"PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit",
+  "hooks": [{"type": "command", "command": "python3
+  \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-tests.py\""}]}]}}`.
+  Surviving surface no config closes: running pytest on an inbound branch
+  still executes that branch's conftest.py — review conftest.py and
+  test-file changes in the GitHub UI before running pytest on it.
+- `block-secrets` hook — `~/.claude/hooks/block-secrets.py` (user-level,
+  already wired for all projects); blocks writes containing secret-looking
+  values.
+- `code-reviewer` agent — `.claude/agents/`; diff review against this
+  file's rules (determinism, truth-link isolation, schema contract,
+  idempotency, allowlist). Run at each spec's finish line, before commit.
+- `security-reviewer` agent — `.claude/agents/`; secrets/CI/service-
+  exposure/LLM-boundary review. Mandatory before committing changes that
+  touch CI workflows, .env or credential handling, compose service
+  exposure, ClickHouse users, or agent context assembly.
+- `functionality-tester` agent — `.claude/agents/`; runs the suite + the
+  spec's DONE command, compares behavior to intent. Run after code-reviewer.
+- `coherence-auditor` agent — `.claude/agents/`; whole-repo drift audit vs
+  CLAUDE.md / ARCHITECTURE.md / PHASES.md / DECISIONS.md. MANDATORY once at
+  each phase exit, before the phase PR merges.
+- `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
+  commit (suite, DONE command, determinism, fixtures), then stops.
+- `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
+  (user-level, already wired); suggests /compact at phase breakpoints.
 
 ## Current status
 
-- Phase 0 not started. ARCHITECTURE.md and PHASES.md finalized 2026-08-17.
-- No infra provisioned; no API keys in repo.
+- Phase 0 (2026-08-17): PR #2 open on `phase-0-skeleton`, CI green, review
+  verdicts approved by developer. Awaiting developer squash-merge; then
+  Phase 1 (producer + contracts) branches from main.
+- No API keys in repo.
 
 (Update this section at the end of every working day.)

@@ -1,0 +1,6 @@
+# Minimal boot config. Real routes (webhook → agent) arrive in Phase 9.
+route:
+  receiver: "null"
+
+receivers:
+  - name: "null"

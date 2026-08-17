@@ -3,3 +3,6 @@ data/
 .venv/
 .claude/settings.local.json
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
