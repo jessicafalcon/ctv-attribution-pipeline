@@ -15,6 +15,7 @@ def profile(**event_overrides: Any) -> Profile:
         n_exposures=1000,
         late={"fraction": 0.0, "min_minutes": 0, "max_minutes": 0},
         duplicate_fraction=0.0,
+        unknown_device_fraction=0.0,
         co_view_multiplier={},
     )
     base["events"].update({**defaults, **event_overrides})
@@ -74,6 +75,22 @@ def test_no_duplicates_when_fraction_zero() -> None:
     stream = generate(profile(duplicate_fraction=0.0), 1)
     ids = [e.exposure_id for e in stream.exposures]
     assert len(ids) == len(set(ids))
+
+
+def test_unknown_device_fraction_bounds() -> None:
+    graph_devices = None
+    for fraction, expect_known in [(0.0, True), (1.0, False)]:
+        stream = generate(profile(unknown_device_fraction=fraction), 1)
+        graph_devices = {
+            d.device_id for h in stream.graph.households for d in h.devices
+        }
+        in_graph = [c.device_id in graph_devices for c in stream.conversions]
+        assert all(in_graph) if expect_known else not any(in_graph)
+    mixed = generate(profile(unknown_device_fraction=0.3), 1)
+    unknown = [c for c in mixed.conversions if c.device_id.startswith("u-")]
+    assert unknown, "expected some unknown-device conversions"
+    household_ips = {ip for h in mixed.graph.households for ip in h.ips}
+    assert all(c.ip in household_ips for c in unknown)  # IP stays the household's
 
 
 def test_co_view_multiplier_scales_caused_conversions_per_genre() -> None:

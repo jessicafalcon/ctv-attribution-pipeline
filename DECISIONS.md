@@ -79,6 +79,25 @@ One entry per non-obvious choice. Newest last.
   days") are exercised by the `medium`/fault profiles from Phase 5 on —
   the late-injector knob already supports it; `tiny` deliberately doesn't
   use it.
+- **Unknown-device conversions (`unknown_device_fraction`).** Without them
+  every conversion's device is in the graph, device resolution is always
+  correct, and Phase 2's IP-fallback and ambiguous-fan-out branches — plus
+  the pipeline's headline failure mode, the shared-IP wrong-household
+  match — are unreachable by construction. The unknown device draws its IP
+  from the true household (same home network, unrecognized guest/roommate
+  device): realistic, and it keeps shared IPs the sole source of
+  wrong-household ambiguity. The truth link still records the true causing
+  exposure, so a fan-out to the wrong household is measurable in Phase 4.
+  `u-` ids are a namespace disjoint from graph `d-` ids. tiny is curated
+  (fraction 0.3, seed 42) so the frozen fixture reaches all three resolve
+  cases; a structural test pins that.
+- **Phase 3 forward-note: assert against ReplacingMergeTree FINAL, not the
+  raw stream.** tiny carries duplicates and hour-late arrivals, but
+  Phase 3's engine is spec'd in-order/no-dedup (dedup lands in Phase 5). A
+  duplicate conversion is processed twice on the hot path; both writes
+  share `conversion_id`, so ReplacingMergeTree collapses them. The Phase 3
+  integration test must compare FINAL (or argMax) state to truth, else it
+  counts conversion-processings instead of conversions.
 - **Review-driven hardening (Phase 1 review gate).** Delivery callbacks +
   checked flush (a partially delivered seed now fails instead of exiting
   0), `enable.idempotence` on the producer, request timeout + scheme check

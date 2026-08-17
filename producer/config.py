@@ -51,6 +51,9 @@ class EventsConfig(StrictModel):
     revenue_range: tuple[float, float]
     late: LateConfig
     duplicate_fraction: float = Field(ge=0, le=1)
+    # Fraction of conversions fired from a device the graph hasn't learned
+    # (guest/roommate/id churn) — forces IP-based resolution downstream.
+    unknown_device_fraction: float = Field(ge=0, le=1)
     co_view_multiplier: dict[str, float]  # genre → factor on caused-conversion rate
 
     @model_validator(mode="after")

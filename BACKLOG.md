@@ -10,3 +10,6 @@ here with a new trigger — never silently dropped.
 | SHA-pin GitHub Actions (`actions/checkout`, `astral-sh/setup-uv`) instead of mutable tags | security review, Phase 0 | Before the Phase 3 CI integration job lands |
 | Digest-pin compose images (`image@sha256:...`) — full-version tags are still mutable on registry re-push | security review, Phase 0 | Together with the Actions SHA-pinning, before Phase 3 |
 | 127.0.0.1 binding still admits any local process to passwordless ClickHouse / Grafana admin | security review, Phase 0 | Only if the stack ever runs on a shared/multi-user host — fine for single-dev laptops |
+| Schema-registry subjects have no compatibility mode set; re-registering changed models under default BACKWARD can 409 and fail the seed | coherence audit, Phase 1 | Phase 2 start — set dev subjects to compatibility NONE or handle 409 on identical re-register |
+| Phase 3 integration test must assert against ReplacingMergeTree FINAL state, not raw emitted stream (tiny carries duplicates; see DECISIONS.md Phase 1) | coherence audit, Phase 1 | Phase 3 start |
+| `min(1.0, rate)` co-view clamp in generate.py saturates silently; a fault profile needing the multiplier observable at high caused_rate needs it revisited | code review, Phase 1 | When authoring the co-view-multiplier-bug fault profile (Phase 8) |

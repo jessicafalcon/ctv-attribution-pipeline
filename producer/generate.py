@@ -93,18 +93,30 @@ def generate(profile: Profile, seed: int) -> GeneratedStream:
     households_by_id = {h.household_id: h for h in graph.households}
     conversions: list[Conversion] = []
     truth_links: list[TruthLink] = []
+    unknown_device_count = 0
 
     def make_conversion(
         household: Household, event_time: datetime, caused_by: str | None
     ) -> None:
+        nonlocal unknown_device_count
         cid = f"c-{len(conversions):06d}"
         purchase = rng.random() < ev.purchase_fraction
+        # Unknown device (guest/roommate/id churn): the graph never learned
+        # it, so downstream resolution must fall back to the IP. The IP stays
+        # the true household's (same home network), keeping shared IPs the
+        # sole source of wrong-household matches. `u-` namespace is disjoint
+        # from graph `d-` ids by construction.
+        if rng.random() < ev.unknown_device_fraction:
+            device_id = f"u-{unknown_device_count:06d}"
+            unknown_device_count += 1
+        else:
+            device_id = _conversion_device(household, rng).device_id
         conversions.append(
             Conversion(
                 conversion_id=cid,
                 event_time=event_time,
                 ingest_time=_ingest_time(event_time, rng, profile),
-                device_id=_conversion_device(household, rng).device_id,
+                device_id=device_id,
                 ip=rng.choice(household.ips),
                 conversion_type="purchase" if purchase else "site_visit",
                 revenue=round(rng.uniform(*ev.revenue_range), 2) if purchase else 0.0,

@@ -55,6 +55,9 @@ class Household(StrictModel):
 
 
 class DeviceGraph(StrictModel):
+    """Internal container only — the device_graph topic carries one Household
+    message per key, never a single DeviceGraph message."""
+
     households: list[Household]
 
 
