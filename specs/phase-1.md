@@ -39,7 +39,8 @@ second copy of every message to the topics.
 - `producer/generate.py` — seeded event generator. Knobs, all in the
   profile: throughput (events/hour → event_time spacing), late injector
   (fraction + delay range), duplicate injector (fraction), shared-IP
-  fraction, co-view multiplier per genre, caused-conversion rate. Emits a
+  fraction, unknown-device fraction (out-of-graph devices → IP fallback
+  downstream), co-view multiplier per genre, caused-conversion rate. Emits a
   single deterministic sequence of (topic, key, payload) records.
 - `producer/seed.py` — entrypoint for `make seed`: builds graph, registers
   schemas, creates topics (`exposures`, `conversions` — `device_graph`

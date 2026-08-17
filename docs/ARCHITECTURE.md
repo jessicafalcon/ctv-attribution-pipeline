@@ -137,6 +137,8 @@ matches. Then emits two streams.
   pipeline never reads. The rest are organic.
 - **Knobs**: throughput; late-arrival injector (delta between `event_time` and
   `ingest_time`, from minutes to days); duplicate injector; shared-IP fraction;
+  unknown-device fraction (conversions from devices the graph never learned —
+  guest/roommate/id churn — forcing the resolve stage's IP fallback);
   co-view multiplier per genre; fault profiles (§4.3).
 
 Schemas are pydantic models; JSON Schemas are generated from them and registered.

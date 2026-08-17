@@ -88,6 +88,32 @@ def test_create_topics_compacts_device_graph() -> None:
     assert by_name["device_graph"].config == {"cleanup.policy": "compact"}
 
 
+def test_producer_seed_env_reaches_generate(monkeypatch: pytest.MonkeyPatch) -> None:
+    import producer.seed as seed_module
+
+    captured: dict[str, Any] = {}
+
+    def fake_generate(profile: Any, seed: int) -> Any:
+        captured["seed"] = seed
+        return generate(profile, seed)
+
+    monkeypatch.setattr(seed_module, "generate", fake_generate)
+    monkeypatch.setattr(seed_module, "register_schemas", lambda url: {})
+    monkeypatch.setattr(seed_module, "create_topics", lambda admin: None)
+    monkeypatch.setattr(seed_module, "produce_all", lambda producer, stream: 0)
+    monkeypatch.setattr(seed_module, "write_mirrors", lambda profile, stream: None)
+    monkeypatch.setattr(seed_module, "AdminClient", lambda cfg: None)
+    monkeypatch.setattr(seed_module, "Producer", lambda cfg: None)
+
+    monkeypatch.delenv("PRODUCER_SEED", raising=False)
+    seed_module.main(["--profile", "tiny"])
+    assert captured["seed"] == load_profile("tiny").seed  # default: profile's seed
+
+    monkeypatch.setenv("PRODUCER_SEED", "7")
+    seed_module.main(["--profile", "tiny"])
+    assert captured["seed"] == 7
+
+
 def test_create_topics_tolerates_existing_only() -> None:
     exists = KafkaException(KafkaError(KafkaError.TOPIC_ALREADY_EXISTS))
     create_topics(FakeAdmin(exc=exists))  # type: ignore[arg-type]

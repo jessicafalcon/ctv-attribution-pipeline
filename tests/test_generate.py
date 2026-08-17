@@ -78,7 +78,6 @@ def test_no_duplicates_when_fraction_zero() -> None:
 
 
 def test_unknown_device_fraction_bounds() -> None:
-    graph_devices = None
     for fraction, expect_known in [(0.0, True), (1.0, False)]:
         stream = generate(profile(unknown_device_fraction=fraction), 1)
         graph_devices = {
@@ -86,11 +85,21 @@ def test_unknown_device_fraction_bounds() -> None:
         }
         in_graph = [c.device_id in graph_devices for c in stream.conversions]
         assert all(in_graph) if expect_known else not any(in_graph)
+
     mixed = generate(profile(unknown_device_fraction=0.3), 1)
     unknown = [c for c in mixed.conversions if c.device_id.startswith("u-")]
     assert unknown, "expected some unknown-device conversions"
-    household_ips = {ip for h in mixed.graph.households for ip in h.ips}
-    assert all(c.ip in household_ips for c in unknown)  # IP stays the household's
+    # An unknown device's IP must come from the TRUE (causing) household —
+    # that invariant is what keeps shared IPs the sole source of
+    # wrong-household matches. Checkable for caused conversions via truth.
+    household_ips = {h.household_id: set(h.ips) for h in mixed.graph.households}
+    exposures = {e.exposure_id: e for e in mixed.exposures}
+    causing = {t.conversion_id: t.truth_exposure_id for t in mixed.truth_links}
+    caused_unknown = [c for c in unknown if c.conversion_id in causing]
+    assert caused_unknown, "expected caused unknown-device conversions"
+    for c in caused_unknown:
+        true_household = exposures[causing[c.conversion_id]].household_id
+        assert c.ip in household_ips[true_household]
 
 
 def test_co_view_multiplier_scales_caused_conversions_per_genre() -> None:
@@ -114,18 +123,27 @@ def test_co_view_multiplier_scales_caused_conversions_per_genre() -> None:
 
 
 def test_truth_links_reference_real_events_and_same_household() -> None:
-    stream = generate(profile(), 42)
-    exposures = {e.exposure_id: e for e in stream.exposures}
-    conversions = {c.conversion_id: c for c in stream.conversions}
-    device_household = {
-        d.device_id: h.household_id for h in stream.graph.households for d in h.devices
-    }
-    assert stream.truth_links, "expected caused conversions"
-    for link in stream.truth_links:
-        exposure = exposures[link.truth_exposure_id]
-        conversion = conversions[link.conversion_id]
-        assert device_household[conversion.device_id] == exposure.household_id
-        assert conversion.event_time > exposure.event_time
+    # Run on both a no-unknown-devices stream and the real tiny profile:
+    # device-hit conversions must be on a device of the causing household;
+    # unknown-device conversions must at least carry a causing-household IP.
+    for stream in [generate(profile(), 42), generate(load_profile("tiny"), 42)]:
+        exposures = {e.exposure_id: e for e in stream.exposures}
+        conversions = {c.conversion_id: c for c in stream.conversions}
+        device_household = {
+            d.device_id: h.household_id
+            for h in stream.graph.households
+            for d in h.devices
+        }
+        household_ips = {h.household_id: set(h.ips) for h in stream.graph.households}
+        assert stream.truth_links, "expected caused conversions"
+        for link in stream.truth_links:
+            exposure = exposures[link.truth_exposure_id]
+            conversion = conversions[link.conversion_id]
+            if conversion.device_id in device_household:
+                assert device_household[conversion.device_id] == exposure.household_id
+            else:
+                assert conversion.ip in household_ips[exposure.household_id]
+            assert conversion.event_time > exposure.event_time
 
 
 def test_emit_order_is_arrival_order() -> None:

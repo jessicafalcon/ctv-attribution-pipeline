@@ -90,7 +90,11 @@ One entry per non-obvious choice. Newest last.
   exposure, so a fan-out to the wrong household is measurable in Phase 4.
   `u-` ids are a namespace disjoint from graph `d-` ids. tiny is curated
   (fraction 0.3, seed 42) so the frozen fixture reaches all three resolve
-  cases; a structural test pins that.
+  cases; a structural test pins the exact counts. 0.3 is curation-high, far
+  above a plausible guest-device rate — `medium` and fault profiles should
+  use a realistic ~0.05–0.1 so the headline match rate in RESULTS.md isn't
+  skewed. Fixture case counts are stated per distinct `conversion_id`
+  (duplicates collapsed); Phase 2 tests counting raw rows will see more.
 - **Phase 3 forward-note: assert against ReplacingMergeTree FINAL, not the
   raw stream.** tiny carries duplicates and hour-late arrivals, but
   Phase 3's engine is spec'd in-order/no-dedup (dedup lands in Phase 5). A
