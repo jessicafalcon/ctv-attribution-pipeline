@@ -7,8 +7,8 @@ here with a new trigger — never silently dropped.
 
 | Item | Source | Trigger |
 |---|---|---|
-| SHA-pin GitHub Actions (`actions/checkout`, `astral-sh/setup-uv`) instead of mutable tags | security review, Phase 0 | Before the Phase 3 CI integration job lands |
-| Digest-pin compose images (`image@sha256:...`) — full-version tags are still mutable on registry re-push | security review, Phase 0 | Together with the Actions SHA-pinning, before Phase 3 |
+| ~~SHA-pin GitHub Actions (`actions/checkout`, `astral-sh/setup-uv`) instead of mutable tags~~ **DONE Phase 3** — both actions pinned to 40-char SHAs (checkout `11d5960`, setup-uv `d4b2f3b`) with the tag kept in a trailing comment, in both CI jobs | security review, Phase 0 | Before the Phase 3 CI integration job lands — resolved |
+| ~~Digest-pin compose images (`image@sha256:...`) — full-version tags are still mutable on registry re-push~~ **DONE Phase 3** — all 5 images pinned `name:tag@sha256:...` (redpanda, clickhouse, prometheus, alertmanager, grafana); `make down && make up` verified health-green on the digests | security review, Phase 0 | Together with the Actions SHA-pinning, before Phase 3 — resolved |
 | 127.0.0.1 binding still admits any local process to passwordless ClickHouse / Grafana admin | security review, Phase 0 | Only if the stack ever runs on a shared/multi-user host — fine for single-dev laptops |
 | ~~Schema-registry subjects have no compatibility mode set; re-registering changed models under default BACKWARD can 409 and fail the seed~~ **DONE Phase 2** — `producer.schemas` sets every subject to `NONE` before posting (`set_compatibility`); verified against Redpanda | coherence audit, Phase 1 | Phase 2 start — resolved |
 | Phase 3 integration test must assert against ReplacingMergeTree FINAL state, not raw emitted stream (tiny carries duplicates; see DECISIONS.md Phase 1) | coherence audit, Phase 1 | Phase 3 start |

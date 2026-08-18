@@ -8,8 +8,8 @@
 create table if not exists attributed_conversions
 (
     conversion_id   String,
-    event_time      DateTime64(6, 'UTC'),
-    ingest_time     DateTime64(6, 'UTC'),
+    event_time      DateTime64(3, 'UTC'),
+    ingest_time     DateTime64(3, 'UTC'),
     device_id       String,
     ip              String,
     conversion_type String,
@@ -23,7 +23,7 @@ create table if not exists attributed_conversions
     assists         Array(String),
     attributed      UInt8,
     path            String,
-    processed_at    DateTime64(6, 'UTC')
+    processed_at    DateTime64(3, 'UTC')
 )
 engine = ReplacingMergeTree(processed_at)
 order by conversion_id;
@@ -35,8 +35,8 @@ order by conversion_id;
 create table if not exists exposures_landed
 (
     exposure_id   String,
-    event_time    DateTime64(6, 'UTC'),
-    ingest_time   DateTime64(6, 'UTC'),
+    event_time    DateTime64(3, 'UTC'),
+    ingest_time   DateTime64(3, 'UTC'),
     campaign_id   String,
     household_id  String,
     ip            String,

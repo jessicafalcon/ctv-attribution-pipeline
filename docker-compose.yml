@@ -1,6 +1,6 @@
 services:
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6@sha256:04baa40ed34edf86028396f762be802f3b6b0acaab65e9de696a3f15d54c550f
     command:
       - redpanda
       - start
@@ -26,7 +26,7 @@ services:
       retries: 24
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8.14.39
+    image: clickhouse/clickhouse-server:24.8.14.39@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
     ports:
       - "127.0.0.1:8123:8123" # HTTP interface (clickhouse-connect uses this)
     volumes:
@@ -45,7 +45,7 @@ services:
       retries: 24
 
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
@@ -58,7 +58,7 @@ services:
       retries: 24
 
   alertmanager:
-    image: prom/alertmanager:v0.28.0
+    image: prom/alertmanager:v0.28.0@sha256:d5155cfac40a6d9250ffc97c19db2c5e190c7bc57c6b67125c94903358f8c7d8
     ports:
       - "127.0.0.1:9093:9093"
     volumes:
@@ -71,7 +71,7 @@ services:
       retries: 24
 
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
     ports:
       - "127.0.0.1:3000:3000"
     environment:
