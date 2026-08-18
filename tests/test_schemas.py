@@ -9,7 +9,12 @@ from pydantic import ValidationError
 
 from producer.config import load_profile
 from producer.generate import generate
-from producer.schemas import TOPIC_MODELS, register_schemas, topic_schema
+from producer.schemas import (
+    TOPIC_MODELS,
+    register_schemas,
+    register_subject,
+    topic_schema,
+)
 from producer.serialize import canonical_bytes
 
 
@@ -40,22 +45,34 @@ def test_extra_fields_are_rejected() -> None:
         TOPIC_MODELS["exposures"].model_validate(payload)
 
 
-def test_register_schemas_posts_each_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
+def test_register_schemas_sets_none_then_posts_each_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def fake_urlopen(req: Any, timeout: float | None = None) -> Any:
         assert timeout is not None
-        calls.append((req.full_url, json.loads(req.data)))
+        calls.append((req.full_url, req.get_method(), json.loads(req.data)))
         return contextlib.closing(io.BytesIO(json.dumps({"id": len(calls)}).encode()))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     ids = register_schemas("http://registry.test")
-    assert [url for url, _ in calls] == [
-        f"http://registry.test/subjects/{t}-value/versions" for t in TOPIC_MODELS
+
+    # Each subject: PUT compatibility NONE, then POST the version — in that order.
+    assert [(url, method) for url, method, _ in calls] == [
+        step
+        for t in TOPIC_MODELS
+        for step in [
+            (f"http://registry.test/config/{t}-value", "PUT"),
+            (f"http://registry.test/subjects/{t}-value/versions", "POST"),
+        ]
     ]
-    for (_, body), topic in zip(calls, TOPIC_MODELS, strict=True):
+    posts = [(url, body) for url, method, body in calls if method == "POST"]
+    for (_, body), topic in zip(posts, TOPIC_MODELS, strict=True):
         assert body["schemaType"] == "JSON"
         assert json.loads(body["schema"]) == topic_schema(topic)
+    puts = [body for _, method, body in calls if method == "PUT"]
+    assert all(body == {"compatibility": "NONE"} for body in puts)
     assert set(ids) == {f"{t}-value" for t in TOPIC_MODELS}
 
 
@@ -73,3 +90,29 @@ def test_register_schemas_propagates_http_errors(
 def test_register_schemas_rejects_non_http_url() -> None:
     with pytest.raises(ValueError):
         register_schemas("ftp://registry.test")
+
+
+def test_register_subject_puts_none_before_posting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for the BACKLOG Phase-2 registry item: compatibility
+    must be set to NONE (PUT /config/<subject>) BEFORE the version is posted —
+    that ordering is what dodges the registry's default BACKWARD 409 when a
+    changed model re-registers."""
+    from producer.models import Conversion
+
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def fake_urlopen(req: Any, timeout: float | None = None) -> Any:
+        calls.append((req.full_url, req.get_method(), json.loads(req.data)))
+        return contextlib.closing(io.BytesIO(json.dumps({"id": 9}).encode()))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    schema_id = register_subject("http://registry.test", "demo-value", Conversion)
+
+    assert schema_id == 9
+    assert [(url, method) for url, method, _ in calls] == [
+        ("http://registry.test/config/demo-value", "PUT"),
+        ("http://registry.test/subjects/demo-value/versions", "POST"),
+    ]
+    assert calls[0][2] == {"compatibility": "NONE"}
