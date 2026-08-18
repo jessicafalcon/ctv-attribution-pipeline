@@ -66,6 +66,10 @@ def _load_truth() -> dict[str, str]:
     }
 
 
+# Both tests read GLOBAL FINAL table state (whole exposures_landed /
+# attributed_conversions), so the pins assume a tiny-only stack. When Phase 5
+# adds `medium`, seeding it into the same ClickHouse would break these pins
+# through no fault of the SQL — isolate by profile (or a fresh DB) then.
 def test_eval_reproduces_pinned_accuracy() -> None:
     client = connect()
     report = score(

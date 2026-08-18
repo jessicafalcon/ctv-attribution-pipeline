@@ -57,6 +57,7 @@ def read_exposure_households(client: Client) -> dict[str, str]:
     """exposure_id → household_id from exposures_landed FINAL, so the eval can
     map any exposure to its household."""
     rows = client.query(
-        "select exposure_id, household_id from exposures_landed final"
+        "select exposure_id, household_id from exposures_landed final "
+        "order by exposure_id"
     ).result_rows
     return {r[0]: r[1] for r in rows}

@@ -88,6 +88,12 @@ One entry per non-obvious choice. Newest last.
   device): realistic, and it keeps shared IPs the sole source of
   wrong-household ambiguity. The truth link still records the true causing
   exposure, so a fan-out to the wrong household is measurable in Phase 4.
+  [Refined by DECISIONS Phase 4: the eval DOES measure wrong-household
+  misattribution via `caused_wrong_household`, but the tiny fixture's
+  caused-ambiguous conversions all resolve to their truth household
+  (`caused_wrong_household == 0`), so tiny's Phase-4 precision reflects organic
+  over-credit; the shared-IP wrong-household OUTCOME is exercised by the Phase-8
+  fault profile, not tiny.]
   `u-` ids are a namespace disjoint from graph `d-` ids. tiny is curated
   (fraction 0.3, seed 42) so the frozen fixture reaches all three resolve
   cases; a structural test pins the exact counts. 0.3 is curation-high, far
@@ -157,7 +163,14 @@ One entry per non-obvious choice. Newest last.
   broken deterministically by `exposure_id` then `household_id`. This preserves
   ARCHITECTURE's "most recent exposure inside the window" rule, is
   deterministic, and keeps wrong-household picks as the measured shared-IP
-  fault (scored as Phase 4 precision). `processed_at` must NOT discriminate
+  fault (scored as Phase 4 precision).
+  [Refined by DECISIONS Phase 4: the eval DOES measure wrong-household
+  misattribution via `caused_wrong_household`, but the tiny fixture's
+  caused-ambiguous conversions all resolve to their truth household
+  (`caused_wrong_household == 0`), so tiny's Phase-4 precision reflects organic
+  over-credit; the shared-IP wrong-household OUTCOME is exercised by the Phase-8
+  fault profile, not tiny.]
+  `processed_at` must NOT discriminate
   among candidate households — it is the ReplacingMergeTree version for
   idempotent replacement of the *same logical row* (replay/reconciliation), not
   a tiebreaker; the reduction runs BEFORE the ReplacingMergeTree so exactly one
@@ -306,3 +319,32 @@ One entry per non-obvious choice. Newest last.
   Phase 8 requirement to engineer and *observe* a caused misattribution
   (recall(household) < 1.0). Fixtures are frozen read-only (Phase 1), so this is
   recorded, not repaired in tiny.
+
+- **Report v1 metric definitions.** ARCHITECTURE §3.3 names the four advertiser
+  metrics but does not define them; recorded here (the spec and `queries/`
+  already cite this):
+  - **ROAS** = attributed revenue / spend.
+  - **CPA** = spend / attributed **purchases** (acquisition = purchase). Chosen
+    over spend / all-attributed-conversions ("option 1"): the all-conversions
+    denominator equals CVR's numerator, so CPA would just restate CVR; keeping
+    the denominator to purchases makes CPA an independent money-action signal
+    that pairs with ROAS, while CVR and site-visit rate describe funnel activity
+    — four metrics, four distinct signals.
+  - **CVR** = attributed conversions / exposures.
+  - **site-visit rate** = attributed `site_visit` conversions / exposures.
+  Three load-bearing rules:
+  - **Read FINAL on both RMT tables** (`exposures_landed`,
+    `attributed_conversions`). A plain `sum`/`count` over unmerged parts counts
+    duplicate exposure landings and pre-reduction rows, silently inflating the
+    spend and exposure denominators (this is the payoff of the Phase-3 RMT
+    choice for `exposures_landed`).
+  - **NULL on zero denominators** via `nullIf(denominator, 0)`, uniformly — a
+    campaign with no purchases / spend / exposures yields NULL, never a
+    divide-by-zero or a crash. tiny does not exercise this path (every campaign
+    has purchases); guarded synthetically in `tests/test_report.py`.
+  - **Do NOT filter wrong-household attributions.** An ambiguous shared-IP
+    conversion credited to a campaign counts toward its metrics even when truth
+    disagrees — it is the advertiser's reported number, and the divergence is
+    measured separately by `make eval`. A subtly-inflated ROAS is exactly the
+    "plausible-but-wrong" number the Phase-9 agent will diagnose; a feature to
+    preserve, not a filter to add.
