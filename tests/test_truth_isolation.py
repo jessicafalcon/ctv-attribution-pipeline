@@ -1,8 +1,9 @@
 """The pipeline NEVER reads truth links (CLAUDE.md determinism policy).
 
 Structural guard: no pipeline-stage module may even mention truth links or
-the data/truth path. Only the producer (which writes them), the agent's
-eval harness, and tests may.
+the data/truth path. Only the producer (which writes them), the accuracy eval
+(`accuracy/`, which scores against them — Phase 4), the agent's eval harness,
+and tests may.
 """
 
 from pathlib import Path

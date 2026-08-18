@@ -36,3 +36,27 @@ def read_attributed_decisions(client: Client) -> dict[str, tuple]:
 
 def count_exposures_final(client: Client) -> int:
     return client.query("select count() from exposures_landed final").result_rows[0][0]
+
+
+def read_credited(client: Client) -> dict[str, tuple[str, str]]:
+    """The engine's attributed decisions from FINAL state: conversion_id →
+    (household_id, exposure_id), for attributed=true rows only. Feeds the
+    accuracy eval (household-grain scoring)."""
+    rows = client.query(
+        """
+        select conversion_id, household_id, exposure_id
+        from attributed_conversions final
+        where attributed = 1
+        order by conversion_id
+        """
+    ).result_rows
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def read_exposure_households(client: Client) -> dict[str, str]:
+    """exposure_id → household_id from exposures_landed FINAL, so the eval can
+    map any exposure to its household."""
+    rows = client.query(
+        "select exposure_id, household_id from exposures_landed final"
+    ).result_rows
+    return {r[0]: r[1] for r in rows}

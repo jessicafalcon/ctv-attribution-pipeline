@@ -74,20 +74,29 @@ row cannot be deferred. Emit attributed and unattributed records to ClickHouse
 **Done when.** On the tiny fixture the engine produces the committed
 deterministic expected-attributed fixture, verified by an integration test.
 The engine credits each conversion by the rules above (last-touch;
-most-recent-exposure among ambiguous shared-IP candidates), which matches truth
-for every unambiguous conversion. For the 5 ambiguous shared-IP fan-outs the
-most-recent-exposure pick is sometimes a different household than truth **by
-design** — that divergence is the shared-IP fault, measured as precision in
-Phase 4, not a Phase 3 failure. (Compare against the expected-attributed
-fixture, not directly against truth.)
+most-recent-exposure among ambiguous shared-IP candidates), which attributes
+every caused conversion to its truth household (household grain — see
+ARCHITECTURE §4.3). For the 5 ambiguous shared-IP fan-outs the reduction
+**mechanism** is exercised — each `conversion_id` fans out to one candidate row
+per household and collapses to a single deterministic most-recent-exposure
+winner — but the wrong-household **outcome** does not occur on tiny: the 3
+caused ambiguous conversions (c-000014/16/25) all resolve to their truth
+household, and the other 2 (c-000041/42) are organic. So tiny's Phase-4
+precision (0.673) reflects last-touch **organic over-credit** (17 organic
+conversions credited to a coincidentally-recent in-window exposure), NOT
+shared-IP misattribution; shared-IP wrong-household misattribution is exercised
+by the fault profiles (Phase 8), not tiny. (Compare against the
+expected-attributed fixture, not directly against truth.)
 
 ---
 
 ## Phase 4 — Accuracy eval and reporting v1 · CHECKPOINT
 
-**Goal.** Script computing precision and recall against truth links from
-ClickHouse. The four metric queries (ROAS, CPA, CVR, site-visit rate) against raw
-tables.
+**Goal.** Script computing household-grain precision and recall (ARCHITECTURE
+§4.3) by joining `attributed_conversions` from ClickHouse against the truth-link
+**side file** (`data/truth/<profile>/`) in the eval harness — truth is never
+loaded into ClickHouse (determinism / truth-isolation). The four metric queries
+(ROAS, CPA, CVR, site-visit rate) against raw tables.
 
 **Done when.** `make eval` prints an accuracy table and `make report` prints the
 four metrics for the tiny profile. Project is demoable end to end.

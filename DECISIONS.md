@@ -264,3 +264,45 @@ One entry per non-obvious choice. Newest last.
   `common.kafka.drain` / `drain_messages` (with `_EMPTY_POLL_LIMIT`), imported
   by both stages; behavior identical, covered by the relocated offline test
   `tests/test_kafka.py`.
+
+## Phase 4
+
+- **Eval accuracy is scored at household grain.** ARCHITECTURE §4.3 read as
+  exact `exposure_id` equality; PHASES Phase 3 reads at household. The two
+  disagreed. Resolved to **household grain**: exact-id scores a last-touch
+  engine at ~6% (3 of 52 credited rows match the causal exposure) by measuring
+  coincidence between the most-recent and the causal exposure — a model
+  property, not attribution quality — which contradicts the last-touch design.
+  Definitions: **precision** = caused conversions attributed to the correct
+  household / all credited (`attributed=true`) conversions; **recall** = caused
+  conversions attributed to the correct household / all truth links. Pinned
+  expected tiny output: precision **0.673** (35/52), recall **1.000** (35/35).
+  Exact-`exposure_id` match rate is reported only as a **labeled diagnostic**
+  ("last-touch → causal-exposure coincidence; expected low, not an accuracy
+  measure"), never the headline. ARCHITECTURE §4.3 amended to match; rejected
+  exact-id as the headline.
+
+- **Eval joins the truth side file in the harness; truth never enters the DB
+  (N1).** PHASES Phase 4's Done-when said accuracy is computed "against truth
+  links from ClickHouse," but truth links are a forbidden side file the pipeline
+  never reads (determinism policy, truth-isolation guard
+  `tests/test_truth_isolation.py`). Resolved: `make eval` reads
+  `attributed_conversions` FINAL from ClickHouse and joins it against the
+  `data/truth/<profile>/` side file **in the eval harness** — which lives
+  outside the pipeline dirs the isolation test guards — never loading truth into
+  ClickHouse. Rejected landing truth in a ClickHouse table (would breach
+  truth-isolation for a SQL join's convenience). PHASES Phase 4 wording
+  corrected from "from ClickHouse" to "side file."
+
+- **tiny demonstrates last-touch organic over-credit, not the shared-IP fault.**
+  On the frozen tiny fixture the ambiguous-reduction mechanism is exercised (5
+  fan-outs collapse to one deterministic winner each) but no caused conversion
+  is misattributed to a wrong household — all 3 caused ambiguous conversions
+  (c-000014/16/25) resolve to their truth household; the other 2 (c-000041/42)
+  are organic. tiny's precision (0.673) is driven entirely by 17 organic
+  conversions last-touch credits to a coincidentally-recent in-window exposure.
+  The shared-IP wrong-household fault is a fault-profile story (Phase 8), not a
+  tiny story — PHASES Phase 3 corrected at source, and a BACKLOG row pins the
+  Phase 8 requirement to engineer and *observe* a caused misattribution
+  (recall(household) < 1.0). Fixtures are frozen read-only (Phase 1), so this is
+  recorded, not repaired in tiny.

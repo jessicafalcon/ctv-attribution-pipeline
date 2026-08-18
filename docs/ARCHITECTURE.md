@@ -297,8 +297,14 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 
 ### 4.3 How it's proven — validate against ground truth
 
-- **Attribution accuracy**: precision/recall of the engine's matches against
-  `truth_exposure_id`.
+- **Attribution accuracy**: precision/recall of the engine's **household**
+  attribution against the household of `truth_exposure_id` (household grain).
+  The engine is last-touch, so it credits the most-recent in-window exposure,
+  not necessarily the causal one — scoring exact `exposure_id` equality would
+  measure last-touch-vs-causal coincidence (a model property), not attribution
+  quality; household grain isolates the real failure mode, wrong-household
+  (shared-IP) attribution. Exact-exposure-id match MAY be reported as a labeled
+  diagnostic, never as the headline accuracy.
 - **Agent accuracy**: fault profiles (shared-IP spike, late burst, co-view
   multiplier bug, duplicate flood, real performance lift) plus a **no-fault
   baseline**, each run repeatedly, producing a *fault → top hypothesis → correct?*
