@@ -169,3 +169,98 @@ One entry per non-obvious choice. Newest last.
   lowest `household_id`) — deterministic but less realistic, and it would blunt
   the shared-IP fault the project exists to measure. Implemented in Phase 3;
   recorded now because Phase 2's fan-out shape surfaced the constraint.
+
+## Phase 3
+
+- **`processed_at` is event-derived (the RMT version).** The
+  `attributed_conversions` ReplacingMergeTree version is `processed_at =
+  conversion.ingest_time` — deterministic, already in the data, and preserved
+  byte-identically on a resend (a duplicate is the same bytes with the original
+  `ingest_time`, Phase 1), so duplicates collapse to one row. Wall-clock
+  `now()` would violate the determinism policy ("could this step give a
+  different answer on a re-run?") and break both the golden `attributed.jsonl`
+  fixture and the replay-from-offset-0 convergence the idempotency contract
+  requires. Rejected wall-clock. Two invariants this creates:
+  - **(a) Phase-6 reconciled-version rule (concrete).** A reconciled row for a
+    `conversion_id` must carry a `processed_at` that is *deterministically*
+    strictly greater than the hot row's `ingest_time` for that `conversion_id`
+    — never equal. Phase 6 stamps reconciled rows with a deterministic
+    reconciliation-pass timestamp derived from data (strictly > the
+    conversion's `ingest_time`), so the correction always supersedes the hot
+    row under RMT. Recorded now so Phase 6 does not reopen it. `processed_at` is
+    `DateTime64(3)` (millisecond), so that "strictly greater" rule has
+    millisecond resolution as its headroom — the reconciliation-pass timestamp
+    must differ from the hot `ingest_time` by at least 1 ms.
+  - **(b) `conversion_id` is a safe RMT sort key** only because the
+    `conversion_id`-keyed reduction emits exactly one winner per
+    `conversion_id`, so RMT sees one hot row per key (plus byte-identical
+    resend duplicates). This holds because the batch drain sees all candidate
+    rows for a `conversion_id` together; continuous mode does not, without
+    windowing (Phase 5). Pairs with the existing continuous-mode BACKLOG rows.
+
+- **`exposures_landed` is ReplacingMergeTree, not plain MergeTree
+  (replay-idempotency).** A plain MergeTree never dedups, so re-running the
+  engine or replaying `exposures` from offset 0 appends duplicate exposure rows
+  — violating the idempotency contract and inflating Phase-6 reconciliation
+  match/assist counts, since reconciliation reads this table. Decision:
+  ReplacingMergeTree `ORDER BY (campaign_id, event_time, exposure_id)`. RMT
+  dedups on the sort key, so leading with `(campaign_id, event_time)` still
+  serves the Phase-7 benchmark query pattern while `exposure_id` in the key
+  collapses re-landings (a re-landed exposure shares its `exposure_id`).
+  Rejected plain MergeTree. Guarded by a double-run integration assertion:
+  `exposures_landed` FINAL count == distinct exposure count after two runs.
+
+- **Bytewax owns plumbing, the pure core owns decisions.** `streaming/
+  attribute.py` exposes the leaf decision logic as pure functions —
+  `attribute_household(exposures_in_household, resolved_in_household, window)` →
+  per-candidate attributed rows, and `reduce_conversion(candidate_rows)` → one
+  `AttributedConversion`. The offline replay's `attribute(...)` orchestrates
+  them over in-memory groups; `streaming/dataflow.py` lets Bytewax do the keyed
+  grouping (`key_by` household_id → `attribute_household`; re-key by
+  `conversion_id` → `reduce_conversion`) and calls the SAME leaf functions. One
+  implementation of every decision → live and replay cannot diverge, and
+  Phase 3 already exercises real Bytewax keyed operators, de-risking the
+  Phase-5 migration to stateful/windowed versions. Async inserts are deferred
+  to Phase 7 (the benchmark phase); Phase 3 inserts synchronously so the
+  integration FINAL-comparison is deterministic (async insert buffering makes
+  read-after-write flaky for no benefit at tiny scale).
+
+- **ClickHouse `default` user re-enabled for network access (local-dev).**
+  ClickHouse 24.8 images, when `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` are
+  unset, generate a `users.d/default-user.xml` that restricts the `default`
+  user to loopback (`::1`, `127.0.0.1`) — so host clients reaching the HTTP
+  interface through the docker gateway are rejected (`AUTHENTICATION_FAILED`),
+  while the in-container healthcheck still passes. We mount
+  `clickhouse/users.d/allow-network.xml` (networks `::/0`, empty password) to
+  restore access. Posture is unchanged from Phase 0: the host publishes 8123 on
+  `127.0.0.1` only (compose ports), so the service stays off the LAN even though
+  ClickHouse accepts connections from within the docker network — same
+  passwordless local-dev stance as Grafana admin/admin and the Redpanda admin
+  API. The SELECT-only agent user (Phase 9) is a separate, later concern.
+  Rejected setting `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` env: it would put a
+  credential in compose/CI for zero security gain over the loopback-bound port,
+  against the passwordless-dev posture. Covered by the existing BACKLOG
+  "127.0.0.1 binding still admits any local process" row (shared-host caveat).
+
+- **All wire + row schemas co-locate in `producer/models.py` (single source of
+  truth).** The file holds the Kafka topic models (`Exposure`, `Conversion`,
+  `ResolvedConversion`, graph/truth records) and, from Phase 3, the ClickHouse
+  serving-table schema `AttributedConversion` — which is a *table* schema, not a
+  registered subject (its columns live in `clickhouse/ddl.sql`, insert order in
+  `streaming/sink.py`). Co-located so the output models can subclass
+  `Conversion` without a cross-package import cycle (the dependency direction is
+  already resolve/ and streaming/ → producer/). Two output models is not a junk
+  drawer, but the drift is real (the module is now the whole-pipeline schema
+  module, not "the producer's"), so the **split trigger** is written down: move
+  the engine models to a shared `schemas` package on the 4th output model, or
+  the first model producer/ has no reason to import. Recorded at the coherence
+  auditor's Phase-3 flag so the trigger isn't rediscovered later.
+
+- **Kafka batch-drain promoted to `common/kafka.py` (shared, public).** Both the
+  resolve stage and the engine drain a topic start→end once (EOF-driven). The
+  drain first lived as `resolve.stage._drain`/`_drain_messages`; when the engine
+  needed it (Phase 3) it imported the *private* function cross-stage — a hidden
+  load-bearing coupling (coherence audit D3). Moved verbatim to public
+  `common.kafka.drain` / `drain_messages` (with `_EMPTY_POLL_LIMIT`), imported
+  by both stages; behavior identical, covered by the relocated offline test
+  `tests/test_kafka.py`.

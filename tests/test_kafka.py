@@ -1,4 +1,4 @@
-"""Offline coverage for the EOF-driven batch drain (resolve.stage._drain_messages).
+"""Offline coverage for the EOF-driven batch drain (common.kafka.drain_messages).
 
 No broker: a fake consumer scripts poll() returns. The live integration test
 proves the drain end-to-end, but `make test` runs without a broker, so the two
@@ -9,7 +9,7 @@ need an offline guard too."""
 import pytest
 from confluent_kafka import KafkaError
 
-from resolve.stage import _drain_messages
+from common.kafka import drain_messages
 
 
 class _FakeErr:
@@ -80,7 +80,7 @@ def test_drain_returns_data_and_completes_when_all_partitions_eof() -> None:
     )
     # Returns exactly the data messages (EOFs dropped); no raise ⇒ both
     # partitions cleared the pending set before completion.
-    assert _drain_messages(consumer, "conversions") == [d0a, d0b, d1]
+    assert drain_messages(consumer, "conversions") == [d0a, d0b, d1]
     assert len(consumer.assigned) == 2  # both partitions assigned at offset 0
 
 
@@ -89,7 +89,7 @@ def test_drain_raises_on_stall_instead_of_truncating() -> None:
     # never return a partial read. This is the #7 loud-failure invariant.
     consumer = _FakeConsumer({0: object()}, [_FakeMsg(0, b"a")])
     with pytest.raises(RuntimeError, match="stalled"):
-        _drain_messages(consumer, "conversions")
+        drain_messages(consumer, "conversions")
 
 
 def test_drain_raises_on_non_eof_error() -> None:
@@ -97,4 +97,4 @@ def test_drain_raises_on_non_eof_error() -> None:
         {0: object()}, [_FakeMsg(0, error=_FakeErr(KafkaError._ALL_BROKERS_DOWN))]
     )
     with pytest.raises(RuntimeError, match="consume error on conversions"):
-        _drain_messages(consumer, "conversions")
+        drain_messages(consumer, "conversions")

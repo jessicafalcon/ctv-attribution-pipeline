@@ -368,6 +368,26 @@ handled.*
   so librdkafka occasionally logs a one-line `Connect to ipv6#[::1]`
   connect-refused before falling back to IPv4. Benign; clients default to
   `127.0.0.1` to minimize it.
+- **Bytewax's Kafka source follows forever; the Phase 3 engine is a batch
+  drain.** `bytewax.connectors.kafka` is an unbounded source (it never signals
+  end-of-input), so a dataflow built on it would not terminate on the finite
+  seeded stream. The engine instead drains both topics to memory once
+  (EOF-driven, the same idiom as the resolve stage) and feeds a bounded
+  `TestingSource`, so `fold_final` flushes at end-of-input and the process
+  exits. This also guarantees every candidate for a `conversion_id` is present
+  when the reduction runs (DECISIONS Phase 3 (b)). Continuous follow with
+  windowing lands in Phase 5.
+- **ClickHouse 24.8 images lock the `default` user to loopback.** With no
+  `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD`, the entrypoint writes a
+  `users.d/default-user.xml` limiting `default` to `::1`/`127.0.0.1`; host
+  clients arrive via the docker gateway IP and get `AUTHENTICATION_FAILED`,
+  while the in-container healthcheck (local socket) still passes — so `make up`
+  reports healthy but the engine can't connect. Fixed with a mounted
+  `users.d/allow-network.xml` (DECISIONS Phase 3).
+- **`create ... ;` split must ignore semicolons in SQL comments.** A `;` inside
+  a `--` comment in `clickhouse/ddl.sql` split a statement into a comment-only
+  chunk that ClickHouse rejects as an empty query; `clickhouse/apply.py` strips
+  line comments before splitting on `;`.
 
 ---
 

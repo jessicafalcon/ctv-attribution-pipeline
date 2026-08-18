@@ -1,7 +1,15 @@
-"""Pydantic event models — the source of truth for all topic schemas.
+"""Pydantic models — the single source of truth for every wire and row schema:
+the Kafka topic schemas (`Exposure`, `Conversion`, `ResolvedConversion`, plus
+the graph/truth records) AND the ClickHouse serving-table schema
+(`AttributedConversion`). The topic models have JSON Schemas generated from them
+(producer/schemas.py) and registered in the schema registry; never hand-edited.
+`AttributedConversion` is a *table* schema, not a registered subject — its
+columns live in clickhouse/ddl.sql and its insert order in streaming/sink.py.
 
-JSON Schemas are generated from these models (producer/schemas.py) and
-registered in the schema registry; never hand-edited.
+Co-located deliberately so the output models can subclass `Conversion` without
+a cross-package import cycle (see DECISIONS Phase 3). Split trigger: move the
+engine models to a shared `schemas` package on the 4th output model, or the
+first model producer/ has no reason to import.
 """
 
 from datetime import datetime
@@ -52,6 +60,22 @@ class ResolvedConversion(Conversion):
     resolution: Literal["device", "ip"]
     ambiguous: bool
     candidate_count: int = Field(ge=1)
+
+
+class AttributedConversion(ResolvedConversion):
+    """A resolved conversion after the engine's last-touch attribution. Table:
+    attributed_conversions (ReplacingMergeTree, key conversion_id, version
+    processed_at). `exposure_id` is the credited last-touch exposure (null when
+    unattributed); `assists` are the other in-window exposures in the household;
+    `path` is `hot` for the streaming engine, `reconciled` for the Phase-6
+    long-window job; `processed_at` is the RMT version, set to the conversion's
+    `ingest_time` (event-derived, deterministic — DECISIONS Phase 3)."""
+
+    exposure_id: str | None
+    assists: list[str]
+    attributed: bool
+    path: Literal["hot", "reconciled"]
+    processed_at: datetime
 
 
 class Device(StrictModel):

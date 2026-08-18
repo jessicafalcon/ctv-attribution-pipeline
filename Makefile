@@ -1,7 +1,7 @@
-# Later phases add: run, eval, report, bench, agent-run, agent-eval,
-# test-int (see CLAUDE.md → Commands).
+# Later phases add: eval, report, bench, agent-run, agent-eval
+# (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve test lint
+.PHONY: setup up down seed resolve run test test-int lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -26,8 +26,20 @@ seed:
 resolve:
 	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
 
+# Live pipeline over the seeded stream: resolve stage → attribution engine
+# (reconciliation scheduler added Phase 6). Run after `make up && make seed`.
+run:
+	uv run python -m resolve.stage
+	uv run python -m streaming.dataflow
+
+# Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
+# would probe services before skipping) from making any network attempt.
 test:
-	uv run pytest
+	uv run pytest --ignore=tests/integration
+
+# Integration tests against the running compose stack (`make up` first).
+test-int:
+	uv run pytest tests/integration
 
 lint:
 	uv run pre-commit run --all-files

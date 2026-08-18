@@ -1,0 +1,38 @@
+"""ClickHouse connection factory and read helpers, shared by apply.py and the
+engine sink. Connection params come from the environment (never hardcoded),
+mirroring KAFKA_BROKER / SCHEMA_REGISTRY_URL elsewhere. clickhouse-connect
+speaks the HTTP interface (port 8123), the only ClickHouse port compose
+publishes to the host."""
+
+import os
+
+from clickhouse_connect import get_client
+from clickhouse_connect.driver.client import Client
+
+
+def connect() -> Client:
+    return get_client(
+        host=os.environ.get("CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
+        username=os.environ.get("CLICKHOUSE_USER", "default"),
+        password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
+        database=os.environ.get("CLICKHOUSE_DB", "default"),
+    )
+
+
+def read_attributed_decisions(client: Client) -> dict[str, tuple]:
+    """The attribution DECISION per conversion_id from FINAL state: the columns
+    the engine computes, robust to timestamp round-trip formatting. FINAL
+    collapses ReplacingMergeTree rows so replays/duplicates read as one."""
+    rows = client.query(
+        """
+        select conversion_id, household_id, exposure_id, attributed, assists, path
+        from attributed_conversions final
+        order by conversion_id
+        """
+    ).result_rows
+    return {r[0]: (r[1], r[2], bool(r[3]), tuple(r[4]), r[5]) for r in rows}
+
+
+def count_exposures_final(client: Client) -> int:
+    return client.query("select count() from exposures_landed final").result_rows[0][0]
