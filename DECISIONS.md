@@ -387,3 +387,25 @@ One entry per non-obvious choice. Newest last.
   NOT move to continuous Kafka follow. No phase currently owns continuous follow;
   the two resolve BACKLOG rows (graph refresh, conversions-offset reprocessing)
   re-defer on exactly that trigger. §8 corrected in the same pass.
+
+- **Medium live proof runs on its own clean stack, not the shared `make
+  test-int` (profile collision the spec didn't foresee).** The Phase-5 spec first
+  listed `tests/integration/test_engine_hardening.py` under `make test-int`, but
+  that bundle runs all integration tests against one shared compose stack, and
+  the existing tiny tests seed the `tiny` profile into the same Kafka topics and
+  the same `attributed_conversions` / `exposures_landed` ReplacingMergeTree
+  tables. tiny and medium **share conversion_id space** (both start at
+  `c-000000`; tiny's 55 ids ⊂ medium's range), so a shared stack would interleave
+  their RMT rows keyed by `conversion_id` and pollute FINAL — whichever test runs
+  after a different-profile test reads mixed state. Fixing that inside
+  `make test-int` would mean a per-test TRUNCATE (a destructive pattern CLAUDE.md
+  restricts to `make down`) plus careful ordering, retrofitted onto passing
+  tests. Instead: `make test-int-medium` isolates via the **sanctioned `make
+  down`** (fresh medium-only stack), the shared `make test-int` stays tiny-only
+  and untouched, and CI (tiny profile) is unaffected. The live proof stays a real
+  assertion of Done-when clauses 1/2/3 against the pinned oracle baseline (live
+  FINAL P/R == oracle, gauge rose/fell, dedup counter + FINAL-row-count
+  invariance under `ENGINE_DEDUP=off`), not an eyeballed `make eval` number.
+  Offline `tests/test_medium_parity.py` proves the same three clauses
+  deterministically and is the CI-gating coverage; live tiny already exercises
+  the Kafka→ClickHouse path. Spec's test section updated to match.

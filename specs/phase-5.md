@@ -37,10 +37,12 @@ make eval PROFILE=medium && \
 make test && make lint
 ```
 
-Plus the opt-in live parity + eviction + dedup integration test
-(`make test-int`, run by CI's integration job):
-`tests/integration/test_engine_hardening.py` — which itself re-asserts the tiny
-golden gate below against ClickHouse FINAL.
+Plus the live clause-1/2/3 proof on a clean medium-only stack:
+`make test-int-medium` (make down && up && seed medium && run medium →
+`tests/integration/test_engine_hardening.py`). This runs **outside** the shared
+`make test-int` (which stays tiny-only) because tiny and medium share
+conversion_id space (DECISIONS Phase 5). The tiny golden gate 0 is re-asserted
+by the tiny `make test-int` against ClickHouse FINAL.
 
 ## Acceptance gate 0 — the frozen tiny golden is the regression oracle (HARD GATE)
 
@@ -395,11 +397,18 @@ load-bearing for the watermark, not for dedup).** Consume in **offset order** as
   - `tests/test_oracle_parity.py` — Oracle P/R over `dedup_by_id(E)` (pure, no
     services) equals engine P/R **when the engine core is run offline over the
     same E** (services-free half of clause 1).
-- `tests/integration/test_engine_hardening.py` (opt-in `make test-int`, CI
-  integration job) — full clause 1/2/3 against `make up`: seed medium → resolve
-  → hardened engine → ClickHouse; engine P/R == oracle P/R exactly; join-state
-  gauge rose and fell; `dedup_suppressed_total > 0` and FINAL row count ==
-  dedup-off run.
+- `tests/integration/test_engine_hardening.py` — full clause 1/2/3 live against
+  ClickHouse FINAL: engine P/R == the pinned oracle baseline (precision 86/125,
+  recall 1.0, wrong_hh 0); join-state gauge > 0 and evictions > 0;
+  `dedup_suppressed_total == 63` and FINAL row count unchanged by a dedup-off
+  run. **Runs on its own clean medium-only stack via `make test-int-medium`
+  (make down && up && seed medium && run medium), NOT in the shared
+  `make test-int`** — tiny and medium share conversion_id space, so a shared
+  stack would interleave their RMT rows (DECISIONS Phase 5). Isolation is the
+  sanctioned `make down`, not a per-test TRUNCATE; shared `make test-int` stays
+  tiny-only (it already covers the live Kafka→ClickHouse path). CI runs the tiny
+  integration job; the medium live cycle runs locally in the DONE chain.
+  `ENGINE_DEDUP=off` env toggle drives the dedup-off invariance run.
 
 ## Determinism / test hygiene
 

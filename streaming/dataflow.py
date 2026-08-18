@@ -169,7 +169,13 @@ def run_engine(broker: str) -> dict[str, int]:
     # Dedup (feature 1): drop exact re-sends via a full seen-set before the join
     # and before landing. Full set, not a TTL — the drain holds the whole topic
     # and the seeded duplicate is timestamp-identical (DECISIONS Phase 5).
-    exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
+    # ENGINE_DEDUP=off skips it (dedup is transparent: RMT collapses re-sends on
+    # read regardless, so FINAL is identical either way — proven by the
+    # dedup-off integration run).
+    if os.environ.get("ENGINE_DEDUP", "on").lower() == "off":
+        exposures, resolved, suppressed = exposures_raw, resolved_raw, 0
+    else:
+        exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
     metrics.DEDUP_SUPPRESSED.inc(suppressed)
     run_main(
         build_flow(
