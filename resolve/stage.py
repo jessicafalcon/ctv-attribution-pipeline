@@ -29,6 +29,7 @@ from confluent_kafka import (
     Consumer,
     KafkaError,
     KafkaException,
+    Message,
     TopicPartition,
 )
 from confluent_kafka import Producer as KafkaProducer
@@ -62,7 +63,7 @@ def _ensure_topic(broker: str) -> None:
                 raise
 
 
-def _drain_messages(consumer: Consumer, topic: str) -> list:
+def _drain_messages(consumer: Consumer, topic: str) -> list[Message]:
     """Read `topic` start→end once, driven by end-of-partition; return the raw
     messages (callers pick key and/or value). Completion is when EVERY assigned
     partition has emitted `_PARTITION_EOF` — the standard read-to-end-of-log
@@ -74,7 +75,7 @@ def _drain_messages(consumer: Consumer, topic: str) -> list:
     consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING) for p in parts])
     pending = set(parts)  # partitions not yet at end-of-log
 
-    messages: list = []
+    messages: list[Message] = []
     empty = 0
     while pending and empty < _EMPTY_POLL_LIMIT:
         msg = consumer.poll(0.1)
