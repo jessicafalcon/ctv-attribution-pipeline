@@ -5,12 +5,15 @@ Teaching notes (first appearance this phase):
   (household_id), so replaying it start→end reconstructs the current graph
   without every historical edit. We drain it once at startup into a GraphIndex.
 - **Consumer group / offsets**: a Kafka consumer reads a partition sequentially
-  by *offset*. We drain `conversions` from the log's low to high watermark in
-  one batch pass, then produce a resolved record per candidate to
-  `conversions_resolved`. Batch (not follow-forever) is deliberate for Phase 2:
-  it processes the finite seeded stream end-to-end and exits, which is what the
-  integration test and a tiny/medium run need. Continuous follow lands when
-  `make run` wires the whole pipeline (Phase 3+).
+  by *offset*. We drain `conversions` start→end in one batch pass — assign every
+  partition at offset 0 and read until each has signalled end-of-partition
+  (`_PARTITION_EOF`, enabled via `enable.partition.eof`), then produce a resolved
+  record per candidate to `conversions_resolved`. EOF-driven completion (not a
+  watermark row count) is correct on a *compacted* topic too, where compaction
+  leaves offset gaps that would make `high - low` overcount and hang. Batch (not
+  follow-forever) is deliberate for Phase 2: it processes the finite seeded
+  stream end-to-end and exits. Continuous follow lands when `make run` wires the
+  whole pipeline (Phase 3+).
 
 Both keys land matchable events together: `conversions_resolved` is keyed by
 `household_id`, the same key as `exposures`, so the engine's join is partition-
@@ -41,7 +44,10 @@ from resolve.resolver import resolve_one
 
 RESOLVED_TOPIC = "conversions_resolved"
 RESOLVED_SUBJECT = f"{RESOLVED_TOPIC}-value"
-_EMPTY_POLL_LIMIT = 50  # ~5s of silence past the watermark → stop the batch pass
+# Stall guard only: a healthy drain ends on EOF, not on this. ~5s of dead air
+# before every partition has reached end-of-log means the broker stalled → raise
+# loud, never return a partial read.
+_EMPTY_POLL_LIMIT = 50
 
 
 def _ensure_topic(broker: str) -> None:
@@ -56,32 +62,43 @@ def _ensure_topic(broker: str) -> None:
                 raise
 
 
-def _drain(consumer: Consumer, topic: str) -> list[bytes]:
-    """Read `topic` from low to high watermark once; return message values."""
+def _drain_messages(consumer: Consumer, topic: str) -> list:
+    """Read `topic` start→end once, driven by end-of-partition; return the raw
+    messages (callers pick key and/or value). Completion is when EVERY assigned
+    partition has emitted `_PARTITION_EOF` — the standard read-to-end-of-log
+    idiom, correct on compacted topics with offset gaps. Requires the consumer
+    to set `enable.partition.eof`. If the empty-poll stall guard trips before
+    all partitions reach EOF, raise (loud) rather than return a truncated read —
+    the consumer must fail as loudly as the producer does."""
     parts = list(consumer.list_topics(topic, timeout=10).topics[topic].partitions)
-    remaining = 0
-    assignment = []
-    for p in parts:
-        lo, hi = consumer.get_watermark_offsets(TopicPartition(topic, p), timeout=10)
-        remaining += hi - lo
-        assignment.append(TopicPartition(topic, p, OFFSET_BEGINNING))
-    consumer.assign(assignment)
+    consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING) for p in parts])
+    pending = set(parts)  # partitions not yet at end-of-log
 
-    values: list[bytes] = []
+    messages: list = []
     empty = 0
-    while remaining > 0 and empty < _EMPTY_POLL_LIMIT:
+    while pending and empty < _EMPTY_POLL_LIMIT:
         msg = consumer.poll(0.1)
         if msg is None:
             empty += 1
             continue
+        empty = 0
         if msg.error():
             if msg.error().code() == KafkaError._PARTITION_EOF:
+                pending.discard(msg.partition())
                 continue
             raise RuntimeError(f"consume error on {topic}: {msg.error()}")
-        empty = 0
-        remaining -= 1
-        values.append(msg.value())
-    return values
+        messages.append(msg)
+    if pending:
+        raise RuntimeError(
+            f"drain of {topic} stalled: {len(pending)} partition(s) never reached "
+            f"end-of-log within {_EMPTY_POLL_LIMIT} empty polls"
+        )
+    return messages
+
+
+def _drain(consumer: Consumer, topic: str) -> list[bytes]:
+    """Read `topic` start→end once; return message values (batch path)."""
+    return [msg.value() for msg in _drain_messages(consumer, topic)]
 
 
 def load_graph_index(broker: str) -> GraphIndex:
@@ -91,6 +108,7 @@ def load_graph_index(broker: str) -> GraphIndex:
             "group.id": "resolve-graph-loader",
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
+            "enable.partition.eof": True,  # drain completes on EOF, not row count
         }
     )
     try:
@@ -123,6 +141,7 @@ def run_batch(
             "group.id": group_id,
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
+            "enable.partition.eof": True,  # drain completes on EOF, not row count
         }
     )
     consumed = emitted = 0
@@ -159,7 +178,8 @@ def main(argv: list[str] | None = None) -> None:
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     registry = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
     if args.metrics_port:
-        start_http_server(args.metrics_port)
+        # 127.0.0.1 only, matching the compose ports — keep metrics off the LAN.
+        start_http_server(args.metrics_port, addr="127.0.0.1")
     consumed, emitted = run_batch(broker, registry)
     print(f"resolve: consumed {consumed} conversions → emitted {emitted} records")
 

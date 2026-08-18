@@ -6,7 +6,9 @@ truth after Phase 2 (mirrors tests/test_fixtures.py for the producer)."""
 from collections import Counter
 from pathlib import Path
 
-from producer.models import Conversion, Household
+from pydantic import BaseModel
+
+from producer.models import Conversion, Household, ResolvedConversion
 from producer.serialize import jsonl
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
@@ -15,14 +17,14 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "tiny"
 EXPECTED = FIXTURES / "expected" / "conversions_resolved.jsonl"
 
 
-def _read(name: str, model: type) -> list:
+def _read[M: BaseModel](name: str, model: type[M]) -> list[M]:
     return [
         model.model_validate_json(line)
         for line in (FIXTURES / name).read_text().splitlines()
     ]
 
 
-def _resolved():
+def _resolved() -> list[ResolvedConversion]:
     index = GraphIndex.from_households(_read("device_graph.jsonl", Household))
     return resolve_stream(_read("conversions.jsonl", Conversion), index)
 

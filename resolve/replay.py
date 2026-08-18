@@ -10,6 +10,8 @@ the same pure resolver so the two cannot diverge.
 import argparse
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from producer.models import Conversion, Household
 from producer.serialize import jsonl
 from resolve.index import GraphIndex
@@ -19,7 +21,7 @@ REPO_ROOT = Path(__file__).parent.parent
 SOURCES = {"fixtures": "fixtures", "out": "data/out"}
 
 
-def _read(path: Path, model: type) -> list:
+def _read[M: BaseModel](path: Path, model: type[M]) -> list[M]:
     return [model.model_validate_json(line) for line in path.read_text().splitlines()]
 
 
