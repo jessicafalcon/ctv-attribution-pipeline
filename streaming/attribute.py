@@ -18,7 +18,7 @@ Two stages, in order:
 """
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -28,6 +28,55 @@ from producer.models import AttributedConversion, Exposure, ResolvedConversion
 # (ARCHITECTURE §3.3). tiny stays inside it, so every conversion is hot-path
 # attributable without reconciliation (DECISIONS Phase 1).
 HOT_WINDOW = timedelta(days=7)
+
+# Allowed lateness = the watermark's grace. A conversion is released for
+# attribution once the watermark (max event_time seen − allowed_lateness)
+# reaches its event_time, which guarantees every in-tolerance late exposure
+# (arrival lateness ≤ allowed_lateness) has already arrived (feature 2). It must
+# be ≥ a profile's late.max_minutes (tiny = 180; medium sized under this). Env
+# override in the live engine: ENGINE_ALLOWED_LATENESS_MINUTES.
+ALLOWED_LATENESS = timedelta(hours=6)
+
+
+def dedup_by_id[M](
+    rows: Iterable[M], key: Callable[[M], Hashable]
+) -> tuple[list[M], int]:
+    """Drop exact re-sends: keep the first row per `key` in arrival order and
+    report how many were suppressed. Pure (order-preserving, no I/O).
+
+    `key` must be a row's full identity, NOT just its event id. A resolved
+    conversion fans out to one row per candidate household under the SAME
+    `conversion_id` (shared-IP resolve fan-out), so keying resolved rows on
+    `conversion_id` alone would drop legitimate candidates, not just duplicates
+    — see `dedup_streams`. Batch mode keeps a full seen-set (no TTL): the seeded
+    duplicate is timestamp-identical to its original, so there is nothing an
+    event-time TTL could measure against (DECISIONS/SCALING Phase 5)."""
+    seen: set[Hashable] = set()
+    kept: list[M] = []
+    suppressed = 0
+    for row in rows:
+        k = key(row)
+        if k in seen:
+            suppressed += 1
+            continue
+        seen.add(k)
+        kept.append(row)
+    return kept, suppressed
+
+
+def dedup_streams(
+    exposures: Iterable[Exposure], resolved: Iterable[ResolvedConversion]
+) -> tuple[list[Exposure], list[ResolvedConversion], int]:
+    """Drop exact re-sends from both engine input streams before the join.
+    Exposures key on `exposure_id` (globally unique, no fan-out); resolved
+    conversions key on `(conversion_id, household_id)` so shared-IP fan-out
+    candidates survive (same `conversion_id`, different household). Returns the
+    deduped streams and the total suppressed count for the
+    `engine_dedup_suppressed` counter. Pure, so the engine and any offline
+    oracle dedup identically."""
+    exp, exp_n = dedup_by_id(exposures, lambda e: e.exposure_id)
+    res, res_n = dedup_by_id(resolved, lambda r: (r.conversion_id, r.household_id))
+    return exp, res, exp_n + res_n
 
 
 @dataclass(frozen=True)
@@ -61,7 +110,7 @@ def attribute_household(
             # Distinct assist ids, and never the credited exposure itself — set
             # difference by id, so a *resent* last-touch exposure (same id twice
             # in `eligible`) cannot survive into its own assists. Pure-function
-            # set semantics, distinct from Phase-5 TTL'd stream dedup on the join.
+            # set semantics, distinct from the Phase-5 seen-set stream dedup.
             assists = sorted(
                 {e.exposure_id for e in eligible} - {last_touch.exposure_id}
             )
@@ -74,6 +123,107 @@ def attribute_household(
         else:
             out.append(Candidate(_attributed(conv, None, [], attributed=False), None))
     return out
+
+
+def _arrival_key(
+    tagged: tuple[str, Exposure | ResolvedConversion],
+) -> tuple[datetime, str, str]:
+    """Deterministic arrival order for one household's interleaved events:
+    ingest_time, then a stable (kind, id) tiebreak. The global stream is emitted
+    in ingest order, so ingest_time reconstructs arrival order; the tiebreak only
+    fixes ordering when two events share an ingest_time."""
+    kind, model = tagged
+    ident = model.exposure_id if isinstance(model, Exposure) else model.conversion_id
+    return (model.ingest_time, kind, ident)
+
+
+def event_time_watermark(
+    watermark: datetime | None, event_time: datetime, allowed_lateness: timedelta
+) -> datetime:
+    """Advance the watermark to `max(seen event_time) − allowed_lateness`. Pure,
+    event-time only (never wall clock), monotonic non-decreasing — an out-of-order
+    (older) event cannot pull it back."""
+    candidate = event_time - allowed_lateness
+    return candidate if watermark is None or candidate > watermark else watermark
+
+
+@dataclass(frozen=True)
+class StreamState:
+    """Join-state observability for one household's streaming pass. `peak` is the
+    high-water exposure count held at once (the scaling constraint); `evicted` is
+    how many exposures aged out; `final` is what remained at end-of-input. Not
+    part of the persisted schema — it drives the engine_ join-state metrics."""
+
+    peak: int
+    evicted: int
+    final: int
+
+
+@dataclass(frozen=True)
+class StreamResult:
+    candidates: list[Candidate]
+    state: StreamState
+
+
+def attribute_household_streaming(
+    events: list[tuple[str, Exposure | ResolvedConversion]],
+    window: timedelta,
+    allowed_lateness: timedelta,
+) -> StreamResult:
+    """Stage 1, streaming form (features 2–3). Process ONE household's exposures
+    and resolved conversions in arrival (ingest) order through a watermark-gated
+    release and hot-window eviction.
+
+    Per iteration, in this order:
+    1. advance the watermark to `max(event_time) − allowed_lateness`;
+    2. buffer the event (exposure → state, conversion → pending);
+    3. **release** every pending conversion with `event_time ≤ watermark` (`≤`),
+       guaranteeing its eligible exposures have arrived, and attribute it against
+       state via `attribute_household`;
+    4. **evict** exposures with `watermark > event_time + window` (strict `>`).
+
+    Release before eviction, and `≥` release vs strict `>` eviction, are
+    load-bearing: an eligible exposure of a just-released conversion satisfies
+    `exp.event_time + window ≥ conv.event_time`, so at the boundary
+    (`watermark = conv.event_time = exp.event_time + window`) release fires this
+    tick while eviction waits until the next — the exposure is never dropped
+    before its conversion probes (DECISIONS Phase 5). Eviction therefore removes
+    only exposures no in-tolerance conversion can still match, so the output is
+    byte-identical to the non-evicting `attribute_household` over the full
+    household (gate 0 on tiny — which never evicts, span < window — and medium
+    parity prove this).
+
+    At end-of-input every still-pending conversion is released against the
+    surviving state (the completeness backstop); a conversion whose release
+    watermark is never reached mid-stream is still attributed against complete
+    state (nothing matchable has been evicted, by the boundary rule above)."""
+    ordered = sorted(events, key=_arrival_key)
+    exposures: list[Exposure] = []
+    pending: list[ResolvedConversion] = []
+    out: list[Candidate] = []
+    watermark: datetime | None = None
+    peak = evicted = 0
+    for kind, model in ordered:
+        watermark = event_time_watermark(watermark, model.event_time, allowed_lateness)
+        if kind == "exp":
+            exposures.append(model)  # type: ignore[arg-type]
+        else:
+            pending.append(model)  # type: ignore[arg-type]
+        if pending:  # release first (≥), so a boundary exposure is still present
+            released = [c for c in pending if c.event_time <= watermark]
+            if released:
+                pending = [c for c in pending if c.event_time > watermark]
+                for conv in released:
+                    out.extend(attribute_household(exposures, [conv], window))
+        keep = [e for e in exposures if watermark <= e.event_time + window]  # evict >
+        evicted += len(exposures) - len(keep)
+        exposures = keep
+        peak = max(peak, len(exposures))
+    for conv in pending:  # EOF flush: surviving state, watermark → +∞
+        out.extend(attribute_household(exposures, [conv], window))
+    return StreamResult(
+        out, StreamState(peak=peak, evicted=evicted, final=len(exposures))
+    )
 
 
 def reduce_conversion(candidates: list[Candidate]) -> AttributedConversion:

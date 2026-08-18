@@ -126,8 +126,10 @@ One entry per non-obvious choice. Newest last.
 - **Resolve is a stateless map — duplicates in, duplicates out.** No dedup
   here; dedup keys on `conversion_id`/`exposure_id` and lives in the engine
   (Phase 5, ARCHITECTURE). A duplicate conversion resolves to identical
-  bytes, so it collapses later under ReplacingMergeTree / TTL dedup. Keeps the
-  stage a pure function of (conversion, graph).
+  bytes, so it collapses later under ReplacingMergeTree / the engine dedup.
+  Keeps the stage a pure function of (conversion, graph).
+  (Superseded detail: "TTL dedup" here was the pre-Phase-5 plan; the Phase-5
+  engine dedup is a full seen-set, not TTL'd — see Phase 5 below.)
 - **Ambiguous fan-out ordered by `sorted(household_id)`.** The only
   nondeterministic choice in the stage was candidate order; sorting makes the
   emitted record sequence byte-identical across runs.
@@ -348,3 +350,90 @@ One entry per non-obvious choice. Newest last.
     measured separately by `make eval`. A subtly-inflated ROAS is exactly the
     "plausible-but-wrong" number the Phase-9 agent will diagnose; a feature to
     preserve, not a filter to add.
+
+## Phase 5
+
+- **Batch dedup is a full seen-set, not TTL'd state (why-not-TTL).**
+  ARCHITECTURE §3.3 names dedup "TTL'd state sized to the max plausible duplicate
+  delay." That sizing cannot work in the Phase-5 batch drain, and the reason is
+  structural, not incidental: the duplicate injector re-appends the *identical
+  payload* (`producer/generate.py` `_with_duplicates`, lines 56-61 — the returned
+  list holds the same object twice; the `+uniform(10,300)` arrival slot is a sort
+  key for emit order, then discarded, never a field). So a re-send carries the
+  same `event_time` AND the same `ingest_time` as its original — the pair is
+  field-indistinguishable in time, and an event-time TTL has nothing to measure
+  against. A TTL sized to the 300s re-send delay would also sit on a
+  seed-dependent knife-edge: on a denser stream the watermark (max event_time)
+  advances ~300s of event-time between a re-send pair, evicting the id from the
+  seen-set before its re-send arrives, so `engine_dedup_suppressed_total` silently
+  undercounts and is brittle across seeds — while ReplacingMergeTree read-time
+  collapse still makes clause-1 parity pass and *hides* the bug. And "TTL
+  boundary" cannot be a producer-knob test (CLAUDE.md's knob-driven rule), because
+  no knob can push a timestamp-identical duplicate past an event-time TTL.
+  Decision: the engine is a bounded batch drain that already holds the whole topic
+  in memory, so it keeps a **full `conversion_id`/`exposure_id` seen-set, no
+  in-batch TTL** — O(n), same order as the existing grouping, deterministic on the
+  single partition. Dedup stays *semantically transparent* (RMT collapses re-sends
+  regardless), so its Phase-5 test is a counter (`> 0`, the mechanism fired) plus
+  a "FINAL row count == dedup-off run" invariance (transparency), never precision/
+  recall. This is the "simplest standard solution now; scaling path is a note, not
+  code" contract: TTL'd eviction is real only once the engine follows continuously
+  (out of scope this phase) → recorded in SCALING.md, not built now. ARCHITECTURE
+  §3.3 and §8 updated to track this (Option A, per the batch-vs-continuous
+  convention §8 already uses; not a DECISIONS-only footnote).
+
+- **Windowing lands on the batch drain; continuous follow stays deferred.**
+  ARCHITECTURE §8 previously read "Continuous follow with windowing lands in Phase
+  5." Phase 5 adds watermarks + allowed lateness + eviction to the *batch drain*
+  (deterministic, event-time-driven, no wall clock — determinism policy) and does
+  NOT move to continuous Kafka follow. No phase currently owns continuous follow;
+  the two resolve BACKLOG rows (graph refresh, conversions-offset reprocessing)
+  re-defer on exactly that trigger. §8 corrected in the same pass.
+
+- **Medium live proof runs on its own clean stack, not the shared `make
+  test-int` (profile collision the spec didn't foresee).** The Phase-5 spec first
+  listed `tests/integration/test_engine_hardening.py` under `make test-int`, but
+  that bundle runs all integration tests against one shared compose stack, and
+  the existing tiny tests seed the `tiny` profile into the same Kafka topics and
+  the same `attributed_conversions` / `exposures_landed` ReplacingMergeTree
+  tables. tiny and medium **share conversion_id space** (both start at
+  `c-000000`; tiny's 55 ids ⊂ medium's range), so a shared stack would interleave
+  their RMT rows keyed by `conversion_id` and pollute FINAL — whichever test runs
+  after a different-profile test reads mixed state. Fixing that inside
+  `make test-int` would mean a per-test TRUNCATE (a destructive pattern CLAUDE.md
+  restricts to `make down`) plus careful ordering, retrofitted onto passing
+  tests. Instead: `make test-int-medium` isolates via the **sanctioned `make
+  down`** (fresh medium-only stack), the shared `make test-int` stays tiny-only
+  and untouched, and CI (tiny profile) is unaffected. The live proof stays a real
+  assertion of Done-when clauses 1/2/3 against the pinned oracle baseline (live
+  FINAL P/R == oracle, gauge rose/fell, dedup counter + FINAL-row-count
+  invariance under `ENGINE_DEDUP=off`), not an eyeballed `make eval` number.
+  Offline `tests/test_medium_parity.py` proves the same three clauses
+  deterministically and is the CI-gating coverage; live tiny already exercises
+  the Kafka→ClickHouse path. Spec's test section updated to match.
+
+- **Per-household arrival-order re-sort by `(ingest_time, kind, id)`, not a
+  reliance on Bytewax delivery order.** `streaming/attribute.py`
+  `attribute_household_streaming` sorts each household's interleaved events by
+  `_arrival_key = (ingest_time, kind, id)` before the watermark-gated pass.
+  Necessary, not a spec violation: Bytewax's `op.merge` of the two `TestingSource`
+  inputs does NOT preserve global topic-offset order, so relying on delivered
+  order would be nondeterministic. An earlier phase-5 spec draft said "do NOT
+  re-sort" — that was too absolute; it feared a re-sort collapsing a duplicate
+  adjacent to its original, a hazard the upstream seen-set dedup (feature 1)
+  already removes. The tiebreak `(kind, id)` differs from the producer's emit
+  tiebreak `(event_id, dup_slot)` (`generate.py:60`), but the output is invariant
+  to it: release-gating + EOF flush attribute every conversion against the
+  complete eligible set, so ordering within an equal `ingest_time` cannot change
+  the result. Gate-0 (tiny byte-identical) and medium parity prove byte-safety.
+
+- **`medium` uses `unknown_device_fraction = 0.1`, per DECISIONS Phase 1.** Phase
+  1 set curation-high `0.3` on tiny and explicitly noted `medium`/fault profiles
+  should use a realistic `~0.05–0.1` so the RESULTS match rate isn't skewed. The
+  first medium.json copied tiny's `0.3`; a phase-exit coherence finding caught the
+  conflict. Fixed (not the guidance revised): engine hardening is indifferent to
+  the unknown-device rate, so `0.3` bought the Phase-5 proof nothing while skewing
+  exactly what Phase 1 protected. Re-pinned the medium baseline to the `0.1`
+  numbers (precision 92/130, recall 1.0, 132 rows, dedup suppressed 70) in
+  `tests/test_medium_parity.py`, the integration test, and the spec — the numbers
+  live only there (no RESULTS.md consumer yet).

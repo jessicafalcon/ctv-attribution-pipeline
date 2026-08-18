@@ -1,27 +1,31 @@
 """Live attribution engine (Bytewax) — the real pipeline component.
 
-Teaching notes (first appearance this phase):
+Teaching notes:
 - **Stateful keyed operators.** Bytewax processes a stream of `(key, value)`
   pairs; a *stateful* operator keeps state per key. `fold_final` accumulates all
   values for a key and emits once the input is exhausted — exactly right for a
-  bounded batch. We key by `household_id` to group each household's exposures
-  and resolved conversions together (the join), then re-key by `conversion_id`
+  bounded batch. We key by `household_id` to bucket each household's interleaved
+  exposures and conversions together (the join), then re-key by `conversion_id`
   to collapse a shared-IP fan-out to one winner (the reduction).
-- **Batch drain, not continuous follow.** Like the resolve stage, we drain both
-  Kafka topics start→end once (EOF-driven) and feed them into the dataflow via a
-  bounded source, so the engine processes the finite seeded stream and exits.
-  Bytewax's Kafka *source* follows forever; draining to memory first is the
-  simplest correct batch shape at this scale and lets `fold_final` see every
-  candidate for a `conversion_id` together (required for the reduction —
-  DECISIONS Phase 3 (b)). Continuous mode with windowing lands in Phase 5.
+- **Batch drain, with event-time windowing (Phase 5).** We drain both Kafka
+  topics start→end once (EOF-driven) and feed a bounded source, so the engine
+  processes the finite seeded stream and exits (Bytewax's Kafka *source* follows
+  forever). Within each household bucket the pure core runs an arrival-ordered,
+  watermark-gated pass: a conversion is released once the event-time watermark
+  (`max(event_time) − allowed_lateness`) reaches its `event_time`, and exposures
+  are evicted past `event_time + hot_window`. This is windowing **on the batch
+  drain** — the engine stays batch (no continuous Kafka follow; that is deferred,
+  no phase owns it — ARCHITECTURE §8, DECISIONS Phase 5).
 
-The decisions live in streaming/attribute.py; this module only does the keyed
-grouping and I/O, calling the SAME leaf functions the offline replay calls, so
-the two paths cannot diverge.
+The decisions live in streaming/attribute.py (dedup, watermark/release, eviction,
+reduction); this module only does the keyed grouping, metrics, and I/O, calling
+the SAME leaf functions the offline replay calls, so the two paths cannot diverge.
 """
 
 import argparse
 import os
+from datetime import timedelta
+from functools import partial
 
 import bytewax.operators as op
 from bytewax.dataflow import Dataflow
@@ -34,12 +38,26 @@ from clickhouse.apply import apply as apply_ddl
 from common.kafka import drain
 from producer.models import Exposure, ResolvedConversion
 from streaming import metrics
-from streaming.attribute import HOT_WINDOW, attribute_household, reduce_conversion
+from streaming.attribute import (
+    ALLOWED_LATENESS,
+    HOT_WINDOW,
+    attribute_household_streaming,
+    dedup_streams,
+    reduce_conversion,
+)
 from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
 
 EXPOSURES_TOPIC = "exposures"
 RESOLVED_TOPIC = "conversions_resolved"
 _BATCH = 256  # items per source poll → fewer, larger ClickHouse inserts
+
+
+def _allowed_lateness() -> timedelta:
+    """Release/eviction grace from the env, defaulting to ALLOWED_LATENESS. Must
+    be ≥ the seeded profile's late.max_minutes (asserted per profile in tests);
+    override with ENGINE_ALLOWED_LATENESS_MINUTES."""
+    minutes = os.environ.get("ENGINE_ALLOWED_LATENESS_MINUTES")
+    return timedelta(minutes=int(minutes)) if minutes else ALLOWED_LATENESS
 
 
 def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
@@ -58,16 +76,23 @@ def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
         consumer.close()
 
 
-def _group_household(acc: tuple[list, list], tagged: tuple[str, object]) -> tuple:
-    exposures, resolved = acc
-    kind, model = tagged
-    (exposures if kind == "exp" else resolved).append(model)
-    return exposures, resolved
+def _accumulate(acc: list, tagged: tuple[str, object]) -> list:
+    """Collect one household's interleaved (kind, model) events; the streaming
+    stage re-sorts them into arrival order before the watermark-gated pass."""
+    acc.append(tagged)
+    return acc
 
 
-def _attribute_group(kv: tuple[str, tuple[list, list]]) -> list:
-    _hid, (exposures, resolved) = kv
-    return attribute_household(exposures, resolved, HOT_WINDOW)
+def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]):
+    _hid, events = kv
+    return attribute_household_streaming(events, HOT_WINDOW, allowed_lateness)
+
+
+def _emit_and_observe(result) -> list:
+    """Record the household's join-state metrics (peak, evictions) and hand the
+    candidate rows downstream to the conversion_id-keyed reduction."""
+    metrics.observe_state(result.state)
+    return result.candidates
 
 
 def _collect(acc: list, candidate: object) -> list:
@@ -92,24 +117,31 @@ def build_flow(
     resolved: list[ResolvedConversion],
     attributed_sink: Sink,
     exposures_sink: Sink,
+    allowed_lateness: timedelta = ALLOWED_LATENESS,
 ) -> Dataflow:
     """Wire the engine. Sinks are injected so the same operator graph runs
     against ClickHouse live and against a capturing sink in an offline test —
-    proving the Bytewax path matches the pure core without needing services."""
+    proving the Bytewax path matches the pure core without needing services.
+
+    Bytewax carries the keyed state (one bucket of interleaved events per
+    household); the watermark-gated release lives in the pure core
+    (`attribute_household_streaming`), so live and replay cannot diverge."""
     flow = Dataflow("attribution-engine")
 
     exp_stream = op.input("exposures", flow, TestingSource(exposures, _BATCH))
     res_stream = op.input("resolved", flow, TestingSource(resolved, _BATCH))
 
-    # Join: tag, merge, key by household_id, fold each household's rows together.
+    # Join: tag, merge, key by household_id, collect each household's interleaved
+    # events; the pure streaming stage re-sorts to arrival order and releases.
     exp_tagged = op.map("tag_exp", exp_stream, lambda e: ("exp", e))
     res_tagged = op.map("tag_res", res_stream, lambda r: ("res", r))
     merged = op.merge("merge_household", exp_tagged, res_tagged)
     keyed = op.key_on("key_household", merged, lambda t: t[1].household_id)
-    grouped = op.fold_final(
-        "group_household", keyed, lambda: ([], []), _group_household
+    grouped = op.fold_final("group_household", keyed, list, _accumulate)
+    results = op.map(
+        "attribute_household", grouped, partial(_attribute_group, allowed_lateness)
     )
-    candidates = op.flat_map("attribute_household", grouped, _attribute_group)
+    candidates = op.flat_map("emit_candidates", results, _emit_and_observe)
 
     # Reduction: re-key by conversion_id, collapse fan-out/duplicates to one row.
     cand_keyed = op.key_on("key_conversion", candidates, lambda c: c.row.conversion_id)
@@ -128,23 +160,39 @@ def run_engine(broker: str) -> dict[str, int]:
     """Drain the two topics, apply the DDL, run the engine to completion.
     Returns row counts for logging/tests."""
     apply_ddl()
-    exposures = [
+    exposures_raw = [
         Exposure.model_validate_json(v)
         for v in _drain_topic(broker, EXPOSURES_TOPIC, "engine-exposures")
     ]
-    resolved = [
+    resolved_raw = [
         ResolvedConversion.model_validate_json(v)
         for v in _drain_topic(broker, RESOLVED_TOPIC, "engine-resolved")
     ]
+    # Dedup (feature 1): drop exact re-sends via a full seen-set before the join
+    # and before landing. Full set, not a TTL — the drain holds the whole topic
+    # and the seeded duplicate is timestamp-identical (DECISIONS Phase 5).
+    # ENGINE_DEDUP=off skips it (dedup is transparent: RMT collapses re-sends on
+    # read regardless, so FINAL is identical either way — proven by the
+    # dedup-off integration run).
+    if os.environ.get("ENGINE_DEDUP", "on").lower() == "off":
+        exposures, resolved, suppressed = exposures_raw, resolved_raw, 0
+    else:
+        exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
+    metrics.DEDUP_SUPPRESSED.inc(suppressed)
     run_main(
         build_flow(
             exposures,
             resolved,
             ClickHouseSink(insert_attributed),
             ClickHouseSink(insert_exposures),
+            _allowed_lateness(),
         )
     )
-    return {"exposures": len(exposures), "resolved": len(resolved)}
+    return {
+        "exposures": len(exposures),
+        "resolved": len(resolved),
+        "suppressed": suppressed,
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -157,6 +205,7 @@ def main(argv: list[str] | None = None) -> None:
     counts = run_engine(broker)
     print(
         f"engine: {counts['exposures']} exposures, {counts['resolved']} resolved "
+        f"({counts['suppressed']} re-sends deduped) "
         f"→ attributed_conversions + exposures_landed"
     )
 

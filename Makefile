@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run eval report test test-int lint
+.PHONY: setup up down seed resolve run eval report test test-int test-int-medium lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -46,9 +46,22 @@ report:
 test:
 	uv run pytest --ignore=tests/integration
 
-# Integration tests against the running compose stack (`make up` first).
+# Integration tests against the running compose stack (`make up` first). Tiny
+# only — the medium hardening test needs a clean medium-only stack (tiny/medium
+# share conversion_id space; DECISIONS Phase 5), so it is excluded here and run
+# via test-int-medium.
 test-int:
-	uv run pytest tests/integration
+	uv run pytest tests/integration --ignore=tests/integration/test_engine_hardening.py
+
+# Feature-5 live medium hardening proof on a CLEAN medium-only stack, isolated by
+# the sanctioned `make down` (not a per-test TRUNCATE). Asserts Done-when clauses
+# 1/2/3 live against the pinned oracle baseline.
+test-int-medium:
+	$(MAKE) down
+	$(MAKE) up
+	$(MAKE) seed PROFILE=medium
+	$(MAKE) run PROFILE=medium
+	uv run pytest tests/integration/test_engine_hardening.py
 
 lint:
 	uv run pre-commit run --all-files
