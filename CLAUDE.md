@@ -317,8 +317,15 @@ never auto-fixed, ignored, or committed around.
   reproduce the pinned numbers; integration `test_eval_report.py` green).
   Pre-spec doc corrections merged (household grain, N1 side-file join, tiny =
   organic over-credit not shared-IP). Review gate passed (code-reviewer +
-  functionality-tester + coherence-auditor); push + PR pending developer
-  approval.
+  functionality-tester + coherence-auditor). Merged (PR #6).
+- Phase 5 (2026-08-18): started on `phase-5-engine-hardening` — engine
+  hardening. Add, one feature at a time (each with a producer-knob-driven
+  test): dedup with TTL'd state, watermarks + allowed lateness, hot-window
+  eviction, assists recorded, `processed_at`/`path` on every record. Create the
+  `medium` profile and pin its clean-run baseline. Done when: `medium` with
+  duplicates + hour-late arrivals reaches the same precision/recall as the same
+  seed with those knobs off, and the join-state metric shows eviction working.
+  Spec: `specs/phase-5.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
