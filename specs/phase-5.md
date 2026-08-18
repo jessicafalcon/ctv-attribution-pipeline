@@ -162,13 +162,17 @@ batch-drain), so it is a `SCALING.md` / `DECISIONS.md` note** — "seen-set TTL'
 speculative code now. This is the project's "simplest standard solution now;
 scaling path is a note, not code" contract applied cleanly.
 
-- **ARCHITECTURE §3.3 reconciliation (do not silently repair — CLAUDE.md).**
-  §3.3 says dedup uses "TTL'd state sized to the max plausible duplicate delay."
-  That describes the continuous-mode target; the Phase-5 batch engine uses a full
-  seen-set. Record the batch-vs-continuous split in `DECISIONS.md` and the TTL in
-  `SCALING.md`; leave §3.3 as the eventual-target spec (or add a one-clause "batch
-  mode: full seen-set" note there) — the developer's call, flagged at phase exit
-  for the coherence-auditor, not changed unilaterally.
+- **ARCHITECTURE §3.3 / §8 reconciliation — DONE this phase (Option A).** §3.3
+  previously said dedup uses "TTL'd state sized to the max plausible duplicate
+  delay"; that sizing provably can't hold in batch, so it was corrected (not
+  DECISIONS-footnoted), per the repo's convention that ARCHITECTURE tracks reality
+  and §8 parks batch-vs-continuous deviations. Landed in the spec commit:
+  §3.3 prose + diagram qualify dedup as a batch seen-set (TTL under continuous
+  follow); §8 gains a timestamp-identical-re-send gotcha and its stale
+  "continuous follow lands in Phase 5" line is fixed to "windowing on the batch
+  drain; continuous follow deferred"; `DECISIONS.md` Phase 5 carries the why;
+  `SCALING.md` (seeded) carries the continuous-mode TTL. So the coherence-auditor
+  meets one consistent story, not a half-updated §3.3.
 - Dedup is a **stream-level** mechanism (keep join-state and insert volume down,
   make re-sends observable). It is **distinct** from the pure core's set-semantics
   assist dedup and from ReplacingMergeTree's read-time collapse — the spec must

@@ -90,7 +90,7 @@ ATTRIBUTION ENGINE (Bytewax)   hot path: stateful join, both sides keyed by hous
                    │  shared-IP fan-outs to one most-recent-exposure row
                    ├─ hot window state (configurable, default 7d of exposures)
                    ├─ last-touch match, all candidates recorded as assists
-                   ├─ dedup on exposure_id / conversion_id (TTL'd state)
+                   ├─ dedup on exposure_id / conversion_id (seen-set; TTL'd under continuous follow)
                    ├─ watermarks + allowed lateness (minutes–hours late)
                    └─ emits attributed + unattributed conversion records
                                        │
@@ -185,8 +185,12 @@ Bytewax dataflow joining `exposures` and `conversions_resolved` on `household_id
   `household_id`), so exactly one row per `conversion_id` reaches ClickHouse.
   `processed_at` is the ReplacingMergeTree version, never the candidate
   tiebreaker (DECISIONS.md, Phase 2).
-- **Dedup**: on `exposure_id` and `conversion_id`, using TTL'd state sized to the
-  max plausible duplicate delay.
+- **Dedup**: on `exposure_id` and `conversion_id`. The Phase-5 batch drain keeps
+  a full seen-set (it already holds the whole topic in memory); TTL'd eviction
+  sized to the max plausible duplicate delay is the continuous-follow target, not
+  the batch mechanism — the seeded duplicate is timestamp-identical to its
+  original, so an event-time TTL has nothing to size against (see §8, DECISIONS
+  Phase 5, SCALING.md).
 - **Lateness**: watermarks with allowed lateness cover conversions up to hours
   late; anything later is emitted unattributed and picked up by reconciliation.
 - Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`).
@@ -381,8 +385,23 @@ handled.*
   (EOF-driven, the same idiom as the resolve stage) and feeds a bounded
   `TestingSource`, so `fold_final` flushes at end-of-input and the process
   exits. This also guarantees every candidate for a `conversion_id` is present
-  when the reduction runs (DECISIONS Phase 3 (b)). Continuous follow with
-  windowing lands in Phase 5.
+  when the reduction runs (DECISIONS Phase 3 (b)). Windowing (watermarks,
+  allowed lateness, eviction) lands in Phase 5 **on the batch drain**; moving to
+  continuous Kafka follow remains deferred (no phase owns it yet — the two
+  resolve BACKLOG rows re-defer on exactly that trigger).
+- **The seeded duplicate is timestamp-identical to its original, so batch dedup
+  is a full seen-set, not TTL'd.** The duplicate injector re-appends the *same
+  payload* (`producer/generate.py` `_with_duplicates`); the later arrival slot is
+  a sort key for emit order and is discarded, never a field. So a re-send carries
+  the same `event_time` AND the same `ingest_time` as its original — nothing an
+  event-time TTL could measure against differs between the pair, and a TTL sized
+  to the 300s re-send delay would sit on a seed-dependent knife-edge (a denser
+  stream advances the watermark ~300s of event-time between a pair, evicting the
+  id before its re-send; ReplacingMergeTree collapse would mask the undercount).
+  The Phase-5 batch drain already holds the whole topic in memory, so it keeps a
+  full `conversion_id`/`exposure_id` seen-set (O(n), deterministic on the single
+  partition). TTL'd eviction is the continuous-follow story only (SCALING.md,
+  DECISIONS Phase 5).
 - **ClickHouse 24.8 images lock the `default` user to loopback.** With no
   `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD`, the entrypoint writes a
   `users.d/default-user.xml` limiting `default` to `::1`/`127.0.0.1`; host

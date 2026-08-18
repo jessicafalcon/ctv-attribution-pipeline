@@ -348,3 +348,42 @@ One entry per non-obvious choice. Newest last.
     measured separately by `make eval`. A subtly-inflated ROAS is exactly the
     "plausible-but-wrong" number the Phase-9 agent will diagnose; a feature to
     preserve, not a filter to add.
+
+## Phase 5
+
+- **Batch dedup is a full seen-set, not TTL'd state (why-not-TTL).**
+  ARCHITECTURE §3.3 names dedup "TTL'd state sized to the max plausible duplicate
+  delay." That sizing cannot work in the Phase-5 batch drain, and the reason is
+  structural, not incidental: the duplicate injector re-appends the *identical
+  payload* (`producer/generate.py` `_with_duplicates`, lines 56-61 — the returned
+  list holds the same object twice; the `+uniform(10,300)` arrival slot is a sort
+  key for emit order, then discarded, never a field). So a re-send carries the
+  same `event_time` AND the same `ingest_time` as its original — the pair is
+  field-indistinguishable in time, and an event-time TTL has nothing to measure
+  against. A TTL sized to the 300s re-send delay would also sit on a
+  seed-dependent knife-edge: on a denser stream the watermark (max event_time)
+  advances ~300s of event-time between a re-send pair, evicting the id from the
+  seen-set before its re-send arrives, so `engine_dedup_suppressed_total` silently
+  undercounts and is brittle across seeds — while ReplacingMergeTree read-time
+  collapse still makes clause-1 parity pass and *hides* the bug. And "TTL
+  boundary" cannot be a producer-knob test (CLAUDE.md's knob-driven rule), because
+  no knob can push a timestamp-identical duplicate past an event-time TTL.
+  Decision: the engine is a bounded batch drain that already holds the whole topic
+  in memory, so it keeps a **full `conversion_id`/`exposure_id` seen-set, no
+  in-batch TTL** — O(n), same order as the existing grouping, deterministic on the
+  single partition. Dedup stays *semantically transparent* (RMT collapses re-sends
+  regardless), so its Phase-5 test is a counter (`> 0`, the mechanism fired) plus
+  a "FINAL row count == dedup-off run" invariance (transparency), never precision/
+  recall. This is the "simplest standard solution now; scaling path is a note, not
+  code" contract: TTL'd eviction is real only once the engine follows continuously
+  (out of scope this phase) → recorded in SCALING.md, not built now. ARCHITECTURE
+  §3.3 and §8 updated to track this (Option A, per the batch-vs-continuous
+  convention §8 already uses; not a DECISIONS-only footnote).
+
+- **Windowing lands on the batch drain; continuous follow stays deferred.**
+  ARCHITECTURE §8 previously read "Continuous follow with windowing lands in Phase
+  5." Phase 5 adds watermarks + allowed lateness + eviction to the *batch drain*
+  (deterministic, event-time-driven, no wall clock — determinism policy) and does
+  NOT move to continuous Kafka follow. No phase currently owns continuous follow;
+  the two resolve BACKLOG rows (graph refresh, conversions-offset reprocessing)
+  re-defer on exactly that trigger. §8 corrected in the same pass.
