@@ -146,3 +146,26 @@ One entry per non-obvious choice. Newest last.
   without `make down`; the stage drains from offset 0 by manual assignment
   (ignoring group offsets), so residual/duplicate rows collapse to the same
   bytes and the distinct set equals the golden fixture regardless of history.
+- **Ambiguous shared-IP reconciliation (engine, conversion_id-keyed
+  reduction).** An ambiguous shared-IP conversion fans out in the resolve
+  stage to one `ResolvedConversion` per candidate household, each keyed by
+  `household_id` (Phase 2). The engine's join is also keyed by `household_id`,
+  so it CANNOT compare exposure recency across candidates partition-locally.
+  Decision: after the household-keyed join the engine adds a
+  `conversion_id`-keyed **reduction** — for a `conversion_id` with N candidate
+  rows, keep the candidate whose last-touch exposure is most recent, ties
+  broken deterministically by `exposure_id` then `household_id`. This preserves
+  ARCHITECTURE's "most recent exposure inside the window" rule, is
+  deterministic, and keeps wrong-household picks as the measured shared-IP
+  fault (scored as Phase 4 precision). `processed_at` must NOT discriminate
+  among candidate households — it is the ReplacingMergeTree version for
+  idempotent replacement of the *same logical row* (replay/reconciliation), not
+  a tiebreaker; the reduction runs BEFORE the ReplacingMergeTree so exactly one
+  row per `conversion_id` per processing enters the table. Rejected: (a) naive
+  independent per-household attribution of each candidate row — the
+  ReplacingMergeTree survivor would then depend on write/version ordering
+  (nondeterministic) and the semantics would be wrong (N credited rows for one
+  conversion); (b) a simpler deterministic pick that ignores recency (e.g.
+  lowest `household_id`) — deterministic but less realistic, and it would blunt
+  the shared-IP fault the project exists to measure. Implemented in Phase 3;
+  recorded now because Phase 2's fan-out shape surfaced the constraint.

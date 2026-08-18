@@ -86,6 +86,8 @@ RESOLVE STAGE      conversions → device graph lookup → household_id(s)
           exposures ───────────────────┤
                                        v
 ATTRIBUTION ENGINE (Bytewax)   hot path: stateful join, both sides keyed by household_id
+                   ├─ then a conversion_id-keyed reduction collapses ambiguous
+                   │  shared-IP fan-outs to one most-recent-exposure row
                    ├─ hot window state (configurable, default 7d of exposures)
                    ├─ last-touch match, all candidates recorded as assists
                    ├─ dedup on exposure_id / conversion_id (TTL'd state)
@@ -159,8 +161,11 @@ emit one record keyed by that household. If not found, fall back to IP; if the I
 maps to several households, emit one record per candidate with an ambiguity flag
 and candidate count. The engine treats ambiguous candidates as lower priority:
 device-graph match beats IP match; among IP matches, prefer the household with the
-most recent exposure inside the window, else drop. The graph is loaded from the
-compacted topic at startup and refreshed on change. Metrics: resolve rate,
+most recent exposure inside the window, else drop. Because each candidate is keyed
+by its own `household_id`, the household-keyed join cannot compare candidates
+partition-locally — the engine applies this "most recent exposure" preference in a
+`conversion_id`-keyed reduction *after* the join (see §3.3 engine and DECISIONS.md).
+The graph is loaded from the compacted topic at startup and refreshed on change. Metrics: resolve rate,
 ambiguity rate, fan-out factor.
 
 #### Attribution engine (Bytewax, hot path)
@@ -173,6 +178,13 @@ Bytewax dataflow joining `exposures` and `conversions_resolved` on `household_id
   household within the attribution window; credit the last one (**last-touch**),
   record the others as **assists**, emit an attributed record. If none, emit an
   **unattributed** record so reconciliation can retry later.
+- **Ambiguous reduction**: the household-keyed join is followed by a second,
+  `conversion_id`-keyed stage. An ambiguous shared-IP conversion arrives as one
+  candidate row per household (resolve fan-out); this reduction keeps the
+  candidate with the most recent last-touch exposure (ties: `exposure_id` then
+  `household_id`), so exactly one row per `conversion_id` reaches ClickHouse.
+  `processed_at` is the ReplacingMergeTree version, never the candidate
+  tiebreaker (DECISIONS.md, Phase 2).
 - **Dedup**: on `exposure_id` and `conversion_id`, using TTL'd state sized to the
   max plausible duplicate delay.
 - **Lateness**: watermarks with allowed lateness cover conversions up to hours

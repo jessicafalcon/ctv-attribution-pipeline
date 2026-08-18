@@ -63,14 +63,23 @@ fan-out; a run over the tiny fixture yields the expected resolved records
 ## Phase 3 — Attribution engine, minimal
 
 **Goal.** Bytewax dataflow joining `exposures` and `conversions_resolved` on
-`household_id`. In-order events, last-touch, no windowing tricks yet. Emit
-attributed and unattributed records to ClickHouse `attributed_conversions`
-(ReplacingMergeTree) and land raw exposures in `exposures_landed`. DDL under
-`clickhouse/`.
+`household_id`. In-order events, last-touch, no windowing tricks yet. The engine
+MUST include the `conversion_id`-keyed ambiguous reduction (DECISIONS.md /
+ARCHITECTURE §3.3): the frozen tiny fixture contains 5 ambiguous shared-IP
+fan-outs, so collapsing each `conversion_id` to a single most-recent-exposure
+row cannot be deferred. Emit attributed and unattributed records to ClickHouse
+`attributed_conversions` (ReplacingMergeTree) and land raw exposures in
+`exposures_landed`. DDL under `clickhouse/`.
 
-**Done when.** On the tiny fixture the engine attributes exactly the conversions
-the truth file says it should, verified by an integration test comparing engine
-output against truth.
+**Done when.** On the tiny fixture the engine produces the committed
+deterministic expected-attributed fixture, verified by an integration test.
+The engine credits each conversion by the rules above (last-touch;
+most-recent-exposure among ambiguous shared-IP candidates), which matches truth
+for every unambiguous conversion. For the 5 ambiguous shared-IP fan-outs the
+most-recent-exposure pick is sometimes a different household than truth **by
+design** — that divergence is the shared-IP fault, measured as precision in
+Phase 4, not a Phase 3 failure. (Compare against the expected-attributed
+fixture, not directly against truth.)
 
 ---
 
