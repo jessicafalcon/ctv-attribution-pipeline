@@ -34,7 +34,12 @@ from clickhouse.apply import apply as apply_ddl
 from common.kafka import drain
 from producer.models import Exposure, ResolvedConversion
 from streaming import metrics
-from streaming.attribute import HOT_WINDOW, attribute_household, reduce_conversion
+from streaming.attribute import (
+    HOT_WINDOW,
+    attribute_household,
+    dedup_streams,
+    reduce_conversion,
+)
 from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
 
 EXPOSURES_TOPIC = "exposures"
@@ -128,14 +133,19 @@ def run_engine(broker: str) -> dict[str, int]:
     """Drain the two topics, apply the DDL, run the engine to completion.
     Returns row counts for logging/tests."""
     apply_ddl()
-    exposures = [
+    exposures_raw = [
         Exposure.model_validate_json(v)
         for v in _drain_topic(broker, EXPOSURES_TOPIC, "engine-exposures")
     ]
-    resolved = [
+    resolved_raw = [
         ResolvedConversion.model_validate_json(v)
         for v in _drain_topic(broker, RESOLVED_TOPIC, "engine-resolved")
     ]
+    # Dedup (feature 1): drop exact re-sends via a full seen-set before the join
+    # and before landing. Full set, not a TTL — the drain holds the whole topic
+    # and the seeded duplicate is timestamp-identical (DECISIONS Phase 5).
+    exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
+    metrics.DEDUP_SUPPRESSED.inc(suppressed)
     run_main(
         build_flow(
             exposures,
@@ -144,7 +154,11 @@ def run_engine(broker: str) -> dict[str, int]:
             ClickHouseSink(insert_exposures),
         )
     )
-    return {"exposures": len(exposures), "resolved": len(resolved)}
+    return {
+        "exposures": len(exposures),
+        "resolved": len(resolved),
+        "suppressed": suppressed,
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -157,6 +171,7 @@ def main(argv: list[str] | None = None) -> None:
     counts = run_engine(broker)
     print(
         f"engine: {counts['exposures']} exposures, {counts['resolved']} resolved "
+        f"({counts['suppressed']} re-sends deduped) "
         f"→ attributed_conversions + exposures_landed"
     )
 

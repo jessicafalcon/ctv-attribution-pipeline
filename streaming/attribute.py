@@ -18,7 +18,7 @@ Two stages, in order:
 """
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -28,6 +28,47 @@ from producer.models import AttributedConversion, Exposure, ResolvedConversion
 # (ARCHITECTURE §3.3). tiny stays inside it, so every conversion is hot-path
 # attributable without reconciliation (DECISIONS Phase 1).
 HOT_WINDOW = timedelta(days=7)
+
+
+def dedup_by_id[M](
+    rows: Iterable[M], key: Callable[[M], Hashable]
+) -> tuple[list[M], int]:
+    """Drop exact re-sends: keep the first row per `key` in arrival order and
+    report how many were suppressed. Pure (order-preserving, no I/O).
+
+    `key` must be a row's full identity, NOT just its event id. A resolved
+    conversion fans out to one row per candidate household under the SAME
+    `conversion_id` (shared-IP resolve fan-out), so keying resolved rows on
+    `conversion_id` alone would drop legitimate candidates, not just duplicates
+    — see `dedup_streams`. Batch mode keeps a full seen-set (no TTL): the seeded
+    duplicate is timestamp-identical to its original, so there is nothing an
+    event-time TTL could measure against (DECISIONS/SCALING Phase 5)."""
+    seen: set[Hashable] = set()
+    kept: list[M] = []
+    suppressed = 0
+    for row in rows:
+        k = key(row)
+        if k in seen:
+            suppressed += 1
+            continue
+        seen.add(k)
+        kept.append(row)
+    return kept, suppressed
+
+
+def dedup_streams(
+    exposures: Iterable[Exposure], resolved: Iterable[ResolvedConversion]
+) -> tuple[list[Exposure], list[ResolvedConversion], int]:
+    """Drop exact re-sends from both engine input streams before the join.
+    Exposures key on `exposure_id` (globally unique, no fan-out); resolved
+    conversions key on `(conversion_id, household_id)` so shared-IP fan-out
+    candidates survive (same `conversion_id`, different household). Returns the
+    deduped streams and the total suppressed count for the
+    `engine_dedup_suppressed` counter. Pure, so the engine and any offline
+    oracle dedup identically."""
+    exp, exp_n = dedup_by_id(exposures, lambda e: e.exposure_id)
+    res, res_n = dedup_by_id(resolved, lambda r: (r.conversion_id, r.household_id))
+    return exp, res, exp_n + res_n
 
 
 @dataclass(frozen=True)

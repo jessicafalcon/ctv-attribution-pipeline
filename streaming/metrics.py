@@ -30,8 +30,14 @@ AMBIGUOUS_REDUCED = Counter(
 )
 EXPOSURES_LANDED = Counter(
     "engine_exposures_landed_total",
-    "Exposure rows offered to exposures_landed (cumulative across runs, "
-    "duplicates included; ReplacingMergeTree collapses re-landings on read).",
+    "Exposure rows offered to exposures_landed (cumulative across runs; "
+    "post-dedup, so re-sends are already dropped before landing).",
+)
+DEDUP_SUPPRESSED = Counter(
+    "engine_dedup_suppressed_total",
+    "Exact re-send rows (same id, byte-identical) dropped by the seen-set before "
+    "the join and before landing. ReplacingMergeTree would collapse them on read "
+    "regardless, so this counts the mechanism firing, not a correctness delta.",
 )
 
 
