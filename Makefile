@@ -1,7 +1,9 @@
-# Phase 0 targets. Later phases add: seed, run, eval, report, bench,
-# agent-run, agent-eval, test-int (see CLAUDE.md → Commands).
+# Later phases add: run, eval, report, bench, agent-run, agent-eval,
+# test-int (see CLAUDE.md → Commands).
 
-.PHONY: setup up down test lint
+.PHONY: setup up down seed test lint
+
+PROFILE ?= tiny
 
 setup:
 	uv sync
@@ -13,6 +15,10 @@ up:
 # The ONLY sanctioned destructive path: removes containers AND volumes.
 down:
 	docker compose down -v
+
+# Deterministic per PRODUCER_SEED (default: profile's seed).
+seed:
+	uv run python -m producer.seed --profile "$(PROFILE)"
 
 test:
 	uv run pytest

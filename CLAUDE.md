@@ -279,9 +279,12 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-- Phase 0 (2026-08-17): PR #2 open on `phase-0-skeleton`, CI green, review
-  verdicts approved by developer. Awaiting developer squash-merge; then
-  Phase 1 (producer + contracts) branches from main.
+- Phase 0 (2026-08-17): PR #2 merged.
+- Phase 1 (2026-08-17): complete on `phase-1-producer-contracts` — models,
+  seeded generator + knobs (incl. unknown-device), schema registration,
+  curated tiny golden fixtures. DONE command green; two review rounds
+  applied; developer approved push + PR. Awaiting CI + merge; fixtures
+  freeze read-only at merge.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

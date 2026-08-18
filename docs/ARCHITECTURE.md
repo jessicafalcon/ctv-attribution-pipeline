@@ -137,6 +137,8 @@ matches. Then emits two streams.
   pipeline never reads. The rest are organic.
 - **Knobs**: throughput; late-arrival injector (delta between `event_time` and
   `ingest_time`, from minutes to days); duplicate injector; shared-IP fraction;
+  unknown-device fraction (conversions from devices the graph never learned —
+  guest/roommate/id churn — forcing the resolve stage's IP fallback);
   co-view multiplier per genre; fault profiles (§4.3).
 
 Schemas are pydantic models; JSON Schemas are generated from them and registered.
@@ -342,6 +344,18 @@ benchmark, and ground-truth accuracy is a strong submission.
 
 *Populated during the build: stack behaviours that surprised us and how they were
 handled.*
+
+- **Pydantic docstrings become JSON Schema `description`s, and any change
+  registers a new schema version.** The registry compares the full schema
+  document, so editing a model's docstring bumps the subject version even
+  though no field changed (observed on `device_graph-value` during
+  Phase 1). Harmless under BACKWARD compatibility, but don't be surprised
+  by cosmetic version bumps.
+- **`localhost` vs `127.0.0.1` for Redpanda from the host.** The compose
+  ports bind IPv4 only, but the broker advertises `external://localhost:19092`,
+  so librdkafka occasionally logs a one-line `Connect to ipv6#[::1]`
+  connect-refused before falling back to IPv4. Benign; clients default to
+  `127.0.0.1` to minimize it.
 
 ---
 
