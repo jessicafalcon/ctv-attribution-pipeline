@@ -58,8 +58,8 @@ def conv(
     )
 
 
-def _rows(cands):
-    return [c.row for c in cands]
+def _rows(result):
+    return [c.row for c in result.candidates]
 
 
 def test_watermark_event_time_only_and_monotonic() -> None:
@@ -131,5 +131,5 @@ def test_streaming_equals_complete_state_core() -> None:
     stream = _rows(
         attribute_household_streaming(events, HOT_WINDOW, timedelta(hours=12))
     )
-    core = _rows(attribute_household(exps, convs, HOT_WINDOW))
+    core = [c.row for c in attribute_household(exps, convs, HOT_WINDOW)]
     assert digest(stream) == digest(core)

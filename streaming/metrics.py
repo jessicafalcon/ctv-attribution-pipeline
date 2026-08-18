@@ -2,9 +2,10 @@
 CLAUDE.md). Counters only — rates are computed at query time in Prometheus,
 which keeps the collector deterministic and side-effect-free."""
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 from producer.models import AttributedConversion
+from streaming.attribute import StreamState
 
 PROCESSED = Counter(
     "engine_conversions_processed_total",
@@ -39,6 +40,17 @@ DEDUP_SUPPRESSED = Counter(
     "the join and before landing. ReplacingMergeTree would collapse them on read "
     "regardless, so this counts the mechanism firing, not a correctness delta.",
 )
+EXPOSURES_EVICTED = Counter(
+    "engine_exposures_evicted_total",
+    "Exposures aged out of the hot window (watermark past event_time + 7d). > 0 "
+    "means eviction ran — the join state came back down (feature 3).",
+)
+JOIN_STATE_SIZE = Gauge(
+    "engine_join_state_size",
+    "Peak exposures held in one household's hot window during the run (the "
+    "central scaling constraint). High-water mark across households; eviction is "
+    "what keeps it bounded below the full exposure count.",
+)
 
 
 def observe(row: AttributedConversion, candidate_count: int) -> None:
@@ -51,3 +63,11 @@ def observe(row: AttributedConversion, candidate_count: int) -> None:
         UNATTRIBUTED.inc()
     if candidate_count > 1:
         AMBIGUOUS_REDUCED.inc()
+
+
+def observe_state(state: StreamState) -> None:
+    """One household's join-state summary: raise the peak high-water gauge and
+    add its evictions to the counter."""
+    EXPOSURES_EVICTED.inc(state.evicted)
+    if state.peak > JOIN_STATE_SIZE._value.get():
+        JOIN_STATE_SIZE.set(state.peak)

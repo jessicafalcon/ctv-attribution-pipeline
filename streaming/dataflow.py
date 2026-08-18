@@ -81,9 +81,16 @@ def _accumulate(acc: list, tagged: tuple[str, object]) -> list:
     return acc
 
 
-def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]) -> list:
+def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]):
     _hid, events = kv
     return attribute_household_streaming(events, HOT_WINDOW, allowed_lateness)
+
+
+def _emit_and_observe(result) -> list:
+    """Record the household's join-state metrics (peak, evictions) and hand the
+    candidate rows downstream to the conversion_id-keyed reduction."""
+    metrics.observe_state(result.state)
+    return result.candidates
 
 
 def _collect(acc: list, candidate: object) -> list:
@@ -129,9 +136,10 @@ def build_flow(
     merged = op.merge("merge_household", exp_tagged, res_tagged)
     keyed = op.key_on("key_household", merged, lambda t: t[1].household_id)
     grouped = op.fold_final("group_household", keyed, list, _accumulate)
-    candidates = op.flat_map(
+    results = op.map(
         "attribute_household", grouped, partial(_attribute_group, allowed_lateness)
     )
+    candidates = op.flat_map("emit_candidates", results, _emit_and_observe)
 
     # Reduction: re-key by conversion_id, collapse fan-out/duplicates to one row.
     cand_keyed = op.key_on("key_conversion", candidates, lambda c: c.row.conversion_id)
