@@ -31,6 +31,9 @@ services:
       - "127.0.0.1:8123:8123" # HTTP interface (clickhouse-connect uses this)
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      # Re-enable network access for the passwordless default user (loopback-only
+      # in recent images); host port is 127.0.0.1-bound. See the file's comment.
+      - ./clickhouse/users.d/allow-network.xml:/etc/clickhouse-server/users.d/allow-network.xml:ro
     ulimits:
       nofile:
         soft: 262144

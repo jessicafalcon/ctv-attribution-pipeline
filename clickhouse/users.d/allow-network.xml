@@ -1,0 +1,21 @@
+<clickhouse>
+  <!--
+    Local-dev only. Recent ClickHouse images disable network access for the
+    `default` user unless CLICKHOUSE_USER/PASSWORD are set (loopback-only in the
+    image's generated default-user.xml), which blocks host clients reaching the
+    HTTP interface through the docker gateway. We re-enable it, passwordless,
+    matching this stack's posture: the host publishes 8123 on 127.0.0.1 only
+    (compose ports), so the service stays off the LAN even though ClickHouse
+    accepts connections from within the docker network. Same passwordless
+    local-dev stance as Grafana admin/admin and the Redpanda admin API
+    (DECISIONS Phase 0). Not for shared/multi-user hosts (BACKLOG).
+  -->
+  <users>
+    <default>
+      <networks replace="replace">
+        <ip>::/0</ip>
+      </networks>
+      <password></password>
+    </default>
+  </users>
+</clickhouse>

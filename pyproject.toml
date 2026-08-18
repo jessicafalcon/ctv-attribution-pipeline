@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Streaming CTV attribution pipeline with an AI measurement-integrity agent"
 requires-python = ">=3.12"
 dependencies = [
+    "bytewax>=0.21.1",
+    "clickhouse-connect>=1.7.1",
     "confluent-kafka>=2.15.0",
     "prometheus-client>=0.21",
     "pydantic>=2.13.4",
