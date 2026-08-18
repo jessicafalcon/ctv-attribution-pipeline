@@ -1,7 +1,15 @@
-"""Pydantic event models — the source of truth for all topic schemas.
+"""Pydantic models — the single source of truth for every wire and row schema:
+the Kafka topic schemas (`Exposure`, `Conversion`, `ResolvedConversion`, plus
+the graph/truth records) AND the ClickHouse serving-table schema
+(`AttributedConversion`). The topic models have JSON Schemas generated from them
+(producer/schemas.py) and registered in the schema registry; never hand-edited.
+`AttributedConversion` is a *table* schema, not a registered subject — its
+columns live in clickhouse/ddl.sql and its insert order in streaming/sink.py.
 
-JSON Schemas are generated from these models (producer/schemas.py) and
-registered in the schema registry; never hand-edited.
+Co-located deliberately so the output models can subclass `Conversion` without
+a cross-package import cycle (see DECISIONS Phase 3). Split trigger: move the
+engine models to a shared `schemas` package on the 4th output model, or the
+first model producer/ has no reason to import.
 """
 
 from datetime import datetime

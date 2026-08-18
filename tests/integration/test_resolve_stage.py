@@ -18,8 +18,9 @@ from pathlib import Path
 import pytest
 from confluent_kafka import Consumer
 
+from common.kafka import drain_messages
 from producer.seed import main as seed_main
-from resolve.stage import RESOLVED_TOPIC, _drain_messages, run_batch
+from resolve.stage import RESOLVED_TOPIC, run_batch
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 REGISTRY = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
@@ -57,7 +58,7 @@ def _read_records() -> list[tuple[str, str]]:
     try:
         return [
             (m.key().decode(), m.value().decode())
-            for m in _drain_messages(consumer, RESOLVED_TOPIC)
+            for m in drain_messages(consumer, RESOLVED_TOPIC)
         ]
     finally:
         consumer.close()

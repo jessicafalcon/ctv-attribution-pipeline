@@ -32,6 +32,16 @@ def test_replay_reproduces_expected_fixture() -> None:
     assert EXPECTED.read_text() == jsonl(_attributed())
 
 
+def test_attribute_is_deterministic() -> None:
+    # The determinism policy, encoded directly: same inputs → byte-identical
+    # canonical output, run to run (independent of the frozen golden file).
+    exposures = _read("exposures.jsonl", Exposure)
+    resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
+    assert jsonl(attribute(exposures, resolved)) == jsonl(
+        attribute(exposures, resolved)
+    )
+
+
 def test_attributed_counts_pinned() -> None:
     rows = _attributed()
     # Exactly one row per distinct conversion_id (fan-out + resend duplicates

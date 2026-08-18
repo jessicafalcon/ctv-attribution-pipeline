@@ -32,8 +32,10 @@ run:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 
+# Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
+# would probe services before skipping) from making any network attempt.
 test:
-	uv run pytest
+	uv run pytest --ignore=tests/integration
 
 # Integration tests against the running compose stack (`make up` first).
 test-int:

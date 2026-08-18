@@ -8,7 +8,8 @@ from producer.models import AttributedConversion
 
 PROCESSED = Counter(
     "engine_conversions_processed_total",
-    "Distinct conversions that reached a final attributed record.",
+    "Conversions processed into a final attributed record (cumulative across "
+    "runs; a re-run re-counts, ReplacingMergeTree dedups the rows on read).",
 )
 ATTRIBUTED = Counter(
     "engine_conversions_attributed_total",
@@ -28,7 +29,9 @@ AMBIGUOUS_REDUCED = Counter(
     "or resend duplicate) by the conversion_id-keyed reduction.",
 )
 EXPOSURES_LANDED = Counter(
-    "engine_exposures_landed_total", "Raw exposures written to exposures_landed."
+    "engine_exposures_landed_total",
+    "Exposure rows offered to exposures_landed (cumulative across runs, "
+    "duplicates included; ReplacingMergeTree collapses re-landings on read).",
 )
 
 

@@ -187,7 +187,10 @@ One entry per non-obvious choice. Newest last.
     — never equal. Phase 6 stamps reconciled rows with a deterministic
     reconciliation-pass timestamp derived from data (strictly > the
     conversion's `ingest_time`), so the correction always supersedes the hot
-    row under RMT. Recorded now so Phase 6 does not reopen it.
+    row under RMT. Recorded now so Phase 6 does not reopen it. `processed_at` is
+    `DateTime64(3)` (millisecond), so that "strictly greater" rule has
+    millisecond resolution as its headroom — the reconciliation-pass timestamp
+    must differ from the hot `ingest_time` by at least 1 ms.
   - **(b) `conversion_id` is a safe RMT sort key** only because the
     `conversion_id`-keyed reduction emits exactly one winner per
     `conversion_id`, so RMT sees one hot row per key (plus byte-identical
@@ -238,3 +241,26 @@ One entry per non-obvious choice. Newest last.
   credential in compose/CI for zero security gain over the loopback-bound port,
   against the passwordless-dev posture. Covered by the existing BACKLOG
   "127.0.0.1 binding still admits any local process" row (shared-host caveat).
+
+- **All wire + row schemas co-locate in `producer/models.py` (single source of
+  truth).** The file holds the Kafka topic models (`Exposure`, `Conversion`,
+  `ResolvedConversion`, graph/truth records) and, from Phase 3, the ClickHouse
+  serving-table schema `AttributedConversion` — which is a *table* schema, not a
+  registered subject (its columns live in `clickhouse/ddl.sql`, insert order in
+  `streaming/sink.py`). Co-located so the output models can subclass
+  `Conversion` without a cross-package import cycle (the dependency direction is
+  already resolve/ and streaming/ → producer/). Two output models is not a junk
+  drawer, but the drift is real (the module is now the whole-pipeline schema
+  module, not "the producer's"), so the **split trigger** is written down: move
+  the engine models to a shared `schemas` package on the 4th output model, or
+  the first model producer/ has no reason to import. Recorded at the coherence
+  auditor's Phase-3 flag so the trigger isn't rediscovered later.
+
+- **Kafka batch-drain promoted to `common/kafka.py` (shared, public).** Both the
+  resolve stage and the engine drain a topic start→end once (EOF-driven). The
+  drain first lived as `resolve.stage._drain`/`_drain_messages`; when the engine
+  needed it (Phase 3) it imported the *private* function cross-stage — a hidden
+  load-bearing coupling (coherence audit D3). Moved verbatim to public
+  `common.kafka.drain` / `drain_messages` (with `_EMPTY_POLL_LIMIT`), imported
+  by both stages; behavior identical, covered by the relocated offline test
+  `tests/test_kafka.py`.

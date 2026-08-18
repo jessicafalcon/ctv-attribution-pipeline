@@ -31,8 +31,8 @@ from confluent_kafka import Consumer
 from prometheus_client import start_http_server
 
 from clickhouse.apply import apply as apply_ddl
+from common.kafka import drain
 from producer.models import Exposure, ResolvedConversion
-from resolve.stage import _drain
 from streaming import metrics
 from streaming.attribute import HOT_WINDOW, attribute_household, reduce_conversion
 from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
@@ -53,7 +53,7 @@ def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
         }
     )
     try:
-        return _drain(consumer, topic)
+        return drain(consumer, topic)
     finally:
         consumer.close()
 
