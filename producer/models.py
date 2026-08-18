@@ -54,6 +54,22 @@ class ResolvedConversion(Conversion):
     candidate_count: int = Field(ge=1)
 
 
+class AttributedConversion(ResolvedConversion):
+    """A resolved conversion after the engine's last-touch attribution. Table:
+    attributed_conversions (ReplacingMergeTree, key conversion_id, version
+    processed_at). `exposure_id` is the credited last-touch exposure (null when
+    unattributed); `assists` are the other in-window exposures in the household;
+    `path` is `hot` for the streaming engine, `reconciled` for the Phase-6
+    long-window job; `processed_at` is the RMT version, set to the conversion's
+    `ingest_time` (event-derived, deterministic — DECISIONS Phase 3)."""
+
+    exposure_id: str | None
+    assists: list[str]
+    attributed: bool
+    path: Literal["hot", "reconciled"]
+    processed_at: datetime
+
+
 class Device(StrictModel):
     device_id: str
     kind: Literal["tv", "phone", "laptop", "tablet"]
