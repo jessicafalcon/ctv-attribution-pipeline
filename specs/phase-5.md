@@ -9,8 +9,9 @@ Add the hardening features **one at a time, each with its own
 producer-knob-driven test** (CLAUDE.md: "Engine features are added one at a
 time, each with a test that uses a producer knob to exercise it"):
 
-1. **Dedup with TTL'd state** — a stream-level seen-set on `conversion_id` /
-   `exposure_id` that drops exact re-sends early.
+1. **Dedup (full seen-set)** — a stream-level `conversion_id` / `exposure_id`
+   seen-set that drops exact re-sends early (batch drain; no in-batch TTL — TTL
+   is a continuous-mode scaling note, see that feature).
 2. **Watermarks + allowed lateness** — an event-time watermark that retains
    exposure state long enough to admit conversions whose matching exposures are
    up to `allowed_lateness` late; conversions themselves are never dropped by a
@@ -128,19 +129,53 @@ knows `medium`'s numbers won't be tiny's 0.673.
 
 ## What each feature does
 
-### Dedup with TTL'd state (ARCHITECTURE §3.3 "Dedup")
+### Dedup — full seen-set in batch mode; TTL is a scaling note, not code
 
-Teaching note (first appearance): a **TTL'd (time-to-live) dedup state** is a
-per-key record of ids already seen, dropped after the max plausible duplicate
-delay so the set can't grow without bound. Here the key is `conversion_id` (and
-`exposure_id` on the exposure side); TTL is sized to the duplicate injector's
-max re-send delay. A second arrival of a known id is suppressed and counted
-(`engine_dedup_suppressed_total`).
+Teaching note (first appearance): a **seen-set dedup** keeps the ids already
+processed and suppresses a second arrival of the same id. The key is
+`conversion_id` (and `exposure_id` on the exposure side); a re-send is dropped
+before it reaches the window/join and before it is offered to `exposures_landed`,
+and is counted (`engine_dedup_suppressed_total`).
 
-- Dedup is a **stream-level** mechanism (keep state small, make re-sends
-  observable). It is **distinct** from the pure core's set-semantics assist
-  dedup and from ReplacingMergeTree's read-time collapse — the spec must not
-  conflate the three.
+**Why a full seen-set and not a TTL'd one (settled — this drove the design).**
+The duplicate injector re-sends the **identical payload**: the re-send carries
+the same `event_time` AND the same `ingest_time` as its original (the
+`+uniform(10,300)` in `generate.py:56-59` is a sort key for emit order, then
+discarded — never a field). So original and re-send are **field-indistinguishable
+in time**; nothing an event-time TTL could measure against differs between them.
+An event-time TTL sized to the 300s re-send delay would also sit on a
+seed-dependent knife-edge (on a denser stream the watermark can advance ~300s of
+event-time between a pair, evicting the id from a 300s TTL before its re-send →
+`dedup_suppressed_total` silently undercounts, brittle across seeds; RMT collapse
+still makes clause-1 parity pass and *hides* it). And "TTL boundary" cannot be a
+producer-knob test — the knob can't push a duplicate past an event-time TTL when
+the pair has identical timestamps — which would contradict CLAUDE.md's
+knob-driven rule.
+
+So: the engine is a **bounded batch drain that already holds the whole topic in
+memory**; keep a **full `conversion_id` / `exposure_id` seen-set for the drain,
+no in-batch TTL eviction**. It is O(n), the same order as the grouping that
+already exists, and deterministic on the single partition. **The TTL story is
+real only for continuous mode (explicitly out of scope — Phase 5 stays
+batch-drain), so it is a `SCALING.md` / `DECISIONS.md` note** — "seen-set TTL'd by
+`event_time + max_resend_delay` once the engine follows continuously" — not
+speculative code now. This is the project's "simplest standard solution now;
+scaling path is a note, not code" contract applied cleanly.
+
+- **ARCHITECTURE §3.3 reconciliation (do not silently repair — CLAUDE.md).**
+  §3.3 says dedup uses "TTL'd state sized to the max plausible duplicate delay."
+  That describes the continuous-mode target; the Phase-5 batch engine uses a full
+  seen-set. Record the batch-vs-continuous split in `DECISIONS.md` and the TTL in
+  `SCALING.md`; leave §3.3 as the eventual-target spec (or add a one-clause "batch
+  mode: full seen-set" note there) — the developer's call, flagged at phase exit
+  for the coherence-auditor, not changed unilaterally.
+- Dedup is a **stream-level** mechanism (keep join-state and insert volume down,
+  make re-sends observable). It is **distinct** from the pure core's set-semantics
+  assist dedup and from ReplacingMergeTree's read-time collapse — the spec must
+  not conflate the three. Because RMT collapses re-sends anyway, dedup is
+  *semantically transparent*: the Done-when clause-3 "FINAL count == dedup-off
+  run" invariance is exactly that transparency check, and the counter is what
+  proves the mechanism actually fired.
 - **Do not conflate "unknown device" with "duplicate"** (BACKLOG, Phase 1
   note). Unknown `u-` device ids never repeat, so they exercise IP fallback, not
   dedup. The dedup test drives re-sends via `duplicate_fraction` **only**, and
@@ -238,17 +273,21 @@ order-independently, the hardened engine processes the drained stream **in
 arrival order** through a stateful, event-time-watermarked, evicting window
 operator, so watermark/lateness/eviction are meaningful and deterministic.
 
-**Arrival order = topic-offset / emit order as drained — do NOT re-sort by the
-`ingest_time` field (load-bearing for dedup).** The duplicate injector re-appends
-the *identical payload* at a later emit slot (`generate.py:56-59`), so a
-duplicate carries the **same `ingest_time`** as its original and is
-field-indistinguishable from it. Consequences to pin:
+**Arrival order = topic-offset / emit order as drained — do NOT re-sort (this is
+load-bearing for the watermark, not for dedup).** Consume in **offset order** as
+`common.kafka.drain` returns it:
 
-- Consume in **offset order** as `common.kafka.drain` returns it. A
-  `sorted(batch, key=ingest_time)` would collapse a duplicate adjacent to its
-  original and the TTL'd dedup state would never be exercised — the dedup test
-  would pass **vacuously**. Offset order preserves the real inter-arrival gap the
-  TTL must span.
+- The producer already emits in `(ingest_time, id)` order (`generate.py:60`), so
+  offset order **is** arrival order — re-sorting by `ingest_time` buys nothing and
+  only risks divergence. Re-sorting by **`event_time`** would be **wrong**: it
+  would place every late event at its event-time position and erase the lateness
+  the watermark exists to handle, so eviction/allowed-lateness would never be
+  exercised and clause-1 parity would be meaningless.
+- Dedup does **not** depend on order here — the full seen-set suppresses a re-send
+  at any offset distance (unlike a TTL, which is why the TTL was dropped). Order
+  matters only so the **watermark advances deterministically** as events arrive,
+  which is what makes eviction and the state-miss the real, reproducible thing
+  clause 1 checks.
 - Offset-order determinism requires **single-partition topics**. Confirmed:
   `exposures` / `conversions` / `device_graph` are `num_partitions=1`
   (`producer/seed.py:28-31`) and `conversions_resolved` is `num_partitions=1`
@@ -332,8 +371,12 @@ field-indistinguishable from it. Consequences to pin:
     offline replay over `fixtures/tiny/` still emits the exact 55 golden rows
     (byte-identical to `expected/attributed.jsonl`). Fails loud if any tiny row
     changes; never edit the fixture to make it pass.
-  - `tests/test_dedup.py` — re-sends suppressed + counter; unknown-device NOT a
-    duplicate; TTL boundary.
+  - `tests/test_dedup.py` — re-sends suppressed + `dedup_suppressed_total`
+    counter fires; a full-seen-set (no in-batch TTL eviction, so a re-send at any
+    offset distance is still suppressed); unknown-device (`u-`) NOT treated as a
+    duplicate. No "TTL boundary" case — the pair is timestamp-identical, so no
+    producer knob can push a duplicate past an event-time TTL (that's why dedup is
+    a full seen-set here).
   - `tests/test_lateness.py` — a late conversion is unattributed **only when its
     last-touch exposure has been evicted (a state-miss)**, constructed by
     advancing the watermark past `T + 7d + allowed_lateness` before the
