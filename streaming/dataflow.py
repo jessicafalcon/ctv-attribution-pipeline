@@ -22,6 +22,8 @@ the two paths cannot diverge.
 
 import argparse
 import os
+from datetime import timedelta
+from functools import partial
 
 import bytewax.operators as op
 from bytewax.dataflow import Dataflow
@@ -35,8 +37,9 @@ from common.kafka import drain
 from producer.models import Exposure, ResolvedConversion
 from streaming import metrics
 from streaming.attribute import (
+    ALLOWED_LATENESS,
     HOT_WINDOW,
-    attribute_household,
+    attribute_household_streaming,
     dedup_streams,
     reduce_conversion,
 )
@@ -45,6 +48,14 @@ from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
 EXPOSURES_TOPIC = "exposures"
 RESOLVED_TOPIC = "conversions_resolved"
 _BATCH = 256  # items per source poll → fewer, larger ClickHouse inserts
+
+
+def _allowed_lateness() -> timedelta:
+    """Release/eviction grace from the env, defaulting to ALLOWED_LATENESS. Must
+    be ≥ the seeded profile's late.max_minutes (asserted per profile in tests);
+    override with ENGINE_ALLOWED_LATENESS_MINUTES."""
+    minutes = os.environ.get("ENGINE_ALLOWED_LATENESS_MINUTES")
+    return timedelta(minutes=int(minutes)) if minutes else ALLOWED_LATENESS
 
 
 def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
@@ -63,16 +74,16 @@ def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
         consumer.close()
 
 
-def _group_household(acc: tuple[list, list], tagged: tuple[str, object]) -> tuple:
-    exposures, resolved = acc
-    kind, model = tagged
-    (exposures if kind == "exp" else resolved).append(model)
-    return exposures, resolved
+def _accumulate(acc: list, tagged: tuple[str, object]) -> list:
+    """Collect one household's interleaved (kind, model) events; the streaming
+    stage re-sorts them into arrival order before the watermark-gated pass."""
+    acc.append(tagged)
+    return acc
 
 
-def _attribute_group(kv: tuple[str, tuple[list, list]]) -> list:
-    _hid, (exposures, resolved) = kv
-    return attribute_household(exposures, resolved, HOT_WINDOW)
+def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]) -> list:
+    _hid, events = kv
+    return attribute_household_streaming(events, HOT_WINDOW, allowed_lateness)
 
 
 def _collect(acc: list, candidate: object) -> list:
@@ -97,24 +108,30 @@ def build_flow(
     resolved: list[ResolvedConversion],
     attributed_sink: Sink,
     exposures_sink: Sink,
+    allowed_lateness: timedelta = ALLOWED_LATENESS,
 ) -> Dataflow:
     """Wire the engine. Sinks are injected so the same operator graph runs
     against ClickHouse live and against a capturing sink in an offline test —
-    proving the Bytewax path matches the pure core without needing services."""
+    proving the Bytewax path matches the pure core without needing services.
+
+    Bytewax carries the keyed state (one bucket of interleaved events per
+    household); the watermark-gated release lives in the pure core
+    (`attribute_household_streaming`), so live and replay cannot diverge."""
     flow = Dataflow("attribution-engine")
 
     exp_stream = op.input("exposures", flow, TestingSource(exposures, _BATCH))
     res_stream = op.input("resolved", flow, TestingSource(resolved, _BATCH))
 
-    # Join: tag, merge, key by household_id, fold each household's rows together.
+    # Join: tag, merge, key by household_id, collect each household's interleaved
+    # events; the pure streaming stage re-sorts to arrival order and releases.
     exp_tagged = op.map("tag_exp", exp_stream, lambda e: ("exp", e))
     res_tagged = op.map("tag_res", res_stream, lambda r: ("res", r))
     merged = op.merge("merge_household", exp_tagged, res_tagged)
     keyed = op.key_on("key_household", merged, lambda t: t[1].household_id)
-    grouped = op.fold_final(
-        "group_household", keyed, lambda: ([], []), _group_household
+    grouped = op.fold_final("group_household", keyed, list, _accumulate)
+    candidates = op.flat_map(
+        "attribute_household", grouped, partial(_attribute_group, allowed_lateness)
     )
-    candidates = op.flat_map("attribute_household", grouped, _attribute_group)
 
     # Reduction: re-key by conversion_id, collapse fan-out/duplicates to one row.
     cand_keyed = op.key_on("key_conversion", candidates, lambda c: c.row.conversion_id)
@@ -152,6 +169,7 @@ def run_engine(broker: str) -> dict[str, int]:
             resolved,
             ClickHouseSink(insert_attributed),
             ClickHouseSink(insert_exposures),
+            _allowed_lateness(),
         )
     )
     return {

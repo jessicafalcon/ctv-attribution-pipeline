@@ -29,6 +29,14 @@ from producer.models import AttributedConversion, Exposure, ResolvedConversion
 # attributable without reconciliation (DECISIONS Phase 1).
 HOT_WINDOW = timedelta(days=7)
 
+# Allowed lateness = the watermark's grace. A conversion is released for
+# attribution once the watermark (max event_time seen − allowed_lateness)
+# reaches its event_time, which guarantees every in-tolerance late exposure
+# (arrival lateness ≤ allowed_lateness) has already arrived (feature 2). It must
+# be ≥ a profile's late.max_minutes (tiny = 180; medium sized under this). Env
+# override in the live engine: ENGINE_ALLOWED_LATENESS_MINUTES.
+ALLOWED_LATENESS = timedelta(hours=6)
+
 
 def dedup_by_id[M](
     rows: Iterable[M], key: Callable[[M], Hashable]
@@ -114,6 +122,69 @@ def attribute_household(
             )
         else:
             out.append(Candidate(_attributed(conv, None, [], attributed=False), None))
+    return out
+
+
+def _arrival_key(
+    tagged: tuple[str, Exposure | ResolvedConversion],
+) -> tuple[datetime, str, str]:
+    """Deterministic arrival order for one household's interleaved events:
+    ingest_time, then a stable (kind, id) tiebreak. The global stream is emitted
+    in ingest order, so ingest_time reconstructs arrival order; the tiebreak only
+    fixes ordering when two events share an ingest_time."""
+    kind, model = tagged
+    ident = model.exposure_id if isinstance(model, Exposure) else model.conversion_id
+    return (model.ingest_time, kind, ident)
+
+
+def event_time_watermark(
+    watermark: datetime | None, event_time: datetime, allowed_lateness: timedelta
+) -> datetime:
+    """Advance the watermark to `max(seen event_time) − allowed_lateness`. Pure,
+    event-time only (never wall clock), monotonic non-decreasing — an out-of-order
+    (older) event cannot pull it back."""
+    candidate = event_time - allowed_lateness
+    return candidate if watermark is None or candidate > watermark else watermark
+
+
+def attribute_household_streaming(
+    events: list[tuple[str, Exposure | ResolvedConversion]],
+    window: timedelta,
+    allowed_lateness: timedelta,
+) -> list[Candidate]:
+    """Stage 1, streaming form (feature 2). Process ONE household's exposures and
+    resolved conversions in arrival (ingest) order through a watermark-gated
+    release. Exposures accumulate in state; a conversion is buffered until the
+    watermark reaches its `event_time`, which guarantees every eligible exposure
+    has arrived (arrival lateness ≤ `allowed_lateness`), then it is attributed
+    against state via `attribute_household`. No eviction here — that is feature 3;
+    without it a conversion always probes the complete eligible set, so this
+    returns exactly what the non-evicting `attribute_household` returns over the
+    full household (gate 0 proves it byte-for-byte on tiny).
+
+    At end-of-input every still-pending conversion is released against the full
+    state (the completeness backstop): a conversion whose release watermark is
+    never reached mid-stream is still attributed against complete state, so
+    release-gating provably equals `fold_final` regardless of arrival pathology."""
+    ordered = sorted(events, key=_arrival_key)
+    exposures: list[Exposure] = []
+    pending: list[ResolvedConversion] = []
+    out: list[Candidate] = []
+    watermark: datetime | None = None
+    for kind, model in ordered:
+        watermark = event_time_watermark(watermark, model.event_time, allowed_lateness)
+        if kind == "exp":
+            exposures.append(model)  # type: ignore[arg-type]
+        else:
+            pending.append(model)  # type: ignore[arg-type]
+        if pending and watermark is not None:
+            released = [c for c in pending if c.event_time <= watermark]
+            if released:
+                pending = [c for c in pending if c.event_time > watermark]
+                for conv in released:
+                    out.extend(attribute_household(exposures, [conv], window))
+    for conv in pending:  # EOF flush: complete state, watermark → +∞
+        out.extend(attribute_household(exposures, [conv], window))
     return out
 
 
