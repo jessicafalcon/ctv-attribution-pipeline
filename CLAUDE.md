@@ -291,15 +291,22 @@ never auto-fixed, ignored, or committed around.
 - Phase 1 (2026-08-17): merged (PR #3). Models, seeded generator + knobs
   (incl. unknown-device), schema registration, curated tiny golden fixtures.
   Fixtures frozen read-only.
-- Phase 2 (2026-08-17): complete on `phase-2-resolve-stage` — resolve stage
-  (device→household, IP fallback, ambiguous fan-out), stateless map,
-  `ResolvedConversion` + `conversions_resolved-value` schema (per-subject
-  compatibility NONE), offline replay + golden `fixtures/tiny/expected/`,
-  live batch stage (EOF-driven drain) + resolve_ metrics, live integration
-  test. DONE command green (53 tests, lint). Review gate complete: code-,
-  security-, functionality-tester passed over two rounds; coherence-auditor
-  run at phase exit (ambiguous-reduction decision recorded in DECISIONS.md /
-  ARCHITECTURE §3.3, built in Phase 3). Push + PR pending developer approval.
+- Phase 2 (2026-08-17): merged (PR #4). Resolve stage (device→household, IP
+  fallback, ambiguous fan-out), stateless map, `ResolvedConversion` +
+  `conversions_resolved-value` schema (per-subject compatibility NONE), offline
+  replay + golden `fixtures/tiny/expected/`, live batch stage (EOF-driven drain)
+  + resolve_ metrics, live integration test.
+- Phase 3 (2026-08-17): built on `phase-3-attribution-engine` — attribution
+  engine. Pure core (`streaming/attribute.py`): household last-touch join +
+  conversion_id-keyed ambiguous reduction as two leaf functions shared by the
+  offline replay and the live Bytewax dataflow. `AttributedConversion` model;
+  golden `fixtures/tiny/expected/attributed.jsonl` (55 rows). ClickHouse serving
+  layer: `attributed_conversions` (ReplacingMergeTree) + `exposures_landed`
+  (RMT), DDL + applier, engine_ metrics, sync sink. `make run` / `make test-int`
+  + CI integration job (SHA-pinned actions, digest-pinned images). Both DONE
+  halves green (71 tests, lint; integration green on a clean compose cycle:
+  FINAL == golden, exposures_landed idempotent). Review gate + coherence-auditor
+  pending; push + PR pending developer approval.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
