@@ -1,7 +1,6 @@
-# Later phases add: eval, report, bench, agent-run, agent-eval
-# (see CLAUDE.md → Commands).
+# Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run test test-int lint
+.PHONY: setup up down seed resolve run eval report test test-int lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -31,6 +30,16 @@ resolve:
 run:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
+
+# Attribution accuracy (household grain) vs the truth side file, for the last
+# seeded profile. Reads attributed_conversions FINAL from ClickHouse; truth
+# never enters the DB (N1, DECISIONS Phase 4).
+eval:
+	uv run python -m accuracy.run --profile "$(PROFILE)"
+
+# The four advertiser metrics per campaign, from the raw serving tables.
+report:
+	uv run python -m queries.report
 
 # Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
 # would probe services before skipping) from making any network attempt.

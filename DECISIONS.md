@@ -88,6 +88,12 @@ One entry per non-obvious choice. Newest last.
   device): realistic, and it keeps shared IPs the sole source of
   wrong-household ambiguity. The truth link still records the true causing
   exposure, so a fan-out to the wrong household is measurable in Phase 4.
+  [Refined by DECISIONS Phase 4: the eval DOES measure wrong-household
+  misattribution via `caused_wrong_household`, but the tiny fixture's
+  caused-ambiguous conversions all resolve to their truth household
+  (`caused_wrong_household == 0`), so tiny's Phase-4 precision reflects organic
+  over-credit; the shared-IP wrong-household OUTCOME is exercised by the Phase-8
+  fault profile, not tiny.]
   `u-` ids are a namespace disjoint from graph `d-` ids. tiny is curated
   (fraction 0.3, seed 42) so the frozen fixture reaches all three resolve
   cases; a structural test pins the exact counts. 0.3 is curation-high, far
@@ -157,7 +163,14 @@ One entry per non-obvious choice. Newest last.
   broken deterministically by `exposure_id` then `household_id`. This preserves
   ARCHITECTURE's "most recent exposure inside the window" rule, is
   deterministic, and keeps wrong-household picks as the measured shared-IP
-  fault (scored as Phase 4 precision). `processed_at` must NOT discriminate
+  fault (scored as Phase 4 precision).
+  [Refined by DECISIONS Phase 4: the eval DOES measure wrong-household
+  misattribution via `caused_wrong_household`, but the tiny fixture's
+  caused-ambiguous conversions all resolve to their truth household
+  (`caused_wrong_household == 0`), so tiny's Phase-4 precision reflects organic
+  over-credit; the shared-IP wrong-household OUTCOME is exercised by the Phase-8
+  fault profile, not tiny.]
+  `processed_at` must NOT discriminate
   among candidate households — it is the ReplacingMergeTree version for
   idempotent replacement of the *same logical row* (replay/reconciliation), not
   a tiebreaker; the reduction runs BEFORE the ReplacingMergeTree so exactly one
@@ -264,3 +277,74 @@ One entry per non-obvious choice. Newest last.
   `common.kafka.drain` / `drain_messages` (with `_EMPTY_POLL_LIMIT`), imported
   by both stages; behavior identical, covered by the relocated offline test
   `tests/test_kafka.py`.
+
+## Phase 4
+
+- **Eval accuracy is scored at household grain.** ARCHITECTURE §4.3 read as
+  exact `exposure_id` equality; PHASES Phase 3 reads at household. The two
+  disagreed. Resolved to **household grain**: exact-id scores a last-touch
+  engine at ~6% (3 of 52 credited rows match the causal exposure) by measuring
+  coincidence between the most-recent and the causal exposure — a model
+  property, not attribution quality — which contradicts the last-touch design.
+  Definitions: **precision** = caused conversions attributed to the correct
+  household / all credited (`attributed=true`) conversions; **recall** = caused
+  conversions attributed to the correct household / all truth links. Pinned
+  expected tiny output: precision **0.673** (35/52), recall **1.000** (35/35).
+  Exact-`exposure_id` match rate is reported only as a **labeled diagnostic**
+  ("last-touch → causal-exposure coincidence; expected low, not an accuracy
+  measure"), never the headline. ARCHITECTURE §4.3 amended to match; rejected
+  exact-id as the headline.
+
+- **Eval joins the truth side file in the harness; truth never enters the DB
+  (N1).** PHASES Phase 4's Done-when said accuracy is computed "against truth
+  links from ClickHouse," but truth links are a forbidden side file the pipeline
+  never reads (determinism policy, truth-isolation guard
+  `tests/test_truth_isolation.py`). Resolved: `make eval` reads
+  `attributed_conversions` FINAL from ClickHouse and joins it against the
+  `data/truth/<profile>/` side file **in the eval harness** — which lives
+  outside the pipeline dirs the isolation test guards — never loading truth into
+  ClickHouse. Rejected landing truth in a ClickHouse table (would breach
+  truth-isolation for a SQL join's convenience). PHASES Phase 4 wording
+  corrected from "from ClickHouse" to "side file."
+
+- **tiny demonstrates last-touch organic over-credit, not the shared-IP fault.**
+  On the frozen tiny fixture the ambiguous-reduction mechanism is exercised (5
+  fan-outs collapse to one deterministic winner each) but no caused conversion
+  is misattributed to a wrong household — all 3 caused ambiguous conversions
+  (c-000014/16/25) resolve to their truth household; the other 2 (c-000041/42)
+  are organic. tiny's precision (0.673) is driven entirely by 17 organic
+  conversions last-touch credits to a coincidentally-recent in-window exposure.
+  The shared-IP wrong-household fault is a fault-profile story (Phase 8), not a
+  tiny story — PHASES Phase 3 corrected at source, and a BACKLOG row pins the
+  Phase 8 requirement to engineer and *observe* a caused misattribution
+  (recall(household) < 1.0). Fixtures are frozen read-only (Phase 1), so this is
+  recorded, not repaired in tiny.
+
+- **Report v1 metric definitions.** ARCHITECTURE §3.3 names the four advertiser
+  metrics but does not define them; recorded here (the spec and `queries/`
+  already cite this):
+  - **ROAS** = attributed revenue / spend.
+  - **CPA** = spend / attributed **purchases** (acquisition = purchase). Chosen
+    over spend / all-attributed-conversions ("option 1"): the all-conversions
+    denominator equals CVR's numerator, so CPA would just restate CVR; keeping
+    the denominator to purchases makes CPA an independent money-action signal
+    that pairs with ROAS, while CVR and site-visit rate describe funnel activity
+    — four metrics, four distinct signals.
+  - **CVR** = attributed conversions / exposures.
+  - **site-visit rate** = attributed `site_visit` conversions / exposures.
+  Three load-bearing rules:
+  - **Read FINAL on both RMT tables** (`exposures_landed`,
+    `attributed_conversions`). A plain `sum`/`count` over unmerged parts counts
+    duplicate exposure landings and pre-reduction rows, silently inflating the
+    spend and exposure denominators (this is the payoff of the Phase-3 RMT
+    choice for `exposures_landed`).
+  - **NULL on zero denominators** via `nullIf(denominator, 0)`, uniformly — a
+    campaign with no purchases / spend / exposures yields NULL, never a
+    divide-by-zero or a crash. tiny does not exercise this path (every campaign
+    has purchases); guarded synthetically in `tests/test_report.py`.
+  - **Do NOT filter wrong-household attributions.** An ambiguous shared-IP
+    conversion credited to a campaign counts toward its metrics even when truth
+    disagrees — it is the advertiser's reported number, and the divergence is
+    measured separately by `make eval`. A subtly-inflated ROAS is exactly the
+    "plausible-but-wrong" number the Phase-9 agent will diagnose; a feature to
+    preserve, not a filter to add.

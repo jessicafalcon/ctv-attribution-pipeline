@@ -84,7 +84,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/
 - `make run` — resolve stage + engine + reconciliation scheduler
 - `make eval` — attribution precision/recall vs truth for the last profile
-- `make report` — 4 metrics + restatement view
+- `make report` — 4 metrics (restatement view: Phase 6)
 - `make bench` — naive vs optimized: latency, rows read, bytes read
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
@@ -305,8 +305,20 @@ never auto-fixed, ignored, or committed around.
   (RMT), DDL + applier, engine_ metrics, sync sink. `make run` / `make test-int`
   + CI integration job (SHA-pinned actions, digest-pinned images). Both DONE
   halves green (71 tests, lint; integration green on a clean compose cycle:
-  FINAL == golden, exposures_landed idempotent). Review gate + coherence-auditor
-  pending; push + PR pending developer approval.
+  FINAL == golden, exposures_landed idempotent). Merged (PR #5).
+- Phase 4 (2026-08-18): built on `phase-4-eval-reporting` — accuracy eval +
+  reporting v1 (CHECKPOINT). Household-grain accuracy (`accuracy/`): precision
+  0.673 (35/52) / recall 1.000, scored from `attributed_conversions` FINAL
+  joined against the truth side file in-harness (never in the DB, N1); exact
+  exposure-id is a labeled diagnostic only. Report v1 (`queries/`): four
+  per-campaign metrics (ROAS, CPA, CVR, site-visit rate) from the raw serving
+  tables, FINAL on both RMT tables, NULL on zero denominators, wrong-household
+  attributions kept in. DONE green (79 tests, lint; `make eval`/`make report`
+  reproduce the pinned numbers; integration `test_eval_report.py` green).
+  Pre-spec doc corrections merged (household grain, N1 side-file join, tiny =
+  organic over-credit not shared-IP). Review gate passed (code-reviewer +
+  functionality-tester + coherence-auditor); push + PR pending developer
+  approval.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
