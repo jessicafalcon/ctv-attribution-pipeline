@@ -110,7 +110,7 @@ def attribute_household(
             # Distinct assist ids, and never the credited exposure itself — set
             # difference by id, so a *resent* last-touch exposure (same id twice
             # in `eligible`) cannot survive into its own assists. Pure-function
-            # set semantics, distinct from Phase-5 TTL'd stream dedup on the join.
+            # set semantics, distinct from the Phase-5 seen-set stream dedup.
             assists = sorted(
                 {e.exposure_id for e in eligible} - {last_touch.exposure_id}
             )

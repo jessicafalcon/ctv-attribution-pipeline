@@ -29,7 +29,7 @@ REDPANDA  exposures | conversions | conversions_resolved  + schema registry
                                        │  → conversions_resolved (key household_id)
    exposures ──────────────────────────┤
                                        ▼
-ATTRIBUTION ENGINE (Bytewax)  hot window (7d) · last-touch + assists · dedup (TTL)
+ATTRIBUTION ENGINE (Bytewax)  hot window (7d) · last-touch + assists · dedup (seen-set)
                               watermarks + allowed lateness · emits attributed/unattributed
                                        ▼
 CLICKHOUSE  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
@@ -90,7 +90,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
 - `make test` — pytest, no services, no network
-- `make test-int` — pytest against running compose stack
+- `make test-int` — pytest against running compose stack (tiny profile)
+- `make test-int-medium` — clean medium-only stack (make down && up && seed
+  medium && run medium) → the Phase-5 live hardening proof; isolated because
+  tiny/medium share conversion_id space (DECISIONS Phase 5)
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demo:
@@ -318,14 +321,25 @@ never auto-fixed, ignored, or committed around.
   Pre-spec doc corrections merged (household grain, N1 side-file join, tiny =
   organic over-credit not shared-IP). Review gate passed (code-reviewer +
   functionality-tester + coherence-auditor). Merged (PR #6).
-- Phase 5 (2026-08-18): started on `phase-5-engine-hardening` — engine
-  hardening. Add, one feature at a time (each with a producer-knob-driven
-  test): dedup with TTL'd state, watermarks + allowed lateness, hot-window
-  eviction, assists recorded, `processed_at`/`path` on every record. Create the
-  `medium` profile and pin its clean-run baseline. Done when: `medium` with
-  duplicates + hour-late arrivals reaches the same precision/recall as the same
-  seed with those knobs off, and the join-state metric shows eviction working.
-  Spec: `specs/phase-5.md`.
+- Phase 5 (2026-08-18): built on `phase-5-engine-hardening` — engine hardening.
+  Engine moved from `fold_final` to an arrival-ordered, watermark-gated,
+  evicting operator (still a batch drain; continuous follow deferred, no phase
+  owns it). Features, each knob-driven: (1) dedup as a **full seen-set** (not
+  TTL'd — the seeded duplicate is timestamp-identical; TTL is a continuous-mode
+  SCALING note); (2) watermarks + allowed-lateness **release** (a conversion is
+  a pure probe, buffered until `max(event_time) − allowed_lateness ≥ its
+  event_time`, then attributed; EOF flush is the completeness backstop);
+  (3) hot-window **eviction** (`watermark > event_time + 7d`, strict `>`, run
+  after release) + `engine_exposures_evicted_total` / `engine_join_state_size`.
+  `assists`/`processed_at`/`path` were Phase-3 deliverables, regression-guarded
+  here. New `medium` profile (seed 11, 12.5d span, `unknown_device 0.1`).
+  Done-when green: robustness-oracle equality (evicting engine == non-evicting
+  oracle **byte-identical**, 132 rows; precision 92/130, recall 1.0, wrong_hh 0;
+  dedup suppressed 70; eviction fired), gate-0 tiny golden held byte-identical
+  through the rewrite, live proof via isolated `make test-int-medium`. 103
+  offline tests + 2 live; lint clean. Review gate passed (code-reviewer +
+  functionality-tester + coherence-auditor); follow-ups applied. Spec:
+  `specs/phase-5.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

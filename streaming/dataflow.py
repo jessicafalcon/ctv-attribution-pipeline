@@ -1,23 +1,25 @@
 """Live attribution engine (Bytewax) — the real pipeline component.
 
-Teaching notes (first appearance this phase):
+Teaching notes:
 - **Stateful keyed operators.** Bytewax processes a stream of `(key, value)`
   pairs; a *stateful* operator keeps state per key. `fold_final` accumulates all
   values for a key and emits once the input is exhausted — exactly right for a
-  bounded batch. We key by `household_id` to group each household's exposures
-  and resolved conversions together (the join), then re-key by `conversion_id`
+  bounded batch. We key by `household_id` to bucket each household's interleaved
+  exposures and conversions together (the join), then re-key by `conversion_id`
   to collapse a shared-IP fan-out to one winner (the reduction).
-- **Batch drain, not continuous follow.** Like the resolve stage, we drain both
-  Kafka topics start→end once (EOF-driven) and feed them into the dataflow via a
-  bounded source, so the engine processes the finite seeded stream and exits.
-  Bytewax's Kafka *source* follows forever; draining to memory first is the
-  simplest correct batch shape at this scale and lets `fold_final` see every
-  candidate for a `conversion_id` together (required for the reduction —
-  DECISIONS Phase 3 (b)). Continuous mode with windowing lands in Phase 5.
+- **Batch drain, with event-time windowing (Phase 5).** We drain both Kafka
+  topics start→end once (EOF-driven) and feed a bounded source, so the engine
+  processes the finite seeded stream and exits (Bytewax's Kafka *source* follows
+  forever). Within each household bucket the pure core runs an arrival-ordered,
+  watermark-gated pass: a conversion is released once the event-time watermark
+  (`max(event_time) − allowed_lateness`) reaches its `event_time`, and exposures
+  are evicted past `event_time + hot_window`. This is windowing **on the batch
+  drain** — the engine stays batch (no continuous Kafka follow; that is deferred,
+  no phase owns it — ARCHITECTURE §8, DECISIONS Phase 5).
 
-The decisions live in streaming/attribute.py; this module only does the keyed
-grouping and I/O, calling the SAME leaf functions the offline replay calls, so
-the two paths cannot diverge.
+The decisions live in streaming/attribute.py (dedup, watermark/release, eviction,
+reduction); this module only does the keyed grouping, metrics, and I/O, calling
+the SAME leaf functions the offline replay calls, so the two paths cannot diverge.
 """
 
 import argparse

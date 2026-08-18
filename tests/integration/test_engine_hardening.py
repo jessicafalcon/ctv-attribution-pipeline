@@ -7,7 +7,7 @@ Isolation comes from the sanctioned `make down`, not a per-test TRUNCATE.
 
 Asserts the three Done-when clauses live, against the pinned oracle baseline
 that tests/test_medium_parity.py fixes offline:
-- clause 1: FINAL P/R == oracle (precision 86/125, recall 1.0, wrong_hh 0);
+- clause 1: FINAL P/R == oracle (precision 92/130, recall 1.0, wrong_hh 0);
 - clause 2: eviction ran (join-state gauge > 0 and evictions > 0);
 - clause 3: dedup fired (suppressed 63) AND FINAL row count is unchanged by a
   dedup-off run (transparency).
@@ -50,7 +50,7 @@ def _require_services() -> None:
 def _reset_engine_metrics() -> None:
     metrics.DEDUP_SUPPRESSED._value.set(0)
     metrics.EXPOSURES_EVICTED._value.set(0)
-    metrics.JOIN_STATE_SIZE.set(0)
+    metrics.reset_join_state_peak()
 
 
 def _final_row_count() -> int:
@@ -70,16 +70,16 @@ def test_medium_live_matches_oracle_evicts_and_dedups() -> None:
         "medium",
     )
     assert rep.recall == 1.0 and rep.caused_wrong_household == 0
-    assert rep.precision == 86 / 125
-    assert (rep.credited, rep.truth_links, rep.household_correct) == (125, 86, 86)
+    assert rep.precision == 92 / 130
+    assert (rep.credited, rep.truth_links, rep.household_correct) == (130, 92, 92)
 
     # Clause 2: eviction ran — state built up and came back down.
     assert metrics.EXPOSURES_EVICTED._value.get() > 0
     assert metrics.JOIN_STATE_SIZE._value.get() > 0
 
     # Clause 3a: dedup fired.
-    assert metrics.DEDUP_SUPPRESSED._value.get() == 63
-    assert _final_row_count() == 126
+    assert metrics.DEDUP_SUPPRESSED._value.get() == 70
+    assert _final_row_count() == 132
 
 
 def test_dedup_is_transparent_final_count_unchanged(monkeypatch) -> None:
@@ -90,4 +90,4 @@ def test_dedup_is_transparent_final_count_unchanged(monkeypatch) -> None:
     _reset_engine_metrics()
     run_engine(BROKER)
     assert metrics.DEDUP_SUPPRESSED._value.get() == 0  # dedup was off
-    assert _final_row_count() == before == 126
+    assert _final_row_count() == before == 132

@@ -22,7 +22,7 @@
     "revenue_range": [20.0, 120.0],
     "late": {"fraction": 0.15, "min_minutes": 30, "max_minutes": 300},
     "duplicate_fraction": 0.15,
-    "unknown_device_fraction": 0.3,
+    "unknown_device_fraction": 0.1,
     "co_view_multiplier": {"sports": 1.5, "news": 1.0, "drama": 1.0, "comedy": 1.2}
   }
 }

@@ -171,6 +171,10 @@ ambiguity rate, fan-out factor.
 #### Attribution engine (Bytewax, hot path)
 
 Bytewax dataflow joining `exposures` and `conversions_resolved` on `household_id`.
+Read the phrases below ("when a conversion arrives", "kept for the hot window")
+as the semantics of a **batch drain** with event-time windowing, not a live
+continuous follow: the engine drains both topics once and runs an arrival-ordered,
+watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
 
 - **Hot window state**: exposures kept for the hot window (default 7 days),
   evicted by watermark. Window-state size is the central scaling constraint.
@@ -191,8 +195,14 @@ Bytewax dataflow joining `exposures` and `conversions_resolved` on `household_id
   the batch mechanism — the seeded duplicate is timestamp-identical to its
   original, so an event-time TTL has nothing to size against (see §8, DECISIONS
   Phase 5, SCALING.md).
-- **Lateness**: watermarks with allowed lateness cover conversions up to hours
-  late; anything later is emitted unattributed and picked up by reconciliation.
+- **Lateness**: a conversion is a **pure probe** — it is never dropped by a
+  conversion-side lateness gate. The watermark (`max(event_time) −
+  allowed_lateness`) only gates *when* a conversion is released for matching and
+  *when* an exposure is evicted. A conversion becomes **unattributed** for one
+  reason — its matching exposure has aged out of the hot window (a state-miss),
+  which happens when arrival lateness exceeds the tolerance — and is then picked
+  up by reconciliation. (Phase-5 `medium` keeps late ≤ `allowed_lateness`, so it
+  has no state-misses; the path is exercised by tests and, end to end, Phase 6.)
 - Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`).
 
 #### ClickHouse (serving layer)

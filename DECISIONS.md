@@ -126,8 +126,10 @@ One entry per non-obvious choice. Newest last.
 - **Resolve is a stateless map — duplicates in, duplicates out.** No dedup
   here; dedup keys on `conversion_id`/`exposure_id` and lives in the engine
   (Phase 5, ARCHITECTURE). A duplicate conversion resolves to identical
-  bytes, so it collapses later under ReplacingMergeTree / TTL dedup. Keeps the
-  stage a pure function of (conversion, graph).
+  bytes, so it collapses later under ReplacingMergeTree / the engine dedup.
+  Keeps the stage a pure function of (conversion, graph).
+  (Superseded detail: "TTL dedup" here was the pre-Phase-5 plan; the Phase-5
+  engine dedup is a full seen-set, not TTL'd — see Phase 5 below.)
 - **Ambiguous fan-out ordered by `sorted(household_id)`.** The only
   nondeterministic choice in the stage was candidate order; sorting makes the
   emitted record sequence byte-identical across runs.
@@ -409,3 +411,29 @@ One entry per non-obvious choice. Newest last.
   Offline `tests/test_medium_parity.py` proves the same three clauses
   deterministically and is the CI-gating coverage; live tiny already exercises
   the Kafka→ClickHouse path. Spec's test section updated to match.
+
+- **Per-household arrival-order re-sort by `(ingest_time, kind, id)`, not a
+  reliance on Bytewax delivery order.** `streaming/attribute.py`
+  `attribute_household_streaming` sorts each household's interleaved events by
+  `_arrival_key = (ingest_time, kind, id)` before the watermark-gated pass.
+  Necessary, not a spec violation: Bytewax's `op.merge` of the two `TestingSource`
+  inputs does NOT preserve global topic-offset order, so relying on delivered
+  order would be nondeterministic. An earlier phase-5 spec draft said "do NOT
+  re-sort" — that was too absolute; it feared a re-sort collapsing a duplicate
+  adjacent to its original, a hazard the upstream seen-set dedup (feature 1)
+  already removes. The tiebreak `(kind, id)` differs from the producer's emit
+  tiebreak `(event_id, dup_slot)` (`generate.py:60`), but the output is invariant
+  to it: release-gating + EOF flush attribute every conversion against the
+  complete eligible set, so ordering within an equal `ingest_time` cannot change
+  the result. Gate-0 (tiny byte-identical) and medium parity prove byte-safety.
+
+- **`medium` uses `unknown_device_fraction = 0.1`, per DECISIONS Phase 1.** Phase
+  1 set curation-high `0.3` on tiny and explicitly noted `medium`/fault profiles
+  should use a realistic `~0.05–0.1` so the RESULTS match rate isn't skewed. The
+  first medium.json copied tiny's `0.3`; a phase-exit coherence finding caught the
+  conflict. Fixed (not the guidance revised): engine hardening is indifferent to
+  the unknown-device rate, so `0.3` bought the Phase-5 proof nothing while skewing
+  exactly what Phase 1 protected. Re-pinned the medium baseline to the `0.1`
+  numbers (precision 92/130, recall 1.0, 132 rows, dedup suppressed 70) in
+  `tests/test_medium_parity.py`, the integration test, and the spec — the numbers
+  live only there (no RESULTS.md consumer yet).

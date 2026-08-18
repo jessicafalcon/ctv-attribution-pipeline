@@ -106,8 +106,11 @@ four metrics for the tiny profile. Project is demoable end to end.
 ## Phase 5 — Engine hardening
 
 **Goal.** Add, one feature at a time, each with its own test driven by a producer
-knob: dedup with TTL'd state; watermarks and allowed lateness; hot-window eviction;
-assists recorded; `processed_at` and `path` fields on every record.
+knob: dedup with a full seen-set (batch drain — TTL'd eviction is a
+continuous-follow concern, SCALING.md / DECISIONS Phase 5); watermarks and
+allowed lateness; hot-window eviction. (`assists`, `processed_at`, and `path`
+were already delivered in Phase 3; Phase 5 regression-guards them through the
+evicting window rather than re-adding them.)
 
 **Done when.** The `medium` profile with duplicates and hour-late arrivals enabled
 reaches the same precision/recall as the clean run, and the join-state metric

@@ -55,7 +55,7 @@ def _score(rows, stream, exps):
 
 def _run_engine(exps, res):
     metrics.EXPOSURES_EVICTED._value.set(0)
-    metrics.JOIN_STATE_SIZE.set(0)
+    metrics.reset_join_state_peak()
     attributed: list = []
     landed: list = []
     run_main(
@@ -74,7 +74,7 @@ def test_allowed_lateness_covers_medium_late_max(medium) -> None:
 
 
 def test_dedup_fires_on_medium(medium) -> None:
-    assert medium["suppressed"] == 63  # non-trivial re-send suppression
+    assert medium["suppressed"] == 70  # non-trivial re-send suppression
 
 
 def test_engine_equals_non_evicting_oracle_byte_for_byte(medium) -> None:
@@ -82,7 +82,7 @@ def test_engine_equals_non_evicting_oracle_byte_for_byte(medium) -> None:
     oracle = attribute(medium["exps"], medium["res"])
     engine = _run_engine(medium["exps"], medium["res"])
     assert jsonl(engine) == jsonl(oracle)
-    assert len(engine) == 126
+    assert len(engine) == 132
 
 
 def test_engine_pr_equals_oracle_pr_clean_baseline(medium) -> None:
@@ -92,8 +92,8 @@ def test_engine_pr_equals_oracle_pr_clean_baseline(medium) -> None:
     re = _score(engine, medium["stream"], medium["exps"])
     assert (re.precision, re.recall) == (ro.precision, ro.recall)  # clause 1
     assert re.recall == 1.0 and re.caused_wrong_household == 0  # clean, no faults
-    assert re.precision == 86 / 125  # organic last-touch over-credit only
-    assert (re.credited, re.truth_links, re.household_correct) == (125, 86, 86)
+    assert re.precision == 92 / 130  # organic last-touch over-credit only
+    assert (re.credited, re.truth_links, re.household_correct) == (130, 92, 92)
 
 
 def test_eviction_runs_on_medium(medium) -> None:

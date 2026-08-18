@@ -116,10 +116,10 @@ def test_join_state_rises_then_falls() -> None:
 
 def test_observe_state_metrics_are_evicted_sum_and_peak_high_water() -> None:
     metrics.EXPOSURES_EVICTED._value.set(0)
-    metrics.JOIN_STATE_SIZE.set(0)
+    metrics.reset_join_state_peak()
     metrics.observe_state(StreamState(peak=7, evicted=3, final=2))
     metrics.observe_state(StreamState(peak=4, evicted=1, final=1))  # lower peak
     assert metrics.EXPOSURES_EVICTED._value.get() == 4  # summed across households
     assert metrics.JOIN_STATE_SIZE._value.get() == 7  # high-water, not overwritten
     metrics.EXPOSURES_EVICTED._value.set(0)
-    metrics.JOIN_STATE_SIZE.set(0)
+    metrics.reset_join_state_peak()

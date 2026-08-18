@@ -90,9 +90,13 @@ harness only — N1) and the same `exposure_id → household_id` map.
 1. **Parity.** Engine precision AND recall equal Oracle precision AND recall,
    **exactly** (same floats, not "close"). This is the correctness proof that
    dedup + allowed-lateness + eviction drop no in-tolerance data.
-2. **Eviction ran.** The `engine_` join-state gauge is **> 0** at some point
-   over the run (state actually built up) **and** returns below its peak (state
-   actually evicted). A vacuous run where nothing ages out fails this clause.
+2. **Eviction ran.** State actually built up **and** actually aged out. Proven by
+   `engine_exposures_evicted_total > 0` **and** `StreamState.final < peak` (state
+   held then shrank); `engine_join_state_size > 0` shows the build-up.
+   (`engine_join_state_size` is a monotone high-water gauge — it records the peak,
+   it does not itself fall on a live scrape; the "fall" is the evicted counter +
+   final < peak. A current-occupancy gauge that genuinely falls is a Phase-7
+   dashboard concern — BACKLOG.) A vacuous run where nothing ages out fails this.
 3. **Dedup, separate assertion.** P/R parity holds with or without a dedup
    mechanism (exact re-sends share a `conversion_id` and collapse under
    `reduce_conversion` + ReplacingMergeTree FINAL either way), so **P/R MUST NOT
@@ -279,21 +283,29 @@ order-independently, the hardened engine processes the drained stream **in
 arrival order** through a stateful, event-time-watermarked, evicting window
 operator, so watermark/lateness/eviction are meaningful and deterministic.
 
-**Arrival order = topic-offset / emit order as drained — do NOT re-sort (this is
-load-bearing for the watermark, not for dedup).** Consume in **offset order** as
-`common.kafka.drain` returns it:
+**Arrival order = ingest-time order, reconstructed by a deterministic per-household
+re-sort.** The engine re-sorts each household's events by `(ingest_time, kind,
+id)` in the pure core (`streaming/attribute.py` `_arrival_key`) before the
+watermark-gated pass. This re-sort is **necessary**, not forbidden: Bytewax's
+`op.merge` of the two sources does NOT preserve global offset order, so relying on
+delivered order would be nondeterministic. (An earlier draft of this spec said
+"do NOT re-sort" — that was too absolute; it worried about a re-sort collapsing
+duplicates, a hazard the upstream seen-set dedup already removes.) See DECISIONS
+Phase 5.
 
-- The producer already emits in `(ingest_time, id)` order (`generate.py:60`), so
-  offset order **is** arrival order — re-sorting by `ingest_time` buys nothing and
-  only risks divergence. Re-sorting by **`event_time`** would be **wrong**: it
-  would place every late event at its event-time position and erase the lateness
-  the watermark exists to handle, so eviction/allowed-lateness would never be
-  exercised and clause-1 parity would be meaningless.
-- Dedup does **not** depend on order here — the full seen-set suppresses a re-send
-  at any offset distance (unlike a TTL, which is why the TTL was dropped). Order
-  matters only so the **watermark advances deterministically** as events arrive,
-  which is what makes eviction and the state-miss the real, reproducible thing
-  clause 1 checks.
+- The producer emits in `(ingest_time, event_id, dup_slot)` order
+  (`generate.py:60`); the engine's `(ingest_time, kind, id)` tiebreak **differs**
+  from that emit tiebreak, but the output is **invariant** to it: release-gating +
+  EOF flush attribute every conversion against the complete eligible set, so the
+  order within an `ingest_time` tie cannot change the result (gate 0 + medium
+  parity prove byte-safety).
+- Re-sorting by **`event_time`** instead would be **wrong**: it would place every
+  late event at its event-time position and erase the lateness the watermark
+  exists to handle, so eviction/allowed-lateness would never be exercised.
+- Dedup does **not** depend on order — the full seen-set suppresses a re-send at
+  any offset distance (unlike a TTL). Order matters only so the **watermark
+  advances deterministically**, which is what makes eviction and the state-miss
+  reproducible.
 - Offset-order determinism requires **single-partition topics**. Confirmed:
   `exposures` / `conversions` / `device_graph` are `num_partitions=1`
   (`producer/seed.py:28-31`) and `conversions_resolved` is `num_partitions=1`
@@ -390,17 +402,19 @@ load-bearing for the watermark, not for dedup).** Consume in **offset order** as
     assert a conversion whose exposure is still retained is attributed no matter
     how far its `event_time` trails the watermark (the invariant).
   - `tests/test_eviction.py` — exposure evicted only past
-    `T + 7d + allowed_lateness`; gauge rises then falls; an in-tolerance match
-    just under the bound still succeeds (the correctness invariant).
-  - `tests/test_assists_windowed.py` — assists from the evicting window equal the
-    all-in-memory core on `medium`.
-  - `tests/test_oracle_parity.py` — Oracle P/R over `dedup_by_id(E)` (pure, no
-    services) equals engine P/R **when the engine core is run offline over the
-    same E** (services-free half of clause 1).
+    the eviction bound; `StreamState.peak > final` and `evicted > 0` show state
+    rose then fell; an in-tolerance match just under the bound still succeeds
+    (the correctness invariant), and the release-before-eviction ordering guard.
+  - Assist-parity and oracle-parity (originally sketched as separate
+    `test_assists_windowed.py` / `test_oracle_parity.py`) are **folded into
+    `tests/test_medium_parity.py`**: the byte-identical `jsonl(engine) ==
+    jsonl(oracle)` assertion (assists are an `AttributedConversion` field, so
+    byte-identity proves assist parity) plus the P/R equality case cover both,
+    over `medium`, services-free.
 - `tests/integration/test_engine_hardening.py` — full clause 1/2/3 live against
-  ClickHouse FINAL: engine P/R == the pinned oracle baseline (precision 86/125,
+  ClickHouse FINAL: engine P/R == the pinned oracle baseline (precision 92/130,
   recall 1.0, wrong_hh 0); join-state gauge > 0 and evictions > 0;
-  `dedup_suppressed_total == 63` and FINAL row count unchanged by a dedup-off
+  `dedup_suppressed_total == 70` and FINAL row count unchanged by a dedup-off
   run. **Runs on its own clean medium-only stack via `make test-int-medium`
   (make down && up && seed medium && run medium), NOT in the shared
   `make test-int`** — tiny and medium share conversion_id space, so a shared

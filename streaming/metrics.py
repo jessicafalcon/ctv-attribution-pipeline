@@ -65,9 +65,21 @@ def observe(row: AttributedConversion, candidate_count: int) -> None:
         AMBIGUOUS_REDUCED.inc()
 
 
+_join_state_peak = 0  # high-water across households; the gauge only climbs
+
+
 def observe_state(state: StreamState) -> None:
-    """One household's join-state summary: raise the peak high-water gauge and
-    add its evictions to the counter."""
+    """One household's join-state summary: add its evictions to the counter and
+    raise the peak high-water gauge. The peak is tracked in a module variable
+    (not read back off the Prometheus gauge, whose getter is a private API)."""
+    global _join_state_peak
     EXPOSURES_EVICTED.inc(state.evicted)
-    if state.peak > JOIN_STATE_SIZE._value.get():
-        JOIN_STATE_SIZE.set(state.peak)
+    _join_state_peak = max(_join_state_peak, state.peak)
+    JOIN_STATE_SIZE.set(_join_state_peak)
+
+
+def reset_join_state_peak() -> None:
+    """Reset the high-water tracker and its gauge (used by tests between runs)."""
+    global _join_state_peak
+    _join_state_peak = 0
+    JOIN_STATE_SIZE.set(0)
