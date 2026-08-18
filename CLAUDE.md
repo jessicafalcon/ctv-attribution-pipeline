@@ -338,8 +338,17 @@ never auto-fixed, ignored, or committed around.
   dedup suppressed 70; eviction fired), gate-0 tiny golden held byte-identical
   through the rewrite, live proof via isolated `make test-int-medium`. 103
   offline tests + 2 live; lint clean. Review gate passed (code-reviewer +
-  functionality-tester + coherence-auditor); follow-ups applied. Spec:
-  `specs/phase-5.md`.
+  functionality-tester + coherence-auditor); follow-ups applied. Merged (PR #7).
+- Phase 6 (2026-08-18): started on `phase-6-reconciliation` — reconciliation and
+  restatements. Periodic long-window (≤90d) matcher recovers hot-path misses
+  (conversions whose causal exposure is >7d before them in event-time — the
+  hot-window evicts it), reusing the pure `attribute_household` leaf at a 90d
+  window over models reconstructed from ClickHouse FINAL (truth-free). Corrected
+  rows carry `path=reconciled`, `processed_at = max(ingest_time) + Δ` (> the hot
+  version). `campaign_hourly` rollup (versioned-replace RMT, refreshed on run),
+  `report_snapshots` (campaign-total grain), restatement query. New `long_delay`
+  profile (delay straddles ≤7d and (7d,90d]). Isolated `make test-int-long-delay`.
+  Spec: `specs/phase-6.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
