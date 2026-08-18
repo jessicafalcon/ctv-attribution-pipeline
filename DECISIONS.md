@@ -221,3 +221,20 @@ One entry per non-obvious choice. Newest last.
   to Phase 7 (the benchmark phase); Phase 3 inserts synchronously so the
   integration FINAL-comparison is deterministic (async insert buffering makes
   read-after-write flaky for no benefit at tiny scale).
+
+- **ClickHouse `default` user re-enabled for network access (local-dev).**
+  ClickHouse 24.8 images, when `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` are
+  unset, generate a `users.d/default-user.xml` that restricts the `default`
+  user to loopback (`::1`, `127.0.0.1`) — so host clients reaching the HTTP
+  interface through the docker gateway are rejected (`AUTHENTICATION_FAILED`),
+  while the in-container healthcheck still passes. We mount
+  `clickhouse/users.d/allow-network.xml` (networks `::/0`, empty password) to
+  restore access. Posture is unchanged from Phase 0: the host publishes 8123 on
+  `127.0.0.1` only (compose ports), so the service stays off the LAN even though
+  ClickHouse accepts connections from within the docker network — same
+  passwordless local-dev stance as Grafana admin/admin and the Redpanda admin
+  API. The SELECT-only agent user (Phase 9) is a separate, later concern.
+  Rejected setting `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` env: it would put a
+  credential in compose/CI for zero security gain over the loopback-bound port,
+  against the passwordless-dev posture. Covered by the existing BACKLOG
+  "127.0.0.1 binding still admits any local process" row (shared-host caveat).
