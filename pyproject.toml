@@ -5,6 +5,7 @@ description = "Streaming CTV attribution pipeline with an AI measurement-integri
 requires-python = ">=3.12"
 dependencies = [
     "confluent-kafka>=2.15.0",
+    "prometheus-client>=0.21",
     "pydantic>=2.13.4",
 ]
 

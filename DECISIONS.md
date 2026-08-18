@@ -109,3 +109,40 @@ One entry per non-obvious choice. Newest last.
   min≤max validators and timezone-aware `sim_start` in the profile schema,
   `uv sync --locked` in CI, and a structural test that pipeline-stage code
   never mentions truth links.
+
+## Phase 2
+
+- **`ResolvedConversion` subclasses `Conversion`.** It carries every conversion
+  field plus `household_id`/`resolution`/`ambiguous`/`candidate_count`, so the
+  engine (Phase 3) attributes from one `conversions_resolved` record without
+  re-reading `conversions`. Kept in `producer/models.py` so all topic schemas
+  have a single source of truth (schema contract).
+- **Resolve is a stateless map — duplicates in, duplicates out.** No dedup
+  here; dedup keys on `conversion_id`/`exposure_id` and lives in the engine
+  (Phase 5, ARCHITECTURE). A duplicate conversion resolves to identical
+  bytes, so it collapses later under ReplacingMergeTree / TTL dedup. Keeps the
+  stage a pure function of (conversion, graph).
+- **Ambiguous fan-out ordered by `sorted(household_id)`.** The only
+  nondeterministic choice in the stage was candidate order; sorting makes the
+  emitted record sequence byte-identical across runs.
+- **Offline replay is the DONE-command path; the live stage is a batch pass.**
+  `resolve/replay.py` resolves the frozen fixture with no broker, so the golden
+  diff has zero stream-ordering nondeterminism. `resolve/stage.py` drains
+  `conversions` low→high watermark once and exits (not follow-forever): it
+  processes the finite seeded stream end-to-end, which is what the integration
+  test and a tiny/medium run need. Continuous follow lands when `make run`
+  wires the full pipeline (Phase 3+). The two share the one pure resolver, so
+  they cannot diverge.
+- **Per-subject schema compatibility `NONE` in dev (BACKLOG Phase-2 item).**
+  The registry's global default is BACKWARD; under it, re-registering a
+  *changed* model (as `ResolvedConversion` will evolve) 409s and fails the
+  stage/seed. This is single-writer dev infra with no schema-evolution story
+  yet, so every subject is set to `NONE` before its version is posted.
+  Verified against Redpanda: `PUT /config/<subject>` works before the
+  subject's first version exists, and an incompatible re-register then returns
+  a new id instead of 409. Global stays BACKWARD.
+- **Integration test compares the DISTINCT resolved payload set.** Seeding is
+  deterministic (idempotent bytes) but topics accumulate across re-seeds
+  without `make down`; the stage drains from offset 0 by manual assignment
+  (ignoring group offsets), so residual/duplicate rows collapse to the same
+  bytes and the distinct set equals the golden fixture regardless of history.

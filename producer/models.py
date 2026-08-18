@@ -41,6 +41,19 @@ class Conversion(StrictModel):
     order_id: str | None
 
 
+class ResolvedConversion(Conversion):
+    """A conversion mapped to a household. Topic: conversions_resolved, keyed
+    by household_id. resolution=device is a device-graph hit; resolution=ip is
+    the IP fallback. ambiguous/candidate_count flag shared-IP fan-out (one
+    record per candidate household). Carries every Conversion field so the
+    engine can attribute without re-reading conversions."""
+
+    household_id: str
+    resolution: Literal["device", "ip"]
+    ambiguous: bool
+    candidate_count: int = Field(ge=1)
+
+
 class Device(StrictModel):
     device_id: str
     kind: Literal["tv", "phone", "laptop", "tablet"]
