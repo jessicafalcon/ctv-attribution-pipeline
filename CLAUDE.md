@@ -213,10 +213,16 @@ standard way over the clever way.
 
 - Treat `main` as protected: never commit to it directly; never force-push.
 - Review gate BEFORE the remote: run the review agents (code-reviewer,
-  security-reviewer, functionality-tester) on the finished work, apply or
-  get explicit acceptance for their findings, and report the verdicts to
-  the developer. Do NOT push and do NOT open a PR until the developer has
-  seen the verdicts and explicitly says to. Commits stay local until then.
+  security-reviewer, functionality-tester) on the finished work and report
+  the verdicts to the developer. Do NOT push and do NOT open a PR until the
+  developer has seen the verdicts and explicitly says to. Commits stay local
+  until then.
+- STOP-on-findings (IMPORTANT): when a review agent (or any agent) returns
+  findings, STOP and report them verbatim. Do NOT fix, patch, or work around
+  anything — not even a "trivial" fix — until the developer has reviewed both
+  the issue AND the proposed solution and explicitly says to proceed. Present
+  the issue and the proposed fix; then wait. This applies to every agent run,
+  at every phase, not only the pre-PR review gate.
 - Start each phase on a fresh branch from up-to-date main:
   `git checkout main && git pull && git checkout -b phase-N-<slug>`
   (e.g. `phase-2-resolve-stage`). One phase = one branch = one PR.
