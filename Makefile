@@ -5,6 +5,10 @@
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
 
+# Digest-pinned prometheus image (must match docker-compose.yml) — promtool ships
+# inside it, so the alert-rule tests need no new dependency and no floating tag.
+PROM_IMAGE = prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+
 setup:
 	uv sync
 	uv run pre-commit install
@@ -109,6 +113,15 @@ test-int-long-delay:
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
 	uv run pytest tests/integration/test_reconcile.py
+
+# Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
+# from the digest-pinned prometheus image, never a floating tag). `check rules`
+# validates syntax; `test rules` asserts each alert fires on long_delay's captured
+# numbers and stays silent on tiny's (observability/rules/tests/alerts_test.yml,
+# generated from make metrics-capture). Needs only the image, not the compose stack.
+test-alerts:
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
 
 lint:
 	uv run pre-commit run --all-files
