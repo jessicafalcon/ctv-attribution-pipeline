@@ -66,6 +66,11 @@ def run(client: Client | None = None) -> tuple[dict, dict]:
     # wrong-household rows could diverge).
     naive_rows = [_round_row(r) for r in naive["rows"]]
     opt_rows = [_round_row(r) for r in optimized["rows"]]
+    if not naive_rows:
+        raise AssertionError(
+            "benchmark ran against an empty rollup — seed a profile and `make run` "
+            "first (equality on two empty result sets is a vacuous false-green)"
+        )
     if naive_rows != opt_rows:
         raise AssertionError(
             "benchmark mismatch: optimized rollup disagrees with the naive scan "
