@@ -712,3 +712,23 @@ One entry per non-obvious choice. Newest last.
   in the filter. `agent/readers.py` aliases the aggregates to non-colliding names
   (`attributed_count`, `ambiguous_count`); `collect.py` unpacks positionally, so the
   names are cosmetic. Recorded in ARCHITECTURE §8.
+
+- **`co_view_bug` is diagnosable @ Phase 10 (needs the adjusted factor), NOT from raw
+  genre_reach (review-gate FG1, verified live).** The multiplier bug IS engineered and
+  present truth-side — sports caused-per-exposure 0.768 vs ≤0.276 elsewhere, a >2.5×
+  skew (`test_fault_profiles.py`, still asserted: it proves the producer knob fires
+  below the clamp). But that skew does NOT survive into the ClickHouse-visible proxy
+  the collector fills: live `genre_reach` (attributed conversions per exposure, ALL
+  conversions) reads sports 0.561 vs comedy 0.522 — a ~7% margin, and comedy has no
+  co-view boost. The organic baseline dilutes the caused-only skew, so raw genre_reach
+  cannot discriminate co-view inflation from noise. This is why the raw stat is all we
+  built and the co-view-*adjusted* factor is deferred (BACKLOG 26 → Phase 10): the
+  adjusted factor supplies the per-genre expected baseline that makes reach
+  interpretable. Consequences: (a) do NOT add a genre_reach skew assertion (it would be
+  flaky/false — the margin is ~7%, not the truth-side 2.5×); (b) the taxonomy re-labels
+  `co_view_bug` **"diagnosable @ Phase 10 (needs adjusted factor)"** — it is a fault the
+  agent should eventually flag (unlike the duplicate_flood control), just not from
+  Phase-8/9 signals alone; (c) **predicted STOP-and-report back-edit (Ruling B):** if
+  Phase 9/10's adjusted-factor detection needs a new `AttributionContext` field (an
+  expected/normalized per-genre reach), that is the one foreseeable back-edit to the
+  frozen §4.2 shape — expected there, not a surprise.

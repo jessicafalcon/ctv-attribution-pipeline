@@ -51,10 +51,19 @@ this contract, not routine churn. Two guards on over-reach:
 |---|---|---|---|
 | `shared_ip_spike` | `shared_ip_fraction`↑, `unknown_device_fraction`↑ | **diagnosable** | wrong-household / shared-IP matches |
 | `late_burst` | `late.fraction`↑, `late.max_minutes`↑ (past 7d) | **diagnosable** | late-arrival distortion; window-edge |
-| `co_view_bug` | `co_view_multiplier[sports]`↑ | **diagnosable** | co-view inflation (raw-reach signal) |
+| `co_view_bug` | `co_view_multiplier[sports]`↑ | **diagnosable @ Phase 10 (needs adjusted factor)** | co-view inflation — NOT discriminable from raw genre_reach (FG1); see below |
 | `real_lift` | `caused_conversion_rate`↑, shared-IP low | **diagnosable** | real performance change |
 | `duplicate_flood` | `duplicate_fraction`↑ | **control (benign)** | none — correct output is no-fault |
 | (`medium` / no-fault) | — | **control** | none — the Phase-10 baseline (not built here) |
+
+`co_view_bug` is a real fault (not a control like duplicate_flood), but its signal is
+NOT discriminable from Phase-8/9 ClickHouse data alone (review-gate FG1, verified
+live): raw `genre_reach` reads sports 0.561 vs comedy 0.522 — ~7% margin, comedy
+un-boosted — because the organic baseline dilutes the caused-only 2.5× skew. It becomes
+diagnosable only once the co-view-*adjusted* factor lands (Phase 10, BACKLOG 26), which
+supplies the per-genre expected baseline. So the truth-side skew is asserted here (the
+knob fires), NO raw-reach skew assertion is added (it would be flaky/false), and
+DECISIONS Phase 8 flags the predictable Phase-9/10 back-edit to the frozen §4.2 shape.
 
 The no-fault baseline is Phase 10's concern (`medium` is the interim clean reference);
 this phase ships the five profiles above. `real_lift` and `shared_ip_spike` are the
@@ -186,3 +195,19 @@ SQL) + `agent/run_context.py` (`make context` entrypoint: readers → pure funcs
 - Co-view-adjusted factor → BACKLOG 26 (Phase 10). Only raw genre reach here.
 - A `make bench` gate on shared_ip_spike → Row 28 dispositioned (verify-or-re-defer),
   not added as a phase gate.
+
+## Phase-9 forward-notes (review-gate deferrals, no Phase-8 action)
+
+- **SN1 (prompt-injection surface).** Context string fields (`ip`, `genre`,
+  `campaign_id`, top-cluster IPs) are attacker-influenceable data. When Phase 9 builds
+  the LLM prompt they MUST reach the model as delimited/structured data, never spliced
+  into instruction text. BACKLOG row added; trigger = Phase-9 prompt authoring.
+- **SN2 + CA-Q4 (SELECT-only must cover the collector read path).** The Phase-9
+  SELECT-only ClickHouse user + write-denied test must cover `run_context.py` /
+  `agent/readers.py` (`clickhouse.client.connect()`), not only the probe registry —
+  else the read-only guarantee holds on probes but not on the collectors. Fold into the
+  Phase-9 DB-user work; no new BACKLOG row.
+- **CA-minor (`profile` is a label, not a filter).** `AttributionContext.profile` is a
+  caller-supplied label; the serving tables have no `profile` column (mitigated by
+  clean single-profile stacks, consistent with `make eval`/`report`). The Phase-9 agent
+  must never treat `profile` as ground truth about which rows it read.
