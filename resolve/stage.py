@@ -94,7 +94,11 @@ def run_batch(
     )
     consumed = emitted = 0
     try:
-        for value in drain(consumer, "conversions"):
+        values = drain(consumer, "conversions")
+        # Backlog the consumer started behind by: the whole topic, since we assign
+        # from OFFSET_BEGINNING each pass (batch proxy for consumer lag).
+        metrics.observe_backlog(len(values))
+        for value in values:
             conv = Conversion.model_validate_json(value)
             resolved = resolve_one(conv, index)
             metrics.observe(resolved)

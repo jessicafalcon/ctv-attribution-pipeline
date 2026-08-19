@@ -77,3 +77,12 @@ def test_ambiguous_two_candidate_fan_out() -> None:
     assert _val(metrics.UNRESOLVED) == 0
     assert _val(metrics.EMITTED, resolution="ip") == 2
     assert _val(metrics.EMITTED, resolution="device") == 0
+
+
+def test_input_backlog_records_drain_size() -> None:
+    # Gauge is set once per run to the backlog the consumer started behind by;
+    # a later, smaller run overwrites it (not cumulative), so the last value wins.
+    metrics.observe_backlog(200)
+    assert metrics.INPUT_BACKLOG._value.get() == 200
+    metrics.observe_backlog(3)
+    assert metrics.INPUT_BACKLOG._value.get() == 3
