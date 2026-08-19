@@ -46,6 +46,13 @@ run-hot:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 
+# Naive-vs-optimized reporting benchmark: the same four-metric question run as a
+# full FINAL scan of the raw serving tables (report.sql) vs the pre-aggregated
+# campaign_hourly rollup (bench.sql). Prints latency, rows read, bytes read for
+# each. Run after `make run` populated the rollup (e.g. seed long_delay && run).
+bench:
+	uv run python -m queries.bench
+
 # Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
 # textfiles under data/out/<profile>/metrics/. This is the provenance of the
 # promtool alert fixtures (observability/rules/gen_fixtures.py): the

@@ -8,6 +8,20 @@ authored in Phase 11.
 
 ## Notes accumulating toward the Phase 11 write-up
 
+### Rollup benchmark: the win is scan-size, and it compounds at volume (Phase 7)
+
+`make bench` (Phase 7) shows the `campaign_hourly` rollup reading 2.5× fewer rows
+and 1.6× fewer bytes than the naive full `FINAL` scan-and-join, at `long_delay`
+scale (see `RESULTS.md`). The edge is modest here only because the raw tables are
+small. What matters at scale: the **naive scan grows with every conversion and
+exposure** (and pays the `FINAL` merge over an ever-larger set), while the
+**rollup read grows only with the number of distinct `(campaign, hour)` buckets** —
+bounded by campaigns × hours in the reporting window, independent of event volume.
+At the 50k/500k tiers a per-read full-history scan is the thing that breaks; the
+scheduled-refresh rollup is what keeps read cost flat. The refresh itself is the
+cost that grows, but it is paid once on a schedule, off the read path
+(ARCHITECTURE §3.3: scheduled refresh, never insert-triggered summing MVs).
+
 ### Engine dedup: full seen-set now, TTL'd under continuous follow (Phase 5)
 
 The Phase-5 engine is a **bounded batch drain** — it reads each topic start→end
