@@ -624,3 +624,91 @@ One entry per non-obvious choice. Newest last.
   dashboard carries correct queries against the real metric names and provisions
   cleanly (verified: Grafana loads "Attribution Integrity"); a live screenshot needs
   the deferred path. Not oversold as a live dashboard.
+
+## Phase 8
+
+- **`duplicate_flood` is a benign CONTROL, not a diagnosable fault (Ruling A).** The
+  duplicate injector re-appends a timestamp-identical payload (Phase 5), the engine
+  dedups it (full seen-set), and ReplacingMergeTree collapses any survivor — so
+  `attributed_conversions`/`exposures_landed` FINAL are byte-identical with or without
+  the flood (proven in `test_fault_profiles.py`: the attribution decision per
+  `conversion_id` is identical dedup-ON vs dedup-OFF). A correctly-absorbed flood
+  yields a *correct* number, and the agent (§4) exists to catch numbers that are
+  *probably wrong*, so duplicate_flood's correct future agent output is **no-fault**;
+  Phase 10 scores it as a **false-positive-rate control**, not a fault-recall case.
+  Four consequences pinned: (1) collectors are strictly ClickHouse-derived — the
+  dedup counter `engine_dedup_suppressed_total` stays a Prometheus/alert-plane concern
+  (Phase 7), never a context field (a `.prom` side-channel would break "from
+  ClickHouse", couple the collector to gitignored live-run artifacts, and hand Phase 9
+  a field with no probe SQL behind it); (2) the fault taxonomy is labeled
+  diagnosable-vs-control up front (shared_ip_spike/late_burst/co_view_bug/real_lift
+  diagnosable; duplicate_flood + the Phase-10 no-fault baseline control), so Phase 10
+  never scores "did the agent name duplicate_flood?"; (3) dedup correctness is already
+  proven at the engine layer (Phase 5), the agent doesn't re-prove it; (4) the escape
+  hatch for a *diagnosable* duplicate bug is a dedup-DISABLED + flood profile (inflates
+  the ClickHouse tables, stays inside the from-ClickHouse model) — recorded, not built.
+
+- **Full §4.2 `AttributionContext`, shape FROZEN at phase exit (Ruling B).** Every
+  §4.2 field maps to a named §4.1 hypothesis the Phase-9 agent ranks (match-rate
+  series → real-vs-inflation; campaigns → ROAS/CPA discontinuity; restatements →
+  late-arrival distortion; window_edge → window-edge effects; ip_clusters →
+  wrong-household; genre_reach → co-view inflation) — no speculative fields, so "minimal
+  but scalable" means no field without a consumer, not fewest fields. The pydantic
+  shape is the contract Phase 9 consumes: it adds probe SQL + ranking over the frozen
+  model and must NOT add/rename fields — a genuinely-needed new field is a
+  STOP-and-report back-edit to Phase 8 (which means changing `test_context_schema.py`
+  in the same deliberate change), never silent churn. Two over-reach guards: (a)
+  **co-view stays a RAW genre-reach stat** (exposures / attributed-conversions per
+  genre) — the co-view-*adjusted* factor is NOT built (BACKLOG 26, deferred to the
+  Phase-10 near-miss; "reporting never reads generation params"); (b) **restatement
+  volume comes from `report_snapshots`** (PRE vs FINAL, via `restatement.sql`), never
+  the Prometheus `reconcile_restatement_roas_abs_delta` (alert-plane) — same
+  from-ClickHouse rule as duplicate_flood.
+
+- **Collectors mirror `accuracy/` (pure core + readers + runner), N1.** `agent/
+  collect.py` is pure aggregation over already-fetched rows (no I/O, no clock, no LLM —
+  unit-tested with synthetic rows in `test_collect.py`); `agent/readers.py` holds
+  fixed, parameter-free SQL over the serving tables (FINAL on both RMT tables);
+  `agent/run_context.py` wires them and prints (`make context`). Campaign metrics and
+  restatements REUSE `report.sql`/`restatement.sql` (one source with `make report`/`make
+  restate`, no Python metric core to drift). The causal side file is never read in
+  `agent/` — enforced by the existing truth-isolation guard, which forbids the very
+  word outside `eval/` (caught a docstring during the build; the collectors say "causal
+  side file" instead).
+
+- **Fault profiles isolate ONE anomaly each; shared-IP found by offline seed search.**
+  All five share the medium-scale graph/events baseline and flatten `co_view_multiplier`
+  to 1.0 (except `co_view_bug`) and drop shared-IP/unknown-device to low (except
+  `shared_ip_spike`), so each profile carries exactly one signal — cleaner for the
+  Phase-9/10 agent eval than realistic-but-mixed profiles (the no-fault baseline keeps
+  realistic co-view). `shared_ip_spike` (seed 0, `shared_ip_fraction 0.6`,
+  `unknown_device_fraction 0.4`) was picked by an offline search over the pure oracle
+  (`streaming.attribute`) for a seed where the most-recent-exposure reduction
+  misattributes caused conversions to a wrong shared-IP household: **11 caused
+  wrong-household, 0 caused misses** (the entire recall gap 0.8625 = 69/80 is
+  wrong-household, cleanly isolated) — BACKLOG 20 satisfied, observed not assumed
+  (`test_fault_profiles.py` + live `test_context.py`). `real_lift` (seed 3,
+  `caused_conversion_rate 0.4`) is the clean near-miss counterpart (truth 157 ≈2× medium,
+  0 wrong-household); `ip_clusters.ip_resolved_fraction` is the discriminator (0.42 on
+  shared_ip_spike, low on real_lift). `co_view_bug` (seed 5, `sports ×4.0`): sports
+  caused-per-exposure 0.768 vs ≤0.276 elsewhere, **below the `min(1.0, rate)` clamp**
+  (BACKLOG 15 — observable, not saturated). `late_burst` (seed 7, `late.fraction 0.5`,
+  `late.max_minutes 20160`): 5 hot-misses, peak arrival lateness ~13.8d (the WATERMARK
+  proxy). Numbers pinned in `test_fault_profiles.py` like the medium/long_delay live
+  pins — re-tuning a profile JSON means updating the assertion in the same change.
+
+- **`shared_ip_spike` uses `make run` (full pipeline), not `run-hot`.** Its delays sit
+  inside the 7d hot window, so it has no caused hot-misses; reconciliation's only
+  candidates are organics (1 on seed 0, 0 recovered), which never touch the caused rows
+  — so the caused-side pins (11 wrong-household, 69 correct, 80 truth) are
+  reconciliation-invariant and the live `make eval` matches the offline oracle. `make
+  run` (vs `run-hot`) is used only so `report_snapshots` exists for the context's
+  restatement field (Δ≈0 here, correctly — shared_ip_spike is not a late-arrival fault).
+
+- **ClickHouse aggregate aliases must not shadow a filtered column (§8 gotcha).** An
+  aggregate aliased to a column name that a `WHERE`/`countIf` also references
+  (`count() as attributed` with `where attributed = 1`) raises `ILLEGAL_AGGREGATION`
+  (code 184) — ClickHouse binds the identifier to the SELECT alias, finding an aggregate
+  in the filter. `agent/readers.py` aliases the aggregates to non-colliding names
+  (`attributed_count`, `ambiguous_count`); `collect.py` unpacks positionally, so the
+  names are cosmetic. Recorded in ARCHITECTURE §8.

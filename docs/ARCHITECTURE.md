@@ -442,6 +442,16 @@ handled.*
   when a stored timestamp must round-trip through Python for storage or
   cross-process comparison, read it as `toUnixTimestamp64Milli` or compute it
   server-side — never as a rendered DateTime.
+- **A ClickHouse aggregate aliased to a filtered column name raises
+  ILLEGAL_AGGREGATION.** `select count() as attributed ... where attributed = 1`
+  fails with code 184: ClickHouse binds the `attributed` in `WHERE` (and inside
+  `countIf(attributed = 1)`) to the SELECT alias — the `count()` aggregate — rather
+  than the table column, and an aggregate in a filter is illegal. Observed while
+  authoring the Phase-8 collector reads (`agent/readers.py`). Fix: alias aggregates
+  to names that don't collide with any filtered column (`attributed_count`,
+  `ambiguous_count`); consumers that unpack rows positionally don't care about the
+  name. Same class as the ORDER BY/GROUP BY alias-vs-column ambiguities — when an
+  alias shares a column's name, the filter is the surprising place it bites.
 
 ---
 

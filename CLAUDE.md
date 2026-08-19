@@ -91,6 +91,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
 - `make restate` — restatement: each campaign's metric as reported
   pre-reconciliation vs now (`report_snapshots` FINAL); run after `make run`
+- `make context PROFILE=<p>` — build + print the typed `AttributionContext`
+  (ARCHITECTURE §4.2) from ClickHouse: the deterministic, LLM-free observe step
+  (Phase 8). Serving layer only (N1). Run after `make run`. The agent loop that
+  reasons over it is Phase 9
 - `make bench` — naive (full FINAL scan-and-join) vs optimized (`campaign_hourly`
   rollup): latency, rows read, bytes read; asserts identical metric rows. Run after
   `make run` populated the rollup
@@ -111,6 +115,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
   long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
   for the same shared-conversion_id reason (DECISIONS Phase 5/6)
+- `make test-int-shared-ip` — clean shared_ip_spike-only stack (make down && up &&
+  seed shared_ip_spike && run) → the Phase-8 live fault-harness proof: the shared-IP
+  wrong-household fault is observed (caused_wrong_household=11) and the
+  `AttributionContext` is populated; isolated for the same shared-conversion_id reason
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
@@ -395,9 +403,28 @@ never auto-fixed, ignored, or committed around.
   `observability/gen_alert_fixtures.py` bakes the numbers into the fixture (fires on
   long_delay, silent on tiny). Grafana "Attribution Integrity" dashboard (JSON, file
   provider). Green: gate-0 tiny golden byte-identical; 117 offline + lint; bench +
-  test-alerts live-green; Grafana provisions. Review gate (code-reviewer +
-  security-reviewer + functionality-tester + coherence-auditor) PENDING. Spec:
-  `specs/phase-7.md`.
+  test-alerts live-green; Grafana provisions. Review gate passed; merged (PR #9).
+  Spec: `specs/phase-7.md`.
+- Phase 8 (2026-08-19): built on `phase-8-fault-harness` — fault harness + signal
+  collectors. Five isolated fault profiles (one anomaly each): `shared_ip_spike`
+  (seed 0 — 11 caused wrong-household misattributions, 0 misses; closes BACKLOG 20),
+  `late_burst` (seed 7 — 5 hot-misses, ~13.8d peak arrival lateness), `co_view_bug`
+  (seed 5 — sports 4× caused-rate, below the `min(1.0, rate)` clamp; BACKLOG 15
+  dispositioned), `real_lift` (seed 3 — clean 2× lift, the near-miss counterpart to
+  shared_ip_spike), `duplicate_flood` (seed 9 — benign CONTROL: dedup absorbs the
+  flood, decision byte-identical dedup on/off, so ClickHouse carries no fingerprint).
+  Deterministic LLM-free collectors (`agent/`, mirrors `accuracy/`: pure `collect.py`
+  + `readers.py` + `run_context.py`) build the full §4.2 `AttributionContext` from
+  ClickHouse only (N1): match rate (+ over time), per-campaign metrics, per-campaign
+  restatement deltas, window-edge lag distribution, shared-IP/ambiguous cluster stats,
+  RAW genre reach (co-view-adjusted factor stays deferred — BACKLOG 26). Context shape
+  FROZEN as the Phase-9 contract (`test_context_schema.py`). `make context` /
+  `make test-int-shared-ip`. Green: gate-0 tiny golden byte-identical; 139 offline +
+  lint; live `make eval`/`make context` on shared_ip_spike (caused_wrong_household=11,
+  ip_resolved_fraction 0.42 — the near-miss discriminator), `make test-int-shared-ip`
+  (2). Review gate (code-reviewer + functionality-tester + coherence-auditor;
+  security-reviewer not triggered — no CI/.env/compose/CH-user/LLM change) PENDING.
+  Spec: `specs/phase-8.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
