@@ -27,11 +27,20 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Full pipeline against the compose stack: seed → resolve → engine →
-      # ClickHouse, then the integration suite (FINAL-state + idempotency).
+      # Hot path against the compose stack: seed → resolve → engine → ClickHouse,
+      # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
+      # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
+      # reconciliation pass would over-credit tiny's long-tail organics and shift
+      # them.
       - run: make up
       - run: make seed PROFILE=tiny
-      - run: make run
+      - run: make run-hot
       - run: make test-int
+      # Reconciliation coverage: its rollup/restatement/RMT-supersession logic is
+      # live-only (no offline oracle), so it must run in CI. Its own clean
+      # long_delay stack (the target does down && up && seed && run), which tiny
+      # can't substitute — tiny has no caused hot-misses, so it can't test
+      # recovery at all. Costs a second stack cycle.
+      - run: make test-int-long-delay
       - if: always()
         run: make down

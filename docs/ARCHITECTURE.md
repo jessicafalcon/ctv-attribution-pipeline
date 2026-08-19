@@ -423,6 +423,25 @@ handled.*
   a `--` comment in `clickhouse/ddl.sql` split a statement into a comment-only
   chunk that ClickHouse rejects as an empty query; `clickhouse/apply.py` strips
   line comments before splitting on `;`.
+- **clickhouse-connect renders DateTime columns in the client's local timezone,
+  so a datetime read from ClickHouse and written back lands at a different
+  wall-clock across processes.** Reading `max(ingest_time)` into Python and
+  re-inserting it stamped the Phase-6 `report_snapshots.reported_at` 6h apart (the
+  local UTC offset) between the `make run` subprocess and an in-process caller —
+  so the "two snapshots per run" became four and the restatement's before/after
+  collapsed. Fix (Phase 6): the reconciliation job never round-trips a timestamp
+  through Python for storage — `reported_at` is computed **server-side** as
+  `max(ingest_time) + offset_ms` inside the INSERT, and `_max_ingest` reads an
+  **epoch-millis integer** (`toUnixTimestamp64Milli`, timezone-free) for the
+  `reconciled_at` version. The exposure is READ-side only: `client.insert` of a
+  timezone-aware UTC datetime (the producer emits `AwareDatetime` UTC, preserved
+  through the model) stores the correct instant regardless of client offset — the
+  engine's own `event_time`/`ingest_time`/`processed_at` are NOT shifted (verified:
+  `min(event_time)` in `exposures_landed` equals `sim_start`
+  `2026-08-01T00:00:00Z` exactly, `toStartOfHour` on the correct UTC axis). Rule:
+  when a stored timestamp must round-trip through Python for storage or
+  cross-process comparison, read it as `toUnixTimestamp64Milli` or compute it
+  server-side — never as a rendered DateTime.
 
 ---
 

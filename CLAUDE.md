@@ -82,9 +82,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/
-- `make run` — resolve stage + engine + reconciliation scheduler
+- `make run` — resolve stage + engine + reconciliation pass (a single pass, not a
+  daemon); the full pipeline over the seeded stream
+- `make run-hot` — resolve stage + engine only, no reconciliation; backs the
+  hot-path oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
+  reconciliation pass would over-credit long-tail organics and shift the pins
 - `make eval` — attribution precision/recall vs truth for the last profile
-- `make report` — 4 metrics (restatement view: Phase 6)
+- `make report` — 4 advertiser metrics per campaign, from the raw serving tables
+- `make restate` — restatement: each campaign's metric as reported
+  pre-reconciliation vs now (`report_snapshots` FINAL); run after `make run`
 - `make bench` — naive vs optimized: latency, rows read, bytes read
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
@@ -94,10 +100,18 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test-int-medium` — clean medium-only stack (make down && up && seed
   medium && run medium) → the Phase-5 live hardening proof; isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
+- `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
+  long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
+  for the same shared-conversion_id reason (DECISIONS Phase 5/6)
 - `make lint` — ruff via pre-commit
 
-Canonical clean-state demo:
-`make down && make up && make seed PROFILE=tiny && make run && make eval && make report`
+Canonical clean-state demos:
+- Hot-path headline (fast, stable pins — tiny has no caused hot-misses, so
+  `run-hot` avoids reconciliation over-crediting its organics):
+  `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
+- Reconciliation + restatement (where the long tail earns its keep — recall
+  0.587→0.973, ROAS restated up):
+  `make down && make up && make seed PROFILE=long_delay && make run && make eval && make report && make restate`
 
 ## Event model facts (from ARCHITECTURE.md; update if empirical findings differ)
 
@@ -338,8 +352,26 @@ never auto-fixed, ignored, or committed around.
   dedup suppressed 70; eviction fired), gate-0 tiny golden held byte-identical
   through the rewrite, live proof via isolated `make test-int-medium`. 103
   offline tests + 2 live; lint clean. Review gate passed (code-reviewer +
-  functionality-tester + coherence-auditor); follow-ups applied. Spec:
-  `specs/phase-5.md`.
+  functionality-tester + coherence-auditor); follow-ups applied. Merged (PR #7).
+- Phase 6 (2026-08-18): built on `phase-6-reconciliation` — reconciliation and
+  restatements. Periodic long-window (≤90d) matcher (`reconcile/`) recovers
+  hot-path misses (conversions whose causal exposure is >7d before them in
+  event-time — evicted from the hot window), reusing the pure `attribute_household`
+  leaf at 90d over models reconstructed from ClickHouse FINAL (serving-only, N1).
+  Candidates are hot-unattributed rows (`attributed=0 AND path='hot'`); corrected
+  rows carry `path=reconciled`, `processed_at = max(ingest_time over fixed state) +
+  1s` (> the hot version, stable across re-runs). `campaign_hourly` (versioned-
+  replace RMT, all keys recomputed per refresh), `report_snapshots` (per-campaign,
+  PRE filters `path='hot'` so the restatement is re-run-safe), `queries/
+  restatement.sql`. `make run` now resolve→engine→reconcile; `make run-hot`
+  (resolve→engine) backs the hot-path oracle suites (tiny golden/accuracy, medium
+  hardening) + CI, since reconcile would over-credit tiny/medium long-tail organics
+  and shift their pins. New `long_delay` profile (seed 6, delay straddles ≤7d and
+  (7d,90d]). Green: gate-0 tiny golden byte-identical; 113 offline + lint; live
+  tiny `make test-int` (5), medium `make test-int-medium` (2, run-hot), long_delay
+  `make test-int-long-delay` (3) — 32 candidates → 29 recovered, recall 0.587→0.973,
+  restatement shows all 3 campaigns' ROAS up. Review gate (code-reviewer +
+  functionality-tester + coherence-auditor) PENDING. Spec: `specs/phase-6.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
