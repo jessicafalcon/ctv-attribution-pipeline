@@ -25,7 +25,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from clickhouse_connect.driver.client import Client
-from prometheus_client import start_http_server
+from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
@@ -224,6 +224,12 @@ def run(client: Client | None = None) -> dict[str, int]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Phase-6 reconciliation pass")
     parser.add_argument("--metrics-port", type=int, default=None)
+    parser.add_argument(
+        "--metrics-out",
+        default=None,
+        help="dump this stage's terminal Prometheus registry to a textfile "
+        "(promtool-fixture provenance; see make metrics-capture)",
+    )
     args = parser.parse_args(argv)
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
@@ -233,6 +239,8 @@ def main(argv: list[str] | None = None) -> None:
         f"{counts['recovered']} recovered, {counts['still_missing']} still missing "
         f"(path=reconciled; report_snapshots pre/post written)"
     )
+    if args.metrics_out:
+        write_to_textfile(args.metrics_out, REGISTRY)
 
 
 if __name__ == "__main__":
