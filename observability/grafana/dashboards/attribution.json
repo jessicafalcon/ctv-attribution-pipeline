@@ -1,0 +1,117 @@
+{
+  "uid": "attribution-integrity",
+  "title": "Attribution Integrity",
+  "tags": ["attribution", "phase-7"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "",
+  "time": { "from": "now-6h", "to": "now" },
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Consumer lag (resolve input backlog)",
+      "description": "Batch proxy for consumer lag: messages the resolve consumer cleared at drain start. Alert ConsumerLag fires > 100.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 100 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "resolve_input_backlog", "datasource": { "type": "prometheus", "uid": "prometheus" } } ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Watermark lag (peak arrival lateness, s)",
+      "description": "Peak ingest-event lateness. Batch proxy for watermark stall; alert WatermarkStall fires > 14400s (4h).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 14400 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "engine_watermark_lag_seconds", "datasource": { "type": "prometheus", "uid": "prometheus" } } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Restatement (max |ΔROAS|)",
+      "description": "Largest per-campaign ROAS change between pre/post reconciliation snapshots. Alert RestatementMagnitude fires > 1.0.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "decimals": 2, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "refId": "A", "expr": "reconcile_restatement_roas_abs_delta", "datasource": { "type": "prometheus", "uid": "prometheus" } } ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Hot match rate",
+      "description": "engine_conversions_attributed / processed. Alert MatchRateOutOfBand fires outside [0.80, 0.98].",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 0.8 }, { "color": "red", "value": 0.98 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "engine_conversions_attributed_total / engine_conversions_processed_total", "datasource": { "type": "prometheus", "uid": "prometheus" } } ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Join state — current vs peak",
+      "description": "engine_join_state_current (post-eviction occupancy, rises AND falls) vs engine_join_state_size (monotone high-water peak).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "engine_join_state_current", "legendFormat": "current", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "engine_join_state_size", "legendFormat": "peak (high-water)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Reconciliation volume",
+      "description": "Candidates scanned, recovered over the long window, still missing.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "reconcile_candidates_total", "legendFormat": "candidates", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "reconcile_recovered_total", "legendFormat": "recovered", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "expr": "reconcile_still_missing_total", "legendFormat": "still missing", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Resolve — resolved / consumed / ambiguous",
+      "description": "Resolve stage throughput and shared-IP fan-out (ambiguous).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "resolve_conversions_consumed_total", "legendFormat": "consumed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "resolve_conversions_resolved_total", "legendFormat": "resolved", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "expr": "resolve_conversions_ambiguous_total", "legendFormat": "ambiguous", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Engine — dedup suppressed & exposures evicted",
+      "description": "Re-sends dropped by the seen-set, and exposures aged out of the hot window.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "engine_dedup_suppressed_total", "legendFormat": "dedup suppressed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "engine_exposures_evicted_total", "legendFormat": "exposures evicted", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    }
+  ]
+}
