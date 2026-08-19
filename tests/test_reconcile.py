@@ -105,6 +105,18 @@ def test_second_pass_is_a_no_op() -> None:
     assert [r.model_dump() for r in again] == [r.model_dump() for r in first]
 
 
+def test_observe_restatement_sets_the_gauge_once_per_pass() -> None:
+    # The gauge is overwritten each pass (not cumulative); the load-bearing SQL
+    # (_restatement_abs_delta) is proven live in tests/integration/test_reconcile.py
+    # and flows into the promtool fixture via make metrics-capture.
+    from reconcile import metrics
+
+    metrics.observe_restatement(1.25)
+    assert metrics.RESTATEMENT_ROAS_ABS_DELTA._value.get() == 1.25
+    metrics.observe_restatement(0.0)
+    assert metrics.RESTATEMENT_ROAS_ABS_DELTA._value.get() == 0.0
+
+
 def test_reconciled_at_is_strictly_after_the_base_by_the_delta() -> None:
     base = datetime(2026, 8, 15, 12, 0, 0, tzinfo=UTC)
     at = reconciled_at_for(base)

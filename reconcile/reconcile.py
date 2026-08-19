@@ -169,6 +169,21 @@ def _max_ingest(client: Client) -> datetime:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC)
 
 
+def _restatement_abs_delta(client: Client) -> float:
+    """Largest absolute per-campaign ROAS change between this pass's pre/post
+    snapshots: `max |roas_now − roas_as_reported|`. Same argMin/argMax-over-
+    reported_at collapse as queries/restatement.sql (the two reported_at values
+    this pass are pre offset 0 and post offset RECONCILE_DELTA_MS). NULL ROAS
+    (zero-spend campaigns) drop out of the max; no campaigns → 0.0. Backs the
+    RestatementMagnitude alert."""
+    rows = client.query(
+        "select coalesce(max(abs(d)), 0) from ("
+        "select argMax(roas, reported_at) - argMin(roas, reported_at) as d "
+        "from report_snapshots final group by campaign_id, period)"
+    ).result_rows
+    return float(rows[0][0])
+
+
 def run(client: Client | None = None) -> dict[str, int]:
     """One reconciliation pass: snapshot the pre-reconciliation report, recover
     the hot misses over the long window, then refresh the rollup and snapshot the
@@ -198,6 +213,7 @@ def run(client: Client | None = None) -> dict[str, int]:
     metrics.CANDIDATES.inc(len(candidates))
     metrics.RECOVERED.inc(len(recovered))
     metrics.STILL_MISSING.inc(still_missing)
+    metrics.observe_restatement(_restatement_abs_delta(client))
     return {
         "candidates": len(candidates),
         "recovered": len(recovered),
