@@ -91,7 +91,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
 - `make restate` — restatement: each campaign's metric as reported
   pre-reconciliation vs now (`report_snapshots` FINAL); run after `make run`
-- `make bench` — naive vs optimized: latency, rows read, bytes read
+- `make bench` — naive (full FINAL scan-and-join) vs optimized (`campaign_hourly`
+  rollup): latency, rows read, bytes read; asserts identical metric rows. Run after
+  `make run` populated the rollup
+- `make metrics-capture PROFILE=<p>` — dump each stage's terminal Prometheus
+  registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
+  promtool alert fixtures; live-stack, run after `make up && make seed`)
+- `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
+  prometheus image: the four alert rules fire on long_delay's captured values,
+  silent on tiny's (offline; needs the image, not the compose stack)
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
@@ -370,8 +378,26 @@ never auto-fixed, ignored, or committed around.
   (7d,90d]). Green: gate-0 tiny golden byte-identical; 113 offline + lint; live
   tiny `make test-int` (5), medium `make test-int-medium` (2, run-hot), long_delay
   `make test-int-long-delay` (3) — 32 candidates → 29 recovered, recall 0.587→0.973,
-  restatement shows all 3 campaigns' ROAS up. Review gate (code-reviewer +
-  functionality-tester + coherence-auditor) PENDING. Spec: `specs/phase-6.md`.
+  restatement shows all 3 campaigns' ROAS up. Review gate passed; merged (PR #8).
+  Spec: `specs/phase-6.md`.
+- Phase 7 (2026-08-19): built on `phase-7-benchmark-observability` — benchmark +
+  observability (CHECKPOINT). Four new metrics (each unit-tested): `resolve_input_backlog`
+  (batch consumer-lag proxy), `engine_watermark_lag_seconds` (peak arrival lateness,
+  computed engine-side so the pure core stays untouched), `engine_join_state_current`
+  (post-eviction occupancy, rises AND falls — closes BACKLOG 25), and
+  `reconcile_restatement_roas_abs_delta`. `make bench`: naive full FINAL scan-and-join
+  vs `campaign_hourly` rollup, reporting latency/rows/bytes from `X-ClickHouse-Summary`,
+  asserting identical metric rows (6 dp); long_delay = rollup reads 2.5× fewer rows,
+  1.6× fewer bytes, 2.6× faster (RESULTS.md). Four alert rules (ConsumerLag,
+  WatermarkStall, MatchRateOutOfBand, RestatementMagnitude) proven by `make test-alerts`
+  (promtool from the digest-pinned image) against REAL captured values — `--metrics-out`
+  dumps each stage's own registry, `make metrics-capture` orchestrates a live run,
+  `observability/gen_alert_fixtures.py` bakes the numbers into the fixture (fires on
+  long_delay, silent on tiny). Grafana "Attribution Integrity" dashboard (JSON, file
+  provider). Green: gate-0 tiny golden byte-identical; 118 offline + lint; bench +
+  test-alerts live-green; Grafana provisions. Review gate (code-reviewer +
+  security-reviewer + functionality-tester + coherence-auditor) PENDING. Spec:
+  `specs/phase-7.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
