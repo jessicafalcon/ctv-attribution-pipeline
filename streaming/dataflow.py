@@ -179,6 +179,17 @@ def run_engine(broker: str) -> dict[str, int]:
     else:
         exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
     metrics.DEDUP_SUPPRESSED.inc(suppressed)
+    # Peak arrival lateness over the processed events (engine-side, so the pure
+    # core stays a function of (events, window) only — BACKLOG 24). Dedup drops
+    # only timestamp-identical re-sends, so the peak is the same pre/post dedup.
+    peak_lateness = max(
+        (
+            (e.ingest_time - e.event_time).total_seconds()
+            for e in (*exposures, *resolved)
+        ),
+        default=0.0,
+    )
+    metrics.observe_watermark_lag(peak_lateness)
     run_main(
         build_flow(
             exposures,
