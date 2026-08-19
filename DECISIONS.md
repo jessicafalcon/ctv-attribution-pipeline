@@ -485,9 +485,14 @@ One entry per non-obvious choice. Newest last.
   offset 0 for the pre/hot pass, `RECONCILE_DELTA_MS` for the post pass), and
   `_max_ingest` reads a timezone-free **epoch-millis integer**
   (`toUnixTimestamp64Milli`) rebuilt as UTC for the `reconciled_at` version.
-  `processed_at` supersession stays correct because reconciled and hot rows are
-  both written via the same `client.insert` path, so the shift is identical and
-  the ordering (`reconciled_at > every hot ingest_time`) is preserved.
+  `processed_at` supersession is correct on any machine because BOTH reconciled and
+  hot rows are timezone-aware UTC written via `client.insert`, which stores the
+  true UTC instant with **no shift** (verified — the engine's `event_time` lands
+  exactly on `sim_start`); `reconciled_at = base + Δ > every hot ingest_time ≤ base`
+  regardless of client timezone. (Rejected the earlier "same insert path, shift
+  cancels" framing — there is no write-side shift to cancel; only reading a stored
+  DateTime back into Python localizes it, which is why the read path uses epoch/
+  server-side. The write path is tz-safe.)
 
 - **`campaign_hourly` is a versioned-replace ReplacingMergeTree, not a TRUNCATE
   or a summing MV.** Each refresh recomputes ALL `(campaign_id, hour)` keys from
@@ -548,7 +553,12 @@ One entry per non-obvious choice. Newest last.
   existing readers there return tuples/dicts, and `reconcile/` is the stage that
   owns its schemas. (b) The rollup/snapshot/restatement correctness is inherently
   ClickHouse behavior (versioned-replace collapse, FINAL), so it is proven in the
-  live `tests/integration/test_reconcile.py`, and the offline `tests/test_reconcile
-  .py` covers the pure matcher + `reconciled_at` derivation — rather than a
-  services-free `test_rollup_snapshot.py`, which would have to re-implement the SQL
-  in Python (a second implementation, against the shared-core rule).
+  live `tests/integration/test_reconcile.py` — the restatement asserts
+  `report_snapshots`, AND a `campaign_hourly` assertion pins the versioned-replace
+  invariant directly (one FINAL row per `(campaign_id, hour)`, values = the latest
+  recompute) — with the offline `tests/test_reconcile.py` covering the pure matcher
+  + `reconciled_at` derivation. Chosen over a services-free `test_rollup_snapshot.py`,
+  which would have to re-implement the SQL in Python (a second implementation,
+  against the shared-core rule). (Review-gate follow-up: an earlier draft of this
+  note claimed the rollup was "proven live" before any `campaign_hourly` assertion
+  existed — overstated; the assertion was added to make it true.)

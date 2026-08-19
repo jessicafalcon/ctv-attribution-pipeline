@@ -433,10 +433,15 @@ handled.*
   through Python for storage — `reported_at` is computed **server-side** as
   `max(ingest_time) + offset_ms` inside the INSERT, and `_max_ingest` reads an
   **epoch-millis integer** (`toUnixTimestamp64Milli`, timezone-free) for the
-  `reconciled_at` version. Broader note: the engine's own `event_time` /
-  `ingest_time` / `processed_at` values carry the same local-offset shift on write
-  (pre-existing, Phase 3) — harmless because every check compares decisions and
-  relative ordering, never an absolute wall-clock, but see BACKLOG.
+  `reconciled_at` version. The exposure is READ-side only: `client.insert` of a
+  timezone-aware UTC datetime (the producer emits `AwareDatetime` UTC, preserved
+  through the model) stores the correct instant regardless of client offset — the
+  engine's own `event_time`/`ingest_time`/`processed_at` are NOT shifted (verified:
+  `min(event_time)` in `exposures_landed` equals `sim_start`
+  `2026-08-01T00:00:00Z` exactly, `toStartOfHour` on the correct UTC axis). Rule:
+  when a stored timestamp must round-trip through Python for storage or
+  cross-process comparison, read it as `toUnixTimestamp64Milli` or compute it
+  server-side — never as a rendered DateTime.
 
 ---
 

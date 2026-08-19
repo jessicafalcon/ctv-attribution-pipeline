@@ -154,9 +154,12 @@ Constraints:
   pre-reconciliation baseline** to read against. After generating, inspect the
   split; if the hot share is trivial, pull the max **down** (~20–30d gives a
   healthier mix), then pin. This is why the range starts at ~30d, not 60d.
-- Not a fault profile: keep `shared_ip_fraction` / `unknown_device_fraction`
-  modest (medium-like, `0.1`), so the recovered conversions are clean household
-  matches, not shared-IP wrong-household noise (that is Phase 8).
+- Not a fault profile: keep the noise knobs medium-like — `shared_ip_fraction`
+  `0.2`, `unknown_device_fraction` `0.1` (matching `medium.json`) — so the
+  recovered conversions are mostly clean household matches, not a shared-IP
+  wrong-household spike (that is Phase 8). (Note: `shared_ip 0.2` still yields the
+  2 residual wrong-household hot attributions that cap `long_delay` recall at
+  73/75 — DECISIONS Phase 6.)
 - Event-time span and other knobs sized so both paths are non-trivially
   populated (enough hot-attributed AND enough recovered). Late-injector may stay
   small — arrival lateness is not what creates candidates here.

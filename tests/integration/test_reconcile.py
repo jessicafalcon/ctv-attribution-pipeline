@@ -141,3 +141,71 @@ def test_second_pass_is_idempotent() -> None:
 
     assert _reconciled_count() == _RECONCILED
     assert restatement.run() == before_restate
+
+
+def _hot_attributed_rows() -> dict[str, tuple]:
+    """The full identity of every hot-ATTRIBUTED row (attributed=1, path='hot')."""
+    rows = (
+        connect()
+        .query(
+            "select conversion_id, exposure_id, path, toString(processed_at), assists "
+            "from attributed_conversions final where attributed = 1 and path = 'hot' "
+            "order by conversion_id"
+        )
+        .result_rows
+    )
+    return {r[0]: (r[1], r[2], r[3], tuple(r[4])) for r in rows}
+
+
+def test_hot_attributed_rows_are_untouched_by_a_pass() -> None:
+    # The candidate WHERE (`attributed = 0 and path = 'hot'`) must never re-open a
+    # hot-ATTRIBUTED row — re-attributing it over 90d picks the same last-touch but
+    # would flip its path hot→reconciled for no change. Assert the hot-attributed
+    # set is byte-identical across a pass (the direct guard the spec asked for; the
+    # idempotence test covers it only indirectly via candidates==3).
+    before = _hot_attributed_rows()
+    assert len(before) == _HOT_CREDITED  # 83 hot-attributed rows
+    reconcile.run(connect())
+    assert _hot_attributed_rows() == before
+
+
+def test_campaign_hourly_is_versioned_replace_not_summed() -> None:
+    # The rollup is a versioned-replace RMT: each refresh rewrites ALL keys with a
+    # higher reported_at, so FINAL holds exactly one row per (campaign_id, hour) —
+    # never a sum of successive refreshes (which an insert-triggered summing MV
+    # would produce and a correction would double-count).
+    client = connect()
+    dupes = client.query(
+        "select campaign_id, hour, count() as n from campaign_hourly final "
+        "group by campaign_id, hour having n > 1"
+    ).result_rows
+    assert dupes == []
+
+    # And the recompute is correct: campaign_hourly summed over hours equals the
+    # current (post-reconciliation) credited conversions computed directly from
+    # FINAL — so the refresh regrouped without dropping or double-counting.
+    rollup = client.query(
+        "select campaign_id, sum(attributed_conversions) "
+        "from campaign_hourly final group by campaign_id order by campaign_id"
+    ).result_rows
+    direct = client.query(
+        "select e.campaign_id, count() from attributed_conversions a final "
+        "inner join (select exposure_id, campaign_id from exposures_landed final) e "
+        "on a.exposure_id = e.exposure_id "
+        "where a.attributed = 1 group by e.campaign_id order by e.campaign_id"
+    ).result_rows
+    assert {r[0]: r[1] for r in rollup} == {r[0]: r[1] for r in direct}
+
+
+def test_snapshot_period_is_the_fixed_sentinel() -> None:
+    # `period` is a fixed sentinel this phase (campaign-total grain); day-grain
+    # slots in later without a schema change (BACKLOG / agent phase).
+    from reconcile.rollup import PERIOD
+
+    periods = {
+        r[0]
+        for r in connect()
+        .query("select distinct period from report_snapshots final")
+        .result_rows
+    }
+    assert periods == {PERIOD}

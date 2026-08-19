@@ -16,5 +16,10 @@ select
     argMax(conversions, reported_at) as conversions_now,
     round(argMax(revenue, reported_at) - argMin(revenue, reported_at), 2) as revenue_delta
 from report_snapshots final
-group by campaign_id
+-- group by (campaign_id, period): period is the fixed 'all' sentinel this phase,
+-- so one row per campaign now; naming it here keeps the diff per-period once
+-- day-grain periods land, instead of silently collapsing across them.
+group by
+    campaign_id,
+    period
 order by campaign_id

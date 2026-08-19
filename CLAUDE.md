@@ -82,9 +82,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/
-- `make run` — resolve stage + engine + reconciliation scheduler
+- `make run` — resolve stage + engine + reconciliation pass (a single pass, not a
+  daemon); the full pipeline over the seeded stream
+- `make run-hot` — resolve stage + engine only, no reconciliation; backs the
+  hot-path oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
+  reconciliation pass would over-credit long-tail organics and shift the pins
 - `make eval` — attribution precision/recall vs truth for the last profile
-- `make report` — 4 metrics (restatement view: Phase 6)
+- `make report` — 4 advertiser metrics per campaign, from the raw serving tables
+- `make restate` — restatement: each campaign's metric as reported
+  pre-reconciliation vs now (`report_snapshots` FINAL); run after `make run`
 - `make bench` — naive vs optimized: latency, rows read, bytes read
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
@@ -94,6 +100,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test-int-medium` — clean medium-only stack (make down && up && seed
   medium && run medium) → the Phase-5 live hardening proof; isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
+- `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
+  long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
+  for the same shared-conversion_id reason (DECISIONS Phase 5/6)
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
