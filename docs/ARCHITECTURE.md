@@ -319,10 +319,15 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
   quality; household grain isolates the real failure mode, wrong-household
   (shared-IP) attribution. Exact-exposure-id match MAY be reported as a labeled
   diagnostic, never as the headline accuracy.
-- **Agent accuracy**: fault profiles (shared-IP spike, late burst, co-view
-  multiplier bug, duplicate flood, real performance lift) plus a **no-fault
-  baseline**, each run repeatedly, producing a *fault → top hypothesis → correct?*
-  table with a **false-positive rate**.
+- **Agent accuracy**: diagnosable fault profiles (shared-IP spike, late burst,
+  co-view multiplier bug, real performance lift), each scored on whether the
+  agent's top hypothesis is correct, plus **two controls the agent must correctly
+  leave alone** — a **no-fault baseline** and **duplicate_flood** (dedup absorbs it;
+  ClickHouse carries no fingerprint, so the correct output is no-fault) — each run
+  repeatedly, producing a *fault → top hypothesis → correct?* table with a
+  **false-positive rate** measured on the controls. (Co-view inflation is
+  diagnosable only once the adjusted co-view factor lands — Phase 10, §3.3
+  read-time factor; raw per-genre reach does not discriminate it, see BACKLOG.)
 - **The near-miss pair**: a genuine performance improvement vs. an inflated match
   rate from shared-IP false positives both raise reported ROAS but demand opposite
   responses. Showing the agent tell them apart on the evidence proves real
@@ -442,6 +447,16 @@ handled.*
   when a stored timestamp must round-trip through Python for storage or
   cross-process comparison, read it as `toUnixTimestamp64Milli` or compute it
   server-side — never as a rendered DateTime.
+- **A ClickHouse aggregate aliased to a filtered column name raises
+  ILLEGAL_AGGREGATION.** `select count() as attributed ... where attributed = 1`
+  fails with code 184: ClickHouse binds the `attributed` in `WHERE` (and inside
+  `countIf(attributed = 1)`) to the SELECT alias — the `count()` aggregate — rather
+  than the table column, and an aggregate in a filter is illegal. Observed while
+  authoring the Phase-8 collector reads (`agent/readers.py`). Fix: alias aggregates
+  to names that don't collide with any filtered column (`attributed_count`,
+  `ambiguous_count`); consumers that unpack rows positionally don't care about the
+  name. Same class as the ORDER BY/GROUP BY alias-vs-column ambiguities — when an
+  alias shares a column's name, the filter is the surprising place it bites.
 
 ---
 

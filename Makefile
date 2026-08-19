@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot eval report restate bench metrics-capture test-alerts test test-int test-int-medium test-int-long-delay lint
+.PHONY: setup up down seed resolve run run-hot eval report restate bench context metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -82,6 +82,13 @@ report:
 restate:
 	uv run python -m queries.restatement
 
+# Build and print the typed AttributionContext (ARCHITECTURE §4.2) from ClickHouse
+# — the deterministic, LLM-free observe step (Phase 8). Reading it back proves it
+# is populated and pydantic-valid. Serving layer only (N1); the causal side file is
+# never read. Run after `make run`. The agent loop that reasons over it is Phase 9.
+context:
+	uv run python -m agent.run_context --profile "$(PROFILE)"
+
 # Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
 # would probe services before skipping) from making any network attempt.
 test:
@@ -95,7 +102,8 @@ test:
 test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
-		--ignore=tests/integration/test_reconcile.py
+		--ignore=tests/integration/test_reconcile.py \
+		--ignore=tests/integration/test_context.py
 
 # Feature-5 live medium hardening proof on a CLEAN medium-only stack, isolated by
 # the sanctioned `make down` (not a per-test TRUNCATE). Asserts Done-when clauses
@@ -121,6 +129,19 @@ test-int-long-delay:
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
 	uv run pytest tests/integration/test_reconcile.py
+
+# Phase-8 live fault-harness proof on a CLEAN shared_ip_spike-only stack, isolated
+# by the sanctioned `make down` (profiles share conversion_id space; DECISIONS
+# Phase 5). `make run` (resolve → engine → reconcile) so report_snapshots exists
+# for the context's restatement field; shared_ip_spike keeps delays in the hot
+# window, so reconciliation only touches organics and the caused-side pins hold.
+# Asserts the shared-IP fault is observed live (Row 20) + the context is populated.
+test-int-shared-ip:
+	$(MAKE) down
+	$(MAKE) up
+	$(MAKE) seed PROFILE=shared_ip_spike
+	$(MAKE) run PROFILE=shared_ip_spike
+	uv run pytest tests/integration/test_context.py
 
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
