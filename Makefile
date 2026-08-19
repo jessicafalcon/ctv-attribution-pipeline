@@ -1,9 +1,13 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot eval report restate test test-int test-int-medium test-int-long-delay lint
+.PHONY: setup up down seed resolve run run-hot eval report restate bench metrics-capture test-alerts test test-int test-int-medium test-int-long-delay lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
+
+# Digest-pinned prometheus image (must match docker-compose.yml) — promtool ships
+# inside it, so the alert-rule tests need no new dependency and no floating tag.
+PROM_IMAGE = prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
 
 setup:
 	uv sync
@@ -41,6 +45,27 @@ run:
 run-hot:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
+
+# Naive-vs-optimized reporting benchmark: the same four-metric question run as a
+# full FINAL scan of the raw serving tables (report.sql) vs the pre-aggregated
+# campaign_hourly rollup (bench.sql). Prints latency, rows read, bytes read for
+# each. Run after `make run` populated the rollup (e.g. seed long_delay && run).
+bench:
+	uv run python -m queries.bench
+
+# Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
+# textfiles under data/out/<profile>/metrics/. This is the provenance of the
+# promtool alert fixtures (observability/gen_alert_fixtures.py bakes these into
+# observability/rules/tests/alerts_test.yml): the threshold-crossing numbers come
+# from a real stage run, never hand-authored.
+# Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
+# needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
+# FINAL, so these two are not producible service-free — like test-int-long-delay.
+metrics-capture:
+	mkdir -p data/out/$(PROFILE)/metrics
+	uv run python -m resolve.stage --metrics-out data/out/$(PROFILE)/metrics/resolve.prom
+	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
+	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 
 # Attribution accuracy (household grain) vs the truth side file, for the last
 # seeded profile. Reads attributed_conversions FINAL from ClickHouse; truth
@@ -96,6 +121,15 @@ test-int-long-delay:
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
 	uv run pytest tests/integration/test_reconcile.py
+
+# Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
+# from the digest-pinned prometheus image, never a floating tag). `check rules`
+# validates syntax; `test rules` asserts each alert fires on long_delay's captured
+# numbers and stays silent on tiny's (observability/rules/tests/alerts_test.yml,
+# generated from make metrics-capture). Needs only the image, not the compose stack.
+test-alerts:
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
 
 lint:
 	uv run pre-commit run --all-files

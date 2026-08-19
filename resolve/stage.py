@@ -23,7 +23,7 @@ import os
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka import Producer as KafkaProducer
 from confluent_kafka.admin import AdminClient, NewTopic
-from prometheus_client import start_http_server
+from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from common.kafka import drain
 from producer.models import Conversion, Household, ResolvedConversion
@@ -94,7 +94,11 @@ def run_batch(
     )
     consumed = emitted = 0
     try:
-        for value in drain(consumer, "conversions"):
+        values = drain(consumer, "conversions")
+        # Backlog the consumer started behind by: the whole topic, since we assign
+        # from OFFSET_BEGINNING each pass (batch proxy for consumer lag).
+        metrics.observe_backlog(len(values))
+        for value in values:
             conv = Conversion.model_validate_json(value)
             resolved = resolve_one(conv, index)
             metrics.observe(resolved)
@@ -122,6 +126,12 @@ def run_batch(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metrics-port", type=int, default=None)
+    parser.add_argument(
+        "--metrics-out",
+        default=None,
+        help="dump this stage's terminal Prometheus registry to a textfile "
+        "(promtool-fixture provenance; see make metrics-capture)",
+    )
     args = parser.parse_args(argv)
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     registry = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
@@ -130,6 +140,8 @@ def main(argv: list[str] | None = None) -> None:
         start_http_server(args.metrics_port, addr="127.0.0.1")
     consumed, emitted = run_batch(broker, registry)
     print(f"resolve: consumed {consumed} conversions → emitted {emitted} records")
+    if args.metrics_out:
+        write_to_textfile(args.metrics_out, REGISTRY)
 
 
 if __name__ == "__main__":

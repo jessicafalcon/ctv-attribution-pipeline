@@ -8,11 +8,19 @@ policy: anything computable is computed, never sampled). Derived signals:
   fan-out factor = records_emitted / resolved
 """
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 from producer.models import ResolvedConversion
 
 CONSUMED = Counter("resolve_conversions_consumed_total", "Conversion rows consumed.")
+INPUT_BACKLOG = Gauge(
+    "resolve_input_backlog",
+    "Messages the resolve consumer must clear from `conversions` at drain start "
+    "(offset 0 → end-of-log). BATCH PROXY for consumer lag: the stage reads from "
+    "OFFSET_BEGINNING every pass with no committed group offsets (BACKLOG 19), so "
+    "this is the topic backlog ≈ f(volume), not live consumer-group lag. Set once "
+    "per run (the backlog the consumer started behind by).",
+)
 RESOLVED = Counter(
     "resolve_conversions_resolved_total",
     "Conversions that resolved to at least one household.",
@@ -30,6 +38,11 @@ EMITTED = Counter(
     "Resolved records produced (fan-out means > 1 per conversion).",
     ["resolution"],
 )
+
+
+def observe_backlog(n: int) -> None:
+    """Record the input backlog the consumer faced at drain start (once per run)."""
+    INPUT_BACKLOG.set(n)
 
 
 def observe(resolved: list[ResolvedConversion]) -> None:

@@ -6,7 +6,14 @@ alerting:
     - static_configs:
         - targets: ["alertmanager:9093"]
 
-# Alert rule files arrive in Phase 7 (observability/rules/).
+# Phase-7 alert rules (observability/rules/alerts.yml, mounted at /etc/prometheus/
+# rules). Non-recursive glob, so the promtool test fixture under rules/tests/ is
+# NOT loaded as a rule file. The batch stages aren't scraped live (they exit
+# before a scrape), so these rules load and validate but fire only under the
+# deferred live-push path (BACKLOG); they are proven by `make test-alerts`.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

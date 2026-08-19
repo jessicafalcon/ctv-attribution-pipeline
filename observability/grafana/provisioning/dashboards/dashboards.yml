@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# File provider: Grafana loads every dashboard JSON under `options.path` (mounted
+# from observability/grafana/dashboards). Kept separate from this provider file so
+# Grafana never tries to parse the provider yaml as a dashboard.
+providers:
+  - name: attribution
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

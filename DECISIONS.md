@@ -562,3 +562,65 @@ One entry per non-obvious choice. Newest last.
   against the shared-core rule). (Review-gate follow-up: an earlier draft of this
   note claimed the rollup was "proven live" before any `campaign_hourly` assertion
   existed — overstated; the assertion was added to make it true.)
+
+## Phase 7
+
+- **Alerts proven by `promtool test rules`, not a live scrape — but from REAL
+  captured registries.** The batch stages exit before a 15s scrape, so a live
+  Prometheus alert can't fire without continuous-follow infra (deferred). Instead
+  each stage dumps its own terminal registry (`--metrics-out` →
+  `write_to_textfile`), `make metrics-capture` orchestrates a real knobbed run, and
+  `observability/gen_alert_fixtures.py` bakes those real numbers into the promtool
+  fixture. The threshold-crossing value comes from a real stage run; only the
+  live-scrape hop is simulated. Rejected: recomputing metrics through the offline
+  oracle (circular — the fixture would reflect the generator's arithmetic, not the
+  stage's) and a Pushgateway/textfile live path (a new service; it's the deferred
+  path, BACKLOG). Chosen because it adds no service, stays deterministic, and is the
+  honest proof for the two time-based alerts.
+- **"Consumer lag" is `resolve_input_backlog` — a batch proxy, not group lag.** The
+  stages read from `OFFSET_BEGINNING` every pass with no committed group offsets
+  (BACKLOG 19), so redpanda consumer-group lag isn't tracked. The honest batch
+  analog is the backlog the consumer clears at drain start (≈ topic size ≈
+  f(volume)). It satisfies "triggerable by a knob" (volume), but it trips whenever
+  volume crosses the threshold, not when a consumer genuinely falls behind — owned
+  as a proxy, not oversold. True group-lag is the continuous-follow metric.
+- **`WatermarkStall` is a peak-lateness proxy, not a true stall (fix #3).** PHASES.md
+  says "watermark stall"; `engine_watermark_lag_seconds` measures peak
+  `ingest−event` arrival lateness. A true stall is a watermark failing to advance
+  over wall-time — and a batch drain has no advancing watermark to stall. The alert
+  keeps the spec's name; the metric is the batch proxy (large lateness is what
+  pushes conversions past the hot window into state-misses). True stall detection is
+  a continuous-mode signal, deferred. Surfaced per STOP-on-spec-mismatch, not
+  silently relabeled.
+- **`engine_watermark_lag_seconds` computed engine-side, not in the pure core.** The
+  peak-lateness scan lives in `run_engine` (`streaming/dataflow.py`), so the pure
+  `attribute_household_streaming` stays a function of `(events, window,
+  allowed_lateness)` only — the invariant that keeps the engine and the offline
+  oracle byte-identical (BACKLOG 24). Same for why the restatement delta is computed
+  in `reconcile.run` from `report_snapshots`, not in a leaf.
+- **`engine_join_state_current` added alongside the monotone peak (BACKLOG 25).**
+  `engine_join_state_size` is a high-water peak that only climbs; a dashboard wants a
+  gauge that rises AND falls. `join_state_current` is set per household to its
+  post-eviction retained count, so it varies across the run; under continuous follow
+  it would rise and fall within a household too. Both are kept — peak is the scaling
+  high-water, current is the live occupancy.
+- **Bench measures via `X-ClickHouse-Summary`, equality asserted rounded to 6 dp
+  (fix #2).** `clickhouse-connect`'s `QueryResult.summary` gives deterministic,
+  cache-independent `read_rows`/`read_bytes` — the honest structural signal (latency
+  at profile scale is noisy). The naive query answers the same question as the
+  optimized one (verified: `campaign_hourly` refresh uses `report.sql`'s exact
+  definitions), but sum-of-hourly-sums vs a single sum differ at ulp scale, so raw
+  float `==` would flake — compare rounded. The profile was not tuned to force an
+  optimized win; RESULTS.md reports the measured deltas and SCALING.md carries the
+  volume story.
+- **Alert rules carry no annotations yet.** promtool matches annotations exactly, and
+  templated `{{ $value }}` annotations are brittle to pin across Python/Go float
+  formatting. Annotations only surface in an Alertmanager notification, and live
+  firing is the deferred push path — so the descriptive text lives in rule comments
+  now, and annotations (with rendering) land with the live path. Keeps the fixture
+  robust and drift-free.
+- **Grafana dashboards committed as correct JSON, not a live render.** The batch
+  stages aren't scraped, so panels populate only under the deferred push path. The
+  dashboard carries correct queries against the real metric names and provisions
+  cleanly (verified: Grafana loads "Attribution Integrity"); a live screenshot needs
+  the deferred path. Not oversold as a live dashboard.

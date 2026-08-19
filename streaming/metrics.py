@@ -51,6 +51,23 @@ JOIN_STATE_SIZE = Gauge(
     "central scaling constraint). High-water mark across households; eviction is "
     "what keeps it bounded below the full exposure count.",
 )
+JOIN_STATE_CURRENT = Gauge(
+    "engine_join_state_current",
+    "Current hot-window occupancy: exposures retained in a household's join state "
+    "at end-of-input (post-eviction). Set per household as the engine processes "
+    "them, so unlike the monotone high-water engine_join_state_size it rises AND "
+    "falls across the run; under continuous follow it would rise and fall over "
+    "time within a household too (BACKLOG 25).",
+)
+WATERMARK_LAG = Gauge(
+    "engine_watermark_lag_seconds",
+    "Peak arrival lateness (ingest_time − event_time) over the events processed "
+    "this run, in seconds. BATCH PROXY for watermark stall: a true stall is a "
+    "watermark failing to advance over wall-time (a continuous-mode signal, and a "
+    "batch drain has no advancing watermark to stall — DECISIONS Phase 7). Large "
+    "peak lateness is what the late-arrival injector produces and what pushes a "
+    "conversion past the hot window into a state-miss. Set once per run.",
+)
 
 
 def observe(row: AttributedConversion, candidate_count: int) -> None:
@@ -69,17 +86,26 @@ _join_state_peak = 0  # high-water across households; the gauge only climbs
 
 
 def observe_state(state: StreamState) -> None:
-    """One household's join-state summary: add its evictions to the counter and
-    raise the peak high-water gauge. The peak is tracked in a module variable
-    (not read back off the Prometheus gauge, whose getter is a private API)."""
+    """One household's join-state summary: add its evictions to the counter, raise
+    the peak high-water gauge, and set the current-occupancy gauge to this
+    household's retained (post-eviction) count. The peak is tracked in a module
+    variable (not read back off the Prometheus gauge, whose getter is a private
+    API); the current gauge is overwritten each household, so it rises and falls."""
     global _join_state_peak
     EXPOSURES_EVICTED.inc(state.evicted)
     _join_state_peak = max(_join_state_peak, state.peak)
     JOIN_STATE_SIZE.set(_join_state_peak)
+    JOIN_STATE_CURRENT.set(state.final)
+
+
+def observe_watermark_lag(seconds: float) -> None:
+    """Record the peak arrival lateness the engine saw this run (once per run)."""
+    WATERMARK_LAG.set(seconds)
 
 
 def reset_join_state_peak() -> None:
-    """Reset the high-water tracker and its gauge (used by tests between runs)."""
+    """Reset the high-water tracker and both join-state gauges (tests between runs)."""
     global _join_state_peak
     _join_state_peak = 0
     JOIN_STATE_SIZE.set(0)
+    JOIN_STATE_CURRENT.set(0)

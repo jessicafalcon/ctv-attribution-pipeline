@@ -33,6 +33,12 @@ jobs:
       # reconciliation pass would over-credit tiny's long-tail organics and shift
       # them.
       - run: make up
+      # Alert-rule guard (offline w.r.t. the stack — needs only the digest-pinned
+      # prometheus image, already pulled by `make up`): promtool check rules +
+      # test rules assert the four alerts still fire on the real captured metric
+      # values. This is what catches a metric rename or rule edit silently breaking
+      # the fixture — the guard that keeps Gate 2 honest.
+      - run: make test-alerts
       - run: make seed PROFILE=tiny
       - run: make run-hot
       - run: make test-int
@@ -42,5 +48,13 @@ jobs:
       # can't substitute — tiny has no caused hot-misses, so it can't test
       # recovery at all. Costs a second stack cycle.
       - run: make test-int-long-delay
+      # Benchmark equality guard: test-int-long-delay above leaves a populated
+      # campaign_hourly on a long_delay stack, so `make bench` runs for free here
+      # and asserts the optimized rollup still returns the same metric rows as the
+      # naive scan — catching a refresh-semantics drift. NOTE: equality is verified
+      # on long_delay's data specifically, not proven structurally for all profiles
+      # (BACKLOG: verify before reusing bench on another profile, e.g. Phase-8
+      # shared-IP). Latency in CI is noise; the equality assertion is the guard.
+      - run: make bench
       - if: always()
         run: make down

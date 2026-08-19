@@ -25,7 +25,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from clickhouse_connect.driver.client import Client
-from prometheus_client import start_http_server
+from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
@@ -169,6 +169,21 @@ def _max_ingest(client: Client) -> datetime:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC)
 
 
+def _restatement_abs_delta(client: Client) -> float:
+    """Largest absolute per-campaign ROAS change between this pass's pre/post
+    snapshots: `max |roas_now − roas_as_reported|`. Same argMin/argMax-over-
+    reported_at collapse as queries/restatement.sql (the two reported_at values
+    this pass are pre offset 0 and post offset RECONCILE_DELTA_MS). NULL ROAS
+    (zero-spend campaigns) drop out of the max; no campaigns → 0.0. Backs the
+    RestatementMagnitude alert."""
+    rows = client.query(
+        "select coalesce(max(abs(d)), 0) from ("
+        "select argMax(roas, reported_at) - argMin(roas, reported_at) as d "
+        "from report_snapshots final group by campaign_id, period)"
+    ).result_rows
+    return float(rows[0][0])
+
+
 def run(client: Client | None = None) -> dict[str, int]:
     """One reconciliation pass: snapshot the pre-reconciliation report, recover
     the hot misses over the long window, then refresh the rollup and snapshot the
@@ -198,6 +213,7 @@ def run(client: Client | None = None) -> dict[str, int]:
     metrics.CANDIDATES.inc(len(candidates))
     metrics.RECOVERED.inc(len(recovered))
     metrics.STILL_MISSING.inc(still_missing)
+    metrics.observe_restatement(_restatement_abs_delta(client))
     return {
         "candidates": len(candidates),
         "recovered": len(recovered),
@@ -208,6 +224,12 @@ def run(client: Client | None = None) -> dict[str, int]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Phase-6 reconciliation pass")
     parser.add_argument("--metrics-port", type=int, default=None)
+    parser.add_argument(
+        "--metrics-out",
+        default=None,
+        help="dump this stage's terminal Prometheus registry to a textfile "
+        "(promtool-fixture provenance; see make metrics-capture)",
+    )
     args = parser.parse_args(argv)
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
@@ -217,6 +239,8 @@ def main(argv: list[str] | None = None) -> None:
         f"{counts['recovered']} recovered, {counts['still_missing']} still missing "
         f"(path=reconciled; report_snapshots pre/post written)"
     )
+    if args.metrics_out:
+        write_to_textfile(args.metrics_out, REGISTRY)
 
 
 if __name__ == "__main__":

@@ -123,3 +123,25 @@ def test_observe_state_metrics_are_evicted_sum_and_peak_high_water() -> None:
     assert metrics.JOIN_STATE_SIZE._value.get() == 7  # high-water, not overwritten
     metrics.EXPOSURES_EVICTED._value.set(0)
     metrics.reset_join_state_peak()
+
+
+def test_join_state_current_rises_and_falls_unlike_the_peak() -> None:
+    # The current-occupancy gauge tracks each household's final (post-eviction)
+    # retained count, overwritten per household — so it rises AND falls, unlike the
+    # monotone high-water peak which only climbs (BACKLOG 25).
+    metrics.EXPOSURES_EVICTED._value.set(0)
+    metrics.reset_join_state_peak()
+    metrics.observe_state(StreamState(peak=7, evicted=3, final=5))
+    assert metrics.JOIN_STATE_CURRENT._value.get() == 5
+    metrics.observe_state(StreamState(peak=4, evicted=1, final=2))  # fell
+    assert metrics.JOIN_STATE_CURRENT._value.get() == 2  # overwritten, not max
+    assert metrics.JOIN_STATE_SIZE._value.get() == 7  # peak still the high-water
+    metrics.EXPOSURES_EVICTED._value.set(0)
+    metrics.reset_join_state_peak()
+
+
+def test_observe_watermark_lag_records_peak_lateness_seconds() -> None:
+    metrics.observe_watermark_lag(0.0)
+    assert metrics.WATERMARK_LAG._value.get() == 0.0
+    metrics.observe_watermark_lag(3600.0)  # one hour late
+    assert metrics.WATERMARK_LAG._value.get() == 3600.0

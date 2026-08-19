@@ -32,7 +32,7 @@ from bytewax.dataflow import Dataflow
 from bytewax.outputs import Sink
 from bytewax.testing import TestingSource, run_main
 from confluent_kafka import Consumer
-from prometheus_client import start_http_server
+from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from common.kafka import drain
@@ -179,6 +179,17 @@ def run_engine(broker: str) -> dict[str, int]:
     else:
         exposures, resolved, suppressed = dedup_streams(exposures_raw, resolved_raw)
     metrics.DEDUP_SUPPRESSED.inc(suppressed)
+    # Peak arrival lateness over the processed events (engine-side, so the pure
+    # core stays a function of (events, window) only — BACKLOG 24). Dedup drops
+    # only timestamp-identical re-sends, so the peak is the same pre/post dedup.
+    peak_lateness = max(
+        (
+            (e.ingest_time - e.event_time).total_seconds()
+            for e in (*exposures, *resolved)
+        ),
+        default=0.0,
+    )
+    metrics.observe_watermark_lag(peak_lateness)
     run_main(
         build_flow(
             exposures,
@@ -198,6 +209,12 @@ def run_engine(broker: str) -> dict[str, int]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metrics-port", type=int, default=None)
+    parser.add_argument(
+        "--metrics-out",
+        default=None,
+        help="dump this stage's terminal Prometheus registry to a textfile "
+        "(promtool-fixture provenance; see make metrics-capture)",
+    )
     args = parser.parse_args(argv)
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     if args.metrics_port:
@@ -208,6 +225,8 @@ def main(argv: list[str] | None = None) -> None:
         f"({counts['suppressed']} re-sends deduped) "
         f"→ attributed_conversions + exposures_landed"
     )
+    if args.metrics_out:
+        write_to_textfile(args.metrics_out, REGISTRY)
 
 
 if __name__ == "__main__":
