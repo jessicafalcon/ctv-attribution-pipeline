@@ -475,6 +475,20 @@ One entry per non-obvious choice. Newest last.
   determinism) and a max over only the candidate rows (that set shrinks as rows
   recover → non-stable base).
 
+- **Timestamps never round-trip through Python for storage — clickhouse-connect
+  applies the client's local timezone.** A DateTime read into Python and
+  re-inserted lands at a different wall-clock across processes (ARCHITECTURE §8),
+  which stamped `report_snapshots.reported_at` 6h apart between the `make run`
+  subprocess and an in-process caller — four snapshots instead of two,
+  restatement delta collapsed. So `reported_at` is computed **server-side** in the
+  rollup/snapshot INSERT (`max(ingest_time) + toIntervalMillisecond(offset_ms)`;
+  offset 0 for the pre/hot pass, `RECONCILE_DELTA_MS` for the post pass), and
+  `_max_ingest` reads a timezone-free **epoch-millis integer**
+  (`toUnixTimestamp64Milli`) rebuilt as UTC for the `reconciled_at` version.
+  `processed_at` supersession stays correct because reconciled and hot rows are
+  both written via the same `client.insert` path, so the shift is identical and
+  the ordering (`reconciled_at > every hot ingest_time`) is preserved.
+
 - **`campaign_hourly` is a versioned-replace ReplacingMergeTree, not a TRUNCATE
   or a summing MV.** Each refresh recomputes ALL `(campaign_id, hour)` keys from
   FINAL and inserts them with a higher `reported_at` version; FINAL keeps the

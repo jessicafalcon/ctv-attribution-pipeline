@@ -22,7 +22,7 @@ data-derived `reconciled_at` (no wall clock) — so a replay/re-run converges.
 
 import argparse
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from clickhouse_connect.driver.client import Client
 from prometheus_client import start_http_server
@@ -42,8 +42,10 @@ LONG_WINDOW = timedelta(days=90)
 # reconciled_at = max(ingest_time over the fixed serving state) + this delta.
 # processed_at is DateTime64(3) (ms), so a 1s gap is comfortably strictly-greater
 # than every hot processed_at (each ≤ that max). Documented constant, not a magic
-# literal (DECISIONS Phase 6).
-RECONCILE_DELTA = timedelta(seconds=1)
+# literal (DECISIONS Phase 6). The same delta is the report_snapshots post-pass
+# offset (rollup computes reported_at server-side as max(ingest_time) + offset).
+RECONCILE_DELTA_MS = 1000
+RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
 
 _CANDIDATE_COLS = (
     "conversion_id, event_time, ingest_time, device_id, ip, conversion_type, "
@@ -150,13 +152,21 @@ def _read_exposures_for(
 def _max_ingest(client: Client) -> datetime:
     """max(ingest_time) over the fixed serving state — the union of both landed
     tables. Fixed input set (independent of which rows get recovered), so
-    `reconciled_at` is identical on a re-run and the job converges."""
-    return client.query(
-        "select max(t) from ("
+    `reconciled_at` is identical on a re-run and the job converges.
+
+    Read as an epoch-millis integer, not a datetime: clickhouse-connect renders a
+    DateTime column in the client's local timezone, so the same stored instant
+    comes back at different wall-clocks across processes — which stamped the same
+    `base` onto different `reported_at`s (a determinism break). An integer carries
+    no timezone; rebuilding it as UTC here (and casting the write under 'UTC', see
+    rollup) makes the whole round-trip context-independent."""
+    epoch_ms = client.query(
+        "select toUnixTimestamp64Milli(max(t)) from ("
         "select max(ingest_time) as t from exposures_landed final "
         "union all "
         "select max(ingest_time) as t from attributed_conversions final)"
     ).result_rows[0][0]
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC)
 
 
 def run(client: Client | None = None) -> dict[str, int]:
@@ -175,14 +185,14 @@ def run(client: Client | None = None) -> dict[str, int]:
     if recovered:
         insert_attributed(client, recovered)
 
-    # Snapshots (both order-independent, so re-running the whole pass converges):
-    # the PRE report as of the hot pass (path='hot' only — invariant under
-    # reconciliation) at `base`, and the POST report (both paths) at
-    # `reconciled_at` (strictly later). Refresh the rollup once, at the current
-    # (post) version.
-    rollup.write_report_snapshot(client, base, hot_only=True)
-    rollup.write_report_snapshot(client, reconciled_at, hot_only=False)
-    rollup.refresh_campaign_hourly(client, reconciled_at)
+    # Snapshots (reported_at computed server-side as max(ingest_time) + offset, so
+    # both are order-independent AND identical no matter which process writes them):
+    # the PRE report as of the hot pass (offset 0; path='hot' only — invariant under
+    # reconciliation), and the POST report (offset RECONCILE_DELTA_MS, both paths).
+    # Refresh the rollup once, at the current (post) version.
+    rollup.write_report_snapshot(client, 0, hot_only=True)
+    rollup.write_report_snapshot(client, RECONCILE_DELTA_MS, hot_only=False)
+    rollup.refresh_campaign_hourly(client, RECONCILE_DELTA_MS)
 
     still_missing = len(candidates) - len(recovered)
     metrics.CANDIDATES.inc(len(candidates))

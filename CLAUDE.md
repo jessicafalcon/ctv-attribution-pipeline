@@ -96,8 +96,13 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   tiny/medium share conversion_id space (DECISIONS Phase 5)
 - `make lint` — ruff via pre-commit
 
-Canonical clean-state demo:
-`make down && make up && make seed PROFILE=tiny && make run && make eval && make report`
+Canonical clean-state demos:
+- Hot-path headline (fast, stable pins — tiny has no caused hot-misses, so
+  `run-hot` avoids reconciliation over-crediting its organics):
+  `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
+- Reconciliation + restatement (where the long tail earns its keep — recall
+  0.587→0.973, ROAS restated up):
+  `make down && make up && make seed PROFILE=long_delay && make run && make eval && make report && make restate`
 
 ## Event model facts (from ARCHITECTURE.md; update if empirical findings differ)
 

@@ -11,13 +11,22 @@ Both read FINAL on the source ReplacingMergeTree tables (DECISIONS Phase 4), so
 duplicate exposure landings and pre-reduction rows never inflate a denominator.
 """
 
-from datetime import datetime
-
 from clickhouse_connect.driver.client import Client
 
 # Fixed period sentinel this phase (campaign-total grain). Day-grain periods slot
 # in later by widening this column, no schema change (BACKLOG / agent phase).
 PERIOD = "all"
+
+
+# reported_at is computed ENTIRELY server-side — `max(ingest_time) over the fixed
+# state + offset_ms` — never round-tripped through a Python datetime. Reading a
+# DateTime back into Python renders it in the client's local timezone, which
+# differs between the `make run` subprocess and an in-process caller, stamping the
+# same instant at different wall-clocks (a determinism break). Keeping it in SQL
+# makes reported_at identical no matter which process writes the snapshot; the
+# offset (0 for the pre/hot pass, RECONCILE_DELTA_MS for the post pass) keeps the
+# two snapshots strictly ordered.
+
 
 # Rollup buckets by the credited exposure's event-time hour, so spend/exposures
 # and the conversions credited against them share one hour axis and summing over
@@ -33,7 +42,14 @@ select
     sum(is_purchase) as purchases,
     sum(is_site_visit) as site_visits,
     sum(rev) as revenue,
-    {reported_at:DateTime64(3)} as reported_at
+    (
+        select max(t) from
+        (
+            select max(ingest_time) as t from exposures_landed final
+            union all
+            select max(ingest_time) as t from attributed_conversions final
+        )
+    ) + toIntervalMillisecond({offset_ms:Int64}) as reported_at
 from
 (
     select
@@ -125,7 +141,14 @@ conv_by_campaign as
     group by campaign_id
 )
 select
-    {reported_at:DateTime64(3)} as reported_at,
+    (
+        select max(t) from
+        (
+            select max(ingest_time) as t from exposures_landed final
+            union all
+            select max(ingest_time) as t from attributed_conversions final
+        )
+    ) + toIntervalMillisecond({offset_ms:Int64}) as reported_at,
     s.campaign_id as campaign_id,
     {period:String} as period,
     s.spend as spend,
@@ -144,21 +167,19 @@ order by s.campaign_id
 """
 
 
-def refresh_campaign_hourly(client: Client, reported_at: datetime) -> None:
+def refresh_campaign_hourly(client: Client, offset_ms: int) -> None:
     """Recompute the rollup from FINAL (current state, both paths) and insert it
-    as a new version. FINAL keeps the highest reported_at per key, so this is the
-    latest complete rollup."""
-    client.command(_REFRESH_CAMPAIGN_HOURLY, parameters={"reported_at": reported_at})
+    as a new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the
+    highest reported_at per key, so this is the latest complete rollup."""
+    client.command(_REFRESH_CAMPAIGN_HOURLY, parameters={"offset_ms": offset_ms})
 
 
-def write_report_snapshot(
-    client: Client, reported_at: datetime, *, hot_only: bool
-) -> None:
-    """Snapshot the four metrics per campaign as of `reported_at`. `hot_only`
-    filters to path='hot' (the pre-reconciliation report — invariant under
-    reconciliation); otherwise both paths (the post-reconciliation report)."""
+def write_report_snapshot(client: Client, offset_ms: int, *, hot_only: bool) -> None:
+    """Snapshot the four metrics per campaign at `reported_at = max(ingest_time) +
+    offset_ms`. `hot_only` filters to path='hot' (the pre-reconciliation report —
+    invariant under reconciliation); otherwise both paths (the post report)."""
     path_filter = "and a.path = 'hot'" if hot_only else ""
     # Plain replace, not str.format — the SQL keeps ClickHouse's own {name:Type}
     # server-side bindings, which str.format would try to interpolate.
     sql = _WRITE_REPORT_SNAPSHOT.replace("/*path_filter*/", path_filter)
-    client.command(sql, parameters={"reported_at": reported_at, "period": PERIOD})
+    client.command(sql, parameters={"offset_ms": offset_ms, "period": PERIOD})
