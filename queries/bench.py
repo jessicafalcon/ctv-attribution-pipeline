@@ -60,6 +60,10 @@ def run(client: Client | None = None) -> tuple[dict, dict]:
     naive = _measure(client, NAIVE_SQL.read_text())
     optimized = _measure(client, OPT_SQL.read_text())
 
+    # NOTE: this proves equality on the loaded profile's data, not that the rollup
+    # refresh is structurally identical to report.sql for every profile — verify
+    # before reusing bench on another profile (BACKLOG; Phase-8 shared-IP is where
+    # wrong-household rows could diverge).
     naive_rows = [_round_row(r) for r in naive["rows"]]
     opt_rows = [_round_row(r) for r in optimized["rows"]]
     if naive_rows != opt_rows:
