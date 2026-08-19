@@ -339,16 +339,25 @@ never auto-fixed, ignored, or committed around.
   through the rewrite, live proof via isolated `make test-int-medium`. 103
   offline tests + 2 live; lint clean. Review gate passed (code-reviewer +
   functionality-tester + coherence-auditor); follow-ups applied. Merged (PR #7).
-- Phase 6 (2026-08-18): started on `phase-6-reconciliation` — reconciliation and
-  restatements. Periodic long-window (≤90d) matcher recovers hot-path misses
-  (conversions whose causal exposure is >7d before them in event-time — the
-  hot-window evicts it), reusing the pure `attribute_household` leaf at a 90d
-  window over models reconstructed from ClickHouse FINAL (truth-free). Corrected
-  rows carry `path=reconciled`, `processed_at = max(ingest_time) + Δ` (> the hot
-  version). `campaign_hourly` rollup (versioned-replace RMT, refreshed on run),
-  `report_snapshots` (campaign-total grain), restatement query. New `long_delay`
-  profile (delay straddles ≤7d and (7d,90d]). Isolated `make test-int-long-delay`.
-  Spec: `specs/phase-6.md`.
+- Phase 6 (2026-08-18): built on `phase-6-reconciliation` — reconciliation and
+  restatements. Periodic long-window (≤90d) matcher (`reconcile/`) recovers
+  hot-path misses (conversions whose causal exposure is >7d before them in
+  event-time — evicted from the hot window), reusing the pure `attribute_household`
+  leaf at 90d over models reconstructed from ClickHouse FINAL (serving-only, N1).
+  Candidates are hot-unattributed rows (`attributed=0 AND path='hot'`); corrected
+  rows carry `path=reconciled`, `processed_at = max(ingest_time over fixed state) +
+  1s` (> the hot version, stable across re-runs). `campaign_hourly` (versioned-
+  replace RMT, all keys recomputed per refresh), `report_snapshots` (per-campaign,
+  PRE filters `path='hot'` so the restatement is re-run-safe), `queries/
+  restatement.sql`. `make run` now resolve→engine→reconcile; `make run-hot`
+  (resolve→engine) backs the hot-path oracle suites (tiny golden/accuracy, medium
+  hardening) + CI, since reconcile would over-credit tiny/medium long-tail organics
+  and shift their pins. New `long_delay` profile (seed 6, delay straddles ≤7d and
+  (7d,90d]). Green: gate-0 tiny golden byte-identical; 113 offline + lint; live
+  tiny `make test-int` (5), medium `make test-int-medium` (2, run-hot), long_delay
+  `make test-int-long-delay` (3) — 32 candidates → 29 recovered, recall 0.587→0.973,
+  restatement shows all 3 campaigns' ROAS up. Review gate (code-reviewer +
+  functionality-tester + coherence-auditor) PENDING. Spec: `specs/phase-6.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

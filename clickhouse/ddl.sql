@@ -46,3 +46,52 @@ create table if not exists exposures_landed
 )
 engine = ReplacingMergeTree
 order by (campaign_id, event_time, exposure_id);
+
+-- Phase-6 rollup. Per (campaign_id, hour) aggregates, recomputed from FINAL on
+-- each refresh and re-inserted with a higher `reported_at` version — a
+-- versioned-replace ReplacingMergeTree, NOT an insert-triggered summing MV (a
+-- reconciliation correction would double-count under summing) and NOT a TRUNCATE
+-- (destructive-command rule). Every refresh rewrites ALL keys, so FINAL (highest
+-- reported_at per key) is the latest complete rollup. `hour` is the credited
+-- exposure's event-time hour, so summing campaign_hourly over hours equals the
+-- per-campaign report totals.
+create table if not exists campaign_hourly
+(
+    campaign_id            String,
+    hour                   DateTime('UTC'),
+    spend                  Float64,
+    exposures              UInt64,
+    attributed_conversions UInt64,
+    purchases              UInt64,
+    site_visits            UInt64,
+    revenue                Float64,
+    reported_at            DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(reported_at)
+order by (campaign_id, hour);
+
+-- Phase-6 restatement history. One row per (reported_at, campaign_id, period)
+-- holding the four advertiser metrics (DECISIONS Phase 4) and the raw counts
+-- behind them, so a period's reported number is queryable *as of* each pass.
+-- EVERY column is serving-derived (N1 isolation): recall/precision are NOT here
+-- — those are scored only in the eval harness against the side file. `period` is
+-- a present-but-fixed sentinel this phase (campaign-total grain); day-grain slots
+-- in later without a schema change. ReplacingMergeTree so re-running a pass
+-- (byte-identical rows) converges.
+create table if not exists report_snapshots
+(
+    reported_at     DateTime64(3, 'UTC'),
+    campaign_id     String,
+    period          String,
+    spend           Float64,
+    revenue         Float64,
+    conversions     UInt64,
+    purchases       UInt64,
+    exposures       UInt64,
+    roas            Nullable(Float64),
+    cpa             Nullable(Float64),
+    cvr             Nullable(Float64),
+    site_visit_rate Nullable(Float64)
+)
+engine = ReplacingMergeTree
+order by (reported_at, campaign_id, period);

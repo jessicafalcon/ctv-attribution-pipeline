@@ -27,11 +27,15 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Full pipeline against the compose stack: seed → resolve → engine →
-      # ClickHouse, then the integration suite (FINAL-state + idempotency).
+      # Hot path against the compose stack: seed → resolve → engine → ClickHouse,
+      # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
+      # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
+      # reconciliation pass would over-credit tiny's long-tail organics and shift
+      # them. Reconciliation runs on its own profile via `make test-int-long-delay`
+      # (local, like the medium hardening proof), not in the tiny CI job.
       - run: make up
       - run: make seed PROFILE=tiny
-      - run: make run
+      - run: make run-hot
       - run: make test-int
       - if: always()
         run: make down

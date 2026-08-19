@@ -437,3 +437,104 @@ One entry per non-obvious choice. Newest last.
   numbers (precision 92/130, recall 1.0, 132 rows, dedup suppressed 70) in
   `tests/test_medium_parity.py`, the integration test, and the spec — the numbers
   live only there (no RESULTS.md consumer yet).
+
+## Phase 6
+
+- **Reconciliation reuses the hot last-touch leaf at a 90d window; no second
+  matcher.** `reconcile.reconcile` reconstructs `ResolvedConversion` / `Exposure`
+  models from ClickHouse FINAL and calls the SAME `streaming.attribute.
+  attribute_household` the hot engine calls, with `window = LONG_WINDOW (90d)`, so
+  hot and reconciled decisions cannot diverge (the DECISIONS Phase 3 "pure core
+  owns decisions" invariant, extended). Reconstruction is lossless: `event_time`/
+  `ingest_time` are `DateTime64(3)` and the producer rounds every timestamp to
+  `round(..., 3)` (ms), so the round-trip gives the leaf byte-identical inputs.
+  Matching happens in the household the hot reduction already settled on — the
+  shared-IP fan-out collapsed on the hot path (one unattributed row per
+  conversion_id), so reconciliation does NOT re-fan-out (ARCHITECTURE §3.3 reads
+  "by household"). Rejected a standalone reconcile matcher (a second implementation
+  of last-touch that could drift from the leaf's tie-breaks).
+
+- **Candidates are hot-*unattributed* rows only: `attributed = 0 AND path =
+  'hot'`.** Reconciliation must never re-open a hot-*attributed* row — over a 90d
+  window it would pick the same last-touch exposure (the 90d winner equals the 7d
+  winner whenever an in-7d exposure exists) but rewrite it with a higher
+  `processed_at`, flipping `path` hot→reconciled for no change in attribution.
+  Scoping to `path = 'hot'` keeps the job "recovery only" and makes the
+  second-pass no-op fall out (still-unmatched candidates emit nothing, so a re-run
+  re-selects and re-fails, changing nothing).
+
+- **`reconciled_at = max(ingest_time over the fixed serving state) + 1s`.** The
+  version stamped on reconciled rows must be deterministically strictly greater
+  than the hot row's `processed_at` (= a conversion's `ingest_time`) so RMT keeps
+  the correction (DECISIONS Phase 3 (a)). `base` is `max(ingest_time)` over the
+  UNION of `exposures_landed` FINAL and `attributed_conversions` FINAL — a **fixed
+  input set** independent of which rows get recovered, so a re-run computes the
+  identical `reconciled_at` and the job converges (idempotency). `RECONCILE_DELTA
+  = 1s` is a documented constant, comfortably above the ms `DateTime64(3)`
+  resolution. Rejected `now()` (would break replay convergence and snapshot
+  determinism) and a max over only the candidate rows (that set shrinks as rows
+  recover → non-stable base).
+
+- **`campaign_hourly` is a versioned-replace ReplacingMergeTree, not a TRUNCATE
+  or a summing MV.** Each refresh recomputes ALL `(campaign_id, hour)` keys from
+  FINAL and inserts them with a higher `reported_at` version; FINAL keeps the
+  latest per key. This is the CLAUDE.md determinism rule (insert-triggered summing
+  MVs double-count under corrections) plus the destructive-command rule (no
+  TRUNCATE/DROP outside `make down`). A disappeared key would linger at its last
+  version (RMT has no tombstone here) — a non-issue at this grain (spend/exposures
+  are append-only), noted as SCALING. A background refreshable MV (wall-clock
+  refresh, flaky under tests) is the SCALING alternative, not built.
+
+- **`report_snapshots` is per-campaign, serving-derived; the PRE snapshot filters
+  `path = 'hot'` so the restatement is order-independent and re-run-safe.** Two
+  snapshots per run: PRE at `base` over `attributed = 1 AND path = 'hot'` (the
+  hot-pass credited set, invariant under reconciliation — it only rewrites
+  hot-UNattributed rows), POST at `reconciled_at` over all attributed rows.
+  Filtering PRE by `path = 'hot'` (rather than snapshotting before recovery runs)
+  makes it recomputable identically on any later pass, so re-running the whole job
+  converges and the restatement delta never collapses. Every column is
+  serving-derived — no recall/precision in the DB (N1 isolation; the truth-
+  isolation guard structurally forbids the word in `reconcile/`, `clickhouse/`,
+  `queries/`). `period` is a fixed `'all'` sentinel (campaign-total grain);
+  day-grain slots in later without a schema change. A run-level match-rate was
+  dropped from storage (would mix grains); the per-campaign credited-conversions
+  delta already shows the recovery magnitude.
+
+- **`make run` reconciles; `make run-hot` (resolve + engine) serves the hot-path
+  oracle suites.** Phase 6 makes `make run` the full pipeline (resolve → engine →
+  reconcile), per CLAUDE.md. But `tiny` (3 organic hot-misses) and `medium` (2)
+  have long-tail organic conversions with no in-7d exposure but one within 90d, so
+  a reconciliation pass over them would over-credit those organics (`path =
+  reconciled`), shifting the frozen tiny golden, the pinned tiny accuracy (0.673,
+  Phase 4), and the medium oracle==engine precision (92/130). Those are HOT-PATH
+  oracles, so they run on hot-only output: new `make run-hot` (resolve + engine, no
+  reconcile) backs `make test-int` (tiny, via CI), `make test-int-medium`, and the
+  CI integration job. Reconciliation is proven on its own `long_delay` stack (`make
+  test-int-long-delay`), mirroring how the medium live proof is local-only.
+  Consequence noted for docs: the canonical `make run && make eval` demo on tiny
+  now reflects post-reconciliation numbers (minor organic over-credit), while the
+  pinned tests assert the hot path.
+
+- **`long_delay` profile (seed 6), pinned live numbers.** `conversion_delay_minutes
+  [10, 30240]` (10min–21d) straddles the 7d hot window and the 90d long window, so
+  caused conversions split into a hot baseline and reconciliation candidates.
+  Measured deterministically: 32 candidates (29 caused misses + 3 organic misses),
+  29 recovered to the correct household, 3 organics unmatched (no in-90d exposure —
+  exercises the "stays unattributed" path live). Recall 0.587 (44/75) → 0.973
+  (73/75); the residual gap is 2 pre-existing shared-IP wrong-household hot
+  attributions (not misses). Precision rose 0.530 → 0.652 here because the recovered
+  rows were all clean caused — profile-specific; the general precision-dip risk
+  (organic over-credit at long range) still holds and is called out. Pinned in
+  `tests/integration/test_reconcile.py` and `tests/test_long_delay_profile.py`,
+  updated together with the profile.
+
+- **File-list deviations from the phase-6 spec, recorded.** (a) The ClickHouse
+  row→model reconstruction lives in `reconcile/` (not `clickhouse/client.py`, which
+  the spec listed) to keep `clickhouse/` decoupled from `producer/` models — the
+  existing readers there return tuples/dicts, and `reconcile/` is the stage that
+  owns its schemas. (b) The rollup/snapshot/restatement correctness is inherently
+  ClickHouse behavior (versioned-replace collapse, FINAL), so it is proven in the
+  live `tests/integration/test_reconcile.py`, and the offline `tests/test_reconcile
+  .py` covers the pure matcher + `reconciled_at` derivation — rather than a
+  services-free `test_rollup_snapshot.py`, which would have to re-implement the SQL
+  in Python (a second implementation, against the shared-core rule).
