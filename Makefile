@@ -55,8 +55,9 @@ bench:
 
 # Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
 # textfiles under data/out/<profile>/metrics/. This is the provenance of the
-# promtool alert fixtures (observability/rules/gen_fixtures.py): the
-# threshold-crossing numbers come from a real stage run, never hand-authored.
+# promtool alert fixtures (observability/gen_alert_fixtures.py bakes these into
+# observability/rules/tests/alerts_test.yml): the threshold-crossing numbers come
+# from a real stage run, never hand-authored.
 # Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
 # needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
 # FINAL, so these two are not producible service-free — like test-int-long-delay.

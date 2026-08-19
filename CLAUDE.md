@@ -394,7 +394,7 @@ never auto-fixed, ignored, or committed around.
   dumps each stage's own registry, `make metrics-capture` orchestrates a live run,
   `observability/gen_alert_fixtures.py` bakes the numbers into the fixture (fires on
   long_delay, silent on tiny). Grafana "Attribution Integrity" dashboard (JSON, file
-  provider). Green: gate-0 tiny golden byte-identical; 118 offline + lint; bench +
+  provider). Green: gate-0 tiny golden byte-identical; 117 offline + lint; bench +
   test-alerts live-green; Grafana provisions. Review gate (code-reviewer +
   security-reviewer + functionality-tester + coherence-auditor) PENDING. Spec:
   `specs/phase-7.md`.
