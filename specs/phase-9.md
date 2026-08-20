@@ -199,7 +199,7 @@ strict). The live API accepted it and the confirming run returned a native `rank
 array (device_graph_mismatch / CONFIDENT). App-side `model_validate` stays as the net,
 so the escalate-contract stays pure and fires only on a genuine semantic failure — it
 no longer masks a syntactic mangling. Regression guard: the exact malformed payload is
-committed (`tests/data/malformed_submit_finding_input.json`) and asserted through
+committed (`tests/fixtures/malformed_submit_finding_input.json`) and asserted through
 `_finalize` (`tests/test_loop.py`), plus a strict/ref-free schema-shape test.
 
 ## The loop (ARCHITECTURE §4.2; `agent/loop.py`)

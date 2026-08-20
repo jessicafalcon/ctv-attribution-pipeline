@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot eval report restate bench context metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip lint
+.PHONY: setup up down seed resolve run run-hot eval report restate bench context agent-run metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)

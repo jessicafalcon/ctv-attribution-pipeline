@@ -810,11 +810,22 @@ One entry per non-obvious choice. Newest last.
   the model calls `submit_finding`, whose input schema IS `AttributionFinding`. Keeps
   the whole model→app boundary in the typed-tool idiom and gives one escalation path: a
   pydantic `ValidationError` on the payload → synthesized `AMBIGUOUS_NEEDS_HUMAN`
-  finding with the raw payload in `evidence_for`, never a silent retry. `strict: true`
-  is NOT set — the pydantic schema emits `$defs`/`$ref` (nested RankedHypothesis,
-  Hypothesis enum) that strict rejects, and app-side `model_validate` gives the
-  identical escalation, so strict is belt-and-suspenders here (gotcha recorded in the
-  spec).
+  finding with the raw payload in `evidence_for`, never a silent retry. The tool is
+  rendered with `strict: true` (`loop._strict_schema` inlines the pydantic `$defs`/
+  `$ref` into strict's subset), which is **load-bearing, not belt-and-suspenders** — a
+  live run proved the NON-strict schema let the model stringify the nested `ranked`
+  array and escalate a correct finding (see the FT-1 bullet below for the incident and
+  Ruling A). App-side `model_validate` is retained as the net, so the escalate-contract
+  stays pure and fires only on a genuine semantic failure.
+- **Reusable rule (generalizes the FT-1 lesson): for any tool whose input schema has
+  nested arrays/objects, `strict` is load-bearing — default it ON from the start.**
+  Non-strict is fine for flat scalar-param tools (the five probes) and dangerous for
+  structured nested payloads (the finding). And the corrected fallback: if the API
+  cannot accept the strict schema, FLATTEN the schema until it can — never drop to
+  non-strict for a terminal payload, because app-side validation only *escalates*
+  (masking a correct answer), it does not *correct* the stringification. (This
+  supersedes an earlier "if strict is rejected, drop it and rely on app-side
+  validation" note.)
 
 - **≥1-probe loop contract (§4.2 "Test" is not skippable).** The observe-step context
   already carries the discriminator, so a confident model could `submit_finding` on
@@ -885,7 +896,7 @@ One entry per non-obvious choice. Newest last.
   `anyOf`-null branch). Confirming live run: strict accepted by the API, native `ranked`
   list, device_graph_mismatch / CONFIDENT, turn-2 cache_read 2857. The exact malformed
   payload is committed as a permanent regression fixture
-  (`tests/data/malformed_submit_finding_input.json`, asserted through `_finalize`) — the
+  (`tests/fixtures/malformed_submit_finding_input.json`, asserted through `_finalize`) — the
   highest-value artifact from the run.
 
 - **Phase-10 forward-note (scoring must not misread the escalation default).**

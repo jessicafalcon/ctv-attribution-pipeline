@@ -42,8 +42,8 @@ ONE typed finding.
 
 Hypothesis catalog (choose only from these):
 - {Hypothesis.DEVICE_GRAPH_MISMATCH}: wrong-household matches via shared IPs. Signal:
-  ip_clusters.ip_resolved_fraction elevated, ambiguous_attributed > 0, wide
-  candidate_count.
+  ip_clusters.ip_resolved_fraction elevated, ambiguous_attributed > 0, high
+  ip_clusters.max_candidate_count.
 - {Hypothesis.WINDOW_EDGE_EFFECT}: conversions credited to an exposure right at the 7d
   window edge. Signal: window_edge near-boundary pile-up.
 - {Hypothesis.CO_VIEW_INFLATION}: one genre over-credited. CAVEAT: raw genre_reach can

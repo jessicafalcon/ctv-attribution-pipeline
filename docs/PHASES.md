@@ -171,6 +171,13 @@ valid finding; a test asserts the agent's DB user cannot write.
 *fault → top hypothesis → correct?* table with false-positive rate. Run the
 near-miss pair (real lift vs shared-IP inflation).
 
+**Entry condition (first task).** Author the **no-fault baseline** producer profile —
+it does not exist yet. Phase-9's `EVAL_REPS=5 × 6 scenarios` (`agent/config.py`)
+already assumes it (5 faults + baseline), so the sweep cannot run until it is built.
+Phase-10 scoring must key an escalation on `verdict == AMBIGUOUS_NEEDS_HUMAN` as an
+abstention, never read the escalation-default `top_hypothesis = upstream_data_change`
+as a diagnosis (DECISIONS Phase 9 forward-note).
+
 **Done when.** `RESULTS.md` has both tables. Confirm with the user before running;
 this costs API tokens.
 
