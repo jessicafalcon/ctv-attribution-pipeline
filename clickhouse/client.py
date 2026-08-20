@@ -20,6 +20,22 @@ def connect() -> Client:
     )
 
 
+def connect_agent() -> Client:
+    """The SELECT-only handle for the WHOLE agent read path — both the Phase-8
+    collectors (`agent/run_context.py`) and the Phase-9 probe dispatcher (Ruling E /
+    SN2). `agent_ro` is a `users.d`-declared user granted only `SELECT ON default.*`
+    (clickhouse/users.d/agent-ro.xml), so a write is refused at the database, not by
+    convention. Passwordless, mirroring the stack's local-dev posture; overridable via
+    CLICKHOUSE_AGENT_USER for a hardened deploy."""
+    return get_client(
+        host=os.environ.get("CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
+        username=os.environ.get("CLICKHOUSE_AGENT_USER", "agent_ro"),
+        password=os.environ.get("CLICKHOUSE_AGENT_PASSWORD", ""),
+        database=os.environ.get("CLICKHOUSE_DB", "default"),
+    )
+
+
 def read_attributed_decisions(client: Client) -> dict[str, tuple]:
     """The attribution DECISION per conversion_id from FINAL state: the columns
     the engine computes, robust to timestamp round-trip formatting. FINAL

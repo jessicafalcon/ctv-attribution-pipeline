@@ -13,7 +13,7 @@ from clickhouse_connect.driver.client import Client
 from agent import readers
 from agent.collect import build_context
 from agent.context import AttributionContext
-from clickhouse.client import connect
+from clickhouse.client import connect_agent
 from queries import report, restatement
 
 
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="build the AttributionContext")
     parser.add_argument("--profile", default="tiny")
     args = parser.parse_args(argv)
-    ctx = collect(connect(), args.profile)
+    ctx = collect(connect_agent(), args.profile)
     print(format_context(ctx))
 
 

@@ -89,6 +89,15 @@ restate:
 context:
 	uv run python -m agent.run_context --profile "$(PROFILE)"
 
+# Run the attribution-integrity agent once, end to end, against the live stack
+# (Phase 9). This is the ONLY path that calls the LLM — it costs API tokens, so ask
+# the developer before running (CLAUDE.md). Reads as the SELECT-only agent_ro user;
+# emits a typed AttributionFinding + the turn-2 cache_read (Rulings B/E). Run after
+# `make run` populated the serving tables. Pass PROFILE explicitly (like context/eval);
+# the Phase-9 Done-when uses PROFILE=shared_ip_spike.
+agent-run:
+	uv run python -m agent.run_agent --profile "$(PROFILE)"
+
 # Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
 # would probe services before skipping) from making any network attempt.
 test:
@@ -142,6 +151,18 @@ test-int-shared-ip:
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_context.py
+
+# Phase-9 live read-only proof on a CLEAN shared_ip_spike-only stack (same isolation
+# reason as the others). Asserts the Done-when's write-denied half — agent_ro
+# INSERT/ALTER/DROP/CREATE → ACCESS_DENIED — and that the whole collector read path
+# runs under agent_ro (SN2). NO LLM call, so no API tokens: the loop is unit-tested
+# with a mocked client (tests/test_loop.py); this proves the DB boundary live.
+test-int-agent:
+	$(MAKE) down
+	$(MAKE) up
+	$(MAKE) seed PROFILE=shared_ip_spike
+	$(MAKE) run PROFILE=shared_ip_spike
+	uv run pytest tests/integration/test_agent_readonly.py
 
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
