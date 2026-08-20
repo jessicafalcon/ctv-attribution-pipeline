@@ -732,3 +732,177 @@ One entry per non-obvious choice. Newest last.
   Phase 9/10's adjusted-factor detection needs a new `AttributionContext` field (an
   expected/normalized per-genre reach), that is the one foreseeable back-edit to the
   frozen §4.2 shape — expected there, not a surprise.
+
+## Phase 9
+
+- **Agent model / effort / rep count pinned as config constants (Ruling A),
+  `agent/config.py`.** `AGENT_MODEL = "claude-sonnet-5"`, `AGENT_EFFORT = "medium"`,
+  `EVAL_REPS = 5`, `AGENT_MAX_PROBE_ROUNDS = 6`. Model is chosen on **capability, not
+  cost** — all three tiers (Haiku/Sonnet/Opus) clear the §2 "$10" posture on the
+  Phase-10 sweep (5 reps × 6 scenarios = 30 invocations; the AttributionContext is
+  ~1-2k tokens, the cached prefix ~3-8k). The near-miss discriminator
+  (`ip_clusters.ip_resolved_fraction`, elevated on shared_ip_spike / flat on real_lift)
+  is a **pre-computed labeled context field**: the agent weighs a named number, a
+  moderate inference Sonnet handles at medium effort. Opus buys no discrimination
+  headroom the deterministic context doesn't already supply; Haiku's risk is misranking
+  under the enum on one rep of a repeated sweep, undermining the Phase-10 headline.
+  `medium` effort because the near-miss is a bounded weigh-two-signals judgment, not
+  deep agentic work; `high` mostly buys output tokens. `EVAL_REPS` is DEFINED here and
+  CONSUMED in Phase 10 (the fixed N behind the false-positive-rate table), pinned now
+  so the budget is predictable.
+
+- **Prefix caching wired in Phase 9, doubling as a determinism nudge (Ruling B).**
+  `cache_control: {"type": "ephemeral"}` on the stable system block (system prompt +
+  the hypothesis enum text; the probe tool list renders before it, so the breakpoint
+  caches tools + system). This is the ~10× lever on the dominant input term. Caching
+  REQUIRES a byte-stable, stably-ordered prompt (render order tools → system →
+  messages), which is the discipline the determinism policy wants at the AI edge. The
+  ≥1-probe loop contract guarantees a turn 2, so `make agent-run` can assert
+  `cache_read_input_tokens > 0` on the second `messages.create`.
+
+- **The agent is NOT byte-reproducible, by construction, and that is correct
+  (Ruling C).** Temperature/top_p are removed on the entire Claude-5 family (400 on any
+  value), so `temperature=0` is impossible; the loop never sets it. Output varies run
+  to run — NOT a determinism-policy violation: the policy carves the AI out of the
+  byte-identical guarantee ("AI sits at the edge; the pipeline is deterministic"). It
+  is WHY Phase 10 runs each scenario repeatedly — the reps measure residual FP-rate
+  stability, not byte-identity. So the Done-when gates `top_hypothesis ==
+  device_graph_mismatch` + valid finding + a probe ran; the `CONFIDENT` verdict is
+  reported as observed-expected, never asserted on the single run.
+
+- **The SELECT-only user is a `users.d` config file, not SQL DDL (Ruling D) — chosen
+  for identity-mechanism consistency, NOT because the SQL path is blocked.**
+  *Empirical correction, verified live on `clickhouse-server:24.8`:* the stock
+  `default` user ships with `ACCESS MANAGEMENT ... WITH GRANT OPTION`, so `CREATE USER`
+  / `GRANT` via the apply.py path (host → HTTP 8123, passwordless `default`) returns
+  200. An earlier draft claimed `default` lacked access management and the SQL path
+  would fail at apply.py / force widening `default` — that was **wrong**: it inferred a
+  missing privilege from a missing config file (absence of config ≠ absence of
+  privilege). Both provisioning paths run; the choice is a preference. `agent_ro` lives
+  in `clickhouse/users.d/agent-ro.xml` because (1, primary) **identity belongs to the
+  compose-up config layer, by one mechanism** — `allow-network.xml` already declares
+  principals+access in `users.d`, reconstructed from source at container start;
+  `agent_ro` is the same kind of object (a principal + a grant), and a user is not
+  schema; (2, supporting) config users **reconstruct from source** each start and can't
+  drift, whereas a SQL user persists in the mutable `access/` store and `CREATE USER IF
+  NOT EXISTS` then skips it (verified: a probe user created over HTTP persisted until
+  explicitly dropped) — though a *correct* SQL path (`CREATE USER OR REPLACE` +
+  unconditional `GRANT`) would also reconstruct, so this favors config, it doesn't
+  block SQL. **Grant form, not `<readonly>1</readonly>`:** `<grants><query>GRANT SELECT
+  ON default.*</query></grants>` is DB-enforced (write-denied test: INSERT/ALTER/DROP/
+  CREATE → ACCESS_DENIED, proven live) and leaves the benign session settings
+  clickhouse-connect sends alone; `readonly=1` can 400 on driver-set settings. Inline
+  `<grants>` supported since CH 22.4 (image 24.8). Live-confirmed: `show grants for
+  agent_ro` = `GRANT SELECT ON default.* TO agent_ro`, nothing else.
+
+- **The SELECT-only user covers the WHOLE agent read path, not just probes (Ruling E,
+  SN2/CA-Q4).** `connect_agent()` (new, `clickhouse/client.py`; reads
+  `CLICKHOUSE_AGENT_USER`, default `agent_ro`) is the single read handle for both the
+  Phase-8 collectors and the Phase-9 probes. `agent/run_context.py` is re-pointed to it
+  — the one-line `connect()` → `connect_agent()` change the DI already made trivial
+  (`collect(client, …)` threads its client into `report.run` / `restatement.run` /
+  `readers.query`). `make context` now reads as `agent_ro` (same rows, SELECT-only) —
+  a deliberate change fulfilling a Phase-8 forward-note (the user couldn't exist until
+  Phase 9), not a Phase-8 back-edit. Without this, the read-only guarantee would hold
+  on probes but not the collectors — the drift the coherence-auditor exists to catch.
+
+- **Terminal `submit_finding` tool, not mixed structured-output.** The loop ends when
+  the model calls `submit_finding`, whose input schema IS `AttributionFinding`. Keeps
+  the whole model→app boundary in the typed-tool idiom and gives one escalation path: a
+  pydantic `ValidationError` on the payload → synthesized `AMBIGUOUS_NEEDS_HUMAN`
+  finding with the raw payload in `evidence_for`, never a silent retry. The tool is
+  rendered with `strict: true` (`loop._strict_schema` inlines the pydantic `$defs`/
+  `$ref` into strict's subset), which is **load-bearing, not belt-and-suspenders** — a
+  live run proved the NON-strict schema let the model stringify the nested `ranked`
+  array and escalate a correct finding (see the FT-1 bullet below for the incident and
+  Ruling A). App-side `model_validate` is retained as the net, so the escalate-contract
+  stays pure and fires only on a genuine semantic failure.
+- **Reusable rule (generalizes the FT-1 lesson): for any tool whose input schema has
+  nested arrays/objects, `strict` is load-bearing — default it ON from the start.**
+  Non-strict is fine for flat scalar-param tools (the five probes) and dangerous for
+  structured nested payloads (the finding). And the corrected fallback: if the API
+  cannot accept the strict schema, FLATTEN the schema until it can — never drop to
+  non-strict for a terminal payload, because app-side validation only *escalates*
+  (masking a correct answer), it does not *correct* the stringification. (This
+  supersedes an earlier "if strict is rejected, drop it and rely on app-side
+  validation" note.)
+
+- **≥1-probe loop contract (§4.2 "Test" is not skippable).** The observe-step context
+  already carries the discriminator, so a confident model could `submit_finding` on
+  turn 1 with zero probes — skipping the Test step and leaving no turn 2 to
+  cache-assert. The loop tracks the probes it ACTUALLY executed; a `submit_finding`
+  before any probe is rejected once ("run a probe first"), then escalated. On success,
+  `finding.probes_run` is overwritten with the executed list (the authoritative record,
+  not the model's self-report), so every finding cites a Test step and a turn 2 exists.
+
+- **Manual tool-use loop over the SDK Tool Runner.** For control and testability —
+  `agent_ro` probe dispatch, param validation, the terminal-tool escalation, prefix
+  caching, and a mock-client unit test (`tests/test_loop.py`, zero tokens). Each turn
+  appends the FULL `response.content` (thinking + tool_use blocks) back to `messages`,
+  not just text — Sonnet-5 adaptive thinking returns `thinking` blocks that must be
+  echoed unchanged within the same-model tool loop.
+
+- **Webhook alert payload is a TRIGGER ONLY (security boundary, designed).** The sweep
+  re-derives the AttributionContext deterministically from ClickHouse and does NOT feed
+  alert labels/annotations into the LLM prompt — alert labels are attacker-
+  influenceable, and re-observing from the DB is also the cleanest determinism story.
+  The mocked-sweep test takes NO arguments, so alert text structurally cannot reach the
+  sweep/LLM; the alertname is echoed in the HTTP response only. SN1 more broadly: the
+  context reaches the model as a fenced ```json DATA block, never spliced into
+  instruction text (`tests/test_prompt_injection.py`). Live push (scrape →
+  Alertmanager → webhook) stays deferred (BACKLOG).
+
+- **Probe SQL returns `day` as a string (`toString(toDate(...))`), found by a live
+  probe check before the token run.** ClickHouse `toDate` returns a Python `date`,
+  which `CampaignDayRow.day: str` rejects — the same coercion the collector does with
+  `str(day)`. Fixed in `campaign_attributed_by_day`; guarded by a live probe test
+  (`test_agent_readonly.py::test_every_probe_executes_and_returns_typed_rows`) that runs
+  all five probes as `agent_ro` and asserts typed rows.
+
+- **Review-gate dispositions (Phase 9 code-reviewer, applied):** **CR-1** — the probe
+  formerly `campaign_match_rate_by_day` is renamed `campaign_attributed_by_day`: its SQL
+  returns attributed conversions + revenue per day, NOT a rate (a per-campaign
+  `processed` denominator is undefined — an unattributed conversion carries no
+  campaign), so the name was the bug, not the SQL. The REAL-vs-UPSTREAM rate
+  discrimination lives in the context's global `match_rate_by_day`; this probe supplies
+  the per-campaign attributed trend alongside it. **CR-2** — `probes.run` now maps rows
+  BY COLUMN NAME (`zip(result.column_names, row)` → `model_validate`), not positionally,
+  so a future SQL/field reorder can't silently swap two same-typed values (e.g.
+  `roas_as_reported`/`roas_now`); every probe SQL aliases each output column to its
+  result-field name (convention enforced by
+  `test_probes.py::test_every_probe_sql_aliases_cover_its_result_fields`). Security /
+  functionality verdicts: PASS (both non-blocking security notes already tracked in
+  BACKLOG). Done-when #1 (live agent-run) closed separately; gate-0 tiny-golden verified
+  live post-run.
+
+- **FT-1 residual materialized and closed at the source (strict submit_finding).** The
+  first live `agent-run` on shared_ip_spike surfaced the exact risk functionality-test
+  flagged: the model REASONED correctly (device_graph_mismatch, CONFIDENT, textbook
+  shared-IP evidence — cluster 100.64.0.3 → 3 households, ip_resolved_fraction 0.42) but
+  the NON-strict `submit_finding` tool let it return `ranked` as a **stringified JSON
+  array** with the rest of the payload collapsed inside it, so `model_validate` failed
+  and the app-side net escalated a correct finding to AMBIGUOUS_NEEDS_HUMAN. **Ruling: A
+  (strict), not B (tolerant parse) or C (retry)** — A constrains the output to
+  well-typed JSON at the source, so the (non-deterministic) malformation cannot occur;
+  B/C react to a malformation whose shape varies (this run collapsed the WHOLE payload
+  into one field, not just one array), and in a 30-run Phase-10 sweep a repair-based fix
+  could silently re-escalate a correct answer on a variant shape, corrupting the
+  accuracy table. A also keeps the output contract pure: escalate stays "on genuine
+  semantic failure," never "recover from syntactic mangling" (which B would have made it
+  — an actual contract amendment). `loop._strict_schema` renders `AttributionFinding`
+  into strict's subset (inline `$ref`, `additionalProperties:false` + all-keys
+  `required` per object, drop `title`); it fits because the model has no Optional/None
+  fields (the `float | None` fields live in the CONTEXT models, not the finding, so no
+  `anyOf`-null branch). Confirming live run: strict accepted by the API, native `ranked`
+  list, device_graph_mismatch / CONFIDENT, turn-2 cache_read 2857. The exact malformed
+  payload is committed as a permanent regression fixture
+  (`tests/fixtures/malformed_submit_finding_input.json`, asserted through `_finalize`) — the
+  highest-value artifact from the run.
+
+- **Phase-10 forward-note (scoring must not misread the escalation default).**
+  `escalation()` sets `top_hypothesis = UPSTREAM_DATA_CHANGE` — a REAL catalog member,
+  chosen as a neutral default, not a diagnosis. Phase-10 fault→diagnosis scoring MUST
+  key an escalation on `verdict == "AMBIGUOUS_NEEDS_HUMAN"` and treat it as an
+  ABSTENTION, never read the `upstream_data_change` default as "the agent diagnosed
+  upstream" — otherwise an escalation scores as a wrong diagnosis instead of a
+  (correct-to-escalate) abstention, biasing the accuracy/false-positive tables.

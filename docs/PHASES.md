@@ -171,6 +171,24 @@ valid finding; a test asserts the agent's DB user cannot write.
 *fault → top hypothesis → correct?* table with false-positive rate. Run the
 near-miss pair (real lift vs shared-IP inflation).
 
+**Entry condition (first task).** Author the **no-fault baseline** producer profile —
+it does not exist yet. Phase-9's `EVAL_REPS=5 × 6 scenarios` (`agent/config.py`)
+already assumes it (5 faults + baseline), so the sweep cannot run until it is built.
+Phase-10 scoring must key an escalation on `verdict == AMBIGUOUS_NEEDS_HUMAN` as an
+abstention, never read the escalation-default `top_hypothesis = upstream_data_change`
+as a diagnosis (DECISIONS Phase 9 forward-note).
+
+**Watch first — the near-miss NEGATIVE half is the untested behavior (§4.3 headline).**
+Phase 9 proved only the positive half: `shared_ip_spike → device_graph_mismatch` (the
+agent CATCHING a fault). The real checkpoint test is the negative half — `real_lift`
+must be ruled a **clean lift**: the agent runs `ip_cluster_detail`, sees benign
+candidate counts and a FLAT `ip_resolved_fraction`, and DECLINES to fire
+`device_graph_mismatch`. That is a negative-confirmation path (probe returns nothing
+alarming → rule out), exactly where a model over-eager to diagnose false-positives.
+Everything to support it is in place (the discriminator is a context field, the probe
+exists), but it is unexercised — watch it FIRST in the sweep, right after the no-fault
+baseline.
+
 **Done when.** `RESULTS.md` has both tables. Confirm with the user before running;
 this costs API tokens.
 

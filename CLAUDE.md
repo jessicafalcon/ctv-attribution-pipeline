@@ -119,6 +119,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   seed shared_ip_spike && run) → the Phase-8 live fault-harness proof: the shared-IP
   wrong-household fault is observed (caused_wrong_household=11) and the
   `AttributionContext` is populated; isolated for the same shared-conversion_id reason
+- `make test-int-agent` — clean shared_ip_spike-only stack (make down && up && seed &&
+  run) → the Phase-9 live read-only proof: the SELECT-only `agent_ro` user cannot write
+  (INSERT/ALTER/DROP/CREATE → ACCESS_DENIED) and the whole collector+probe read path
+  runs under it (SN2). No LLM call, no API tokens; isolated for the same reason
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
@@ -423,8 +427,30 @@ never auto-fixed, ignored, or committed around.
   lint; live `make eval`/`make context` on shared_ip_spike (caused_wrong_household=11,
   ip_resolved_fraction 0.42 — the near-miss discriminator), `make test-int-shared-ip`
   (2). Review gate (code-reviewer + functionality-tester + coherence-auditor;
-  security-reviewer not triggered — no CI/.env/compose/CH-user/LLM change) PENDING.
-  Spec: `specs/phase-8.md`.
+  security-reviewer not triggered — no CI/.env/compose/CH-user/LLM change) passed;
+  merged (PR #10). Spec: `specs/phase-8.md`.
+- Phase 9 (2026-08-19): built on `phase-9-agent-loop` — the agent loop. Hypothesis
+  catalog enum (`agent/hypotheses.py`, the six §4.2 causes); probe registry
+  (`agent/probes.py`, five named parameterized-SQL tools over the SELECT-only
+  `agent_ro` user, server-side-bound params, no free-form SQL); typed
+  `AttributionFinding` (`agent/finding.py`) emitted via a terminal `submit_finding`
+  tool, validation failure → AMBIGUOUS_NEEDS_HUMAN; explicit manual tool-use loop
+  (`agent/loop.py`) with Sonnet-5 / effort=medium / adaptive thinking / a cached
+  system+enum+probe prefix / the ≥1-probe contract; Alertmanager webhook endpoint
+  (`agent/webhook.py`, trigger-only — alert text never reaches the LLM). Config pins in
+  `agent/config.py` (AGENT_MODEL/AGENT_EFFORT/EVAL_REPS=5/MAX_PROBE_ROUNDS). New
+  SELECT-only `agent_ro` (`clickhouse/users.d/agent-ro.xml`, grant-form) backing the
+  WHOLE agent read path via `connect_agent()` (collectors re-pointed, SN2). `make
+  agent-run` (API tokens; ask first) / `make test-int-agent`. Done-when all met:
+  166 offline + lint; gate-0 tiny golden byte-identical (`make test-int` 11); live
+  `make test-int-agent` (6 — write-denied INSERT/ALTER/DROP/CREATE + agent_ro read
+  path + all 5 probes execute typed); live `make agent-run` on shared_ip_spike →
+  valid finding, top_hypothesis device_graph_mismatch, native ranked, CONFIDENT,
+  turn-2 cache_read 2857. Review gate passed (code-reviewer 2 minor → CR-1 rename +
+  CR-2 name-based mapping applied; security-reviewer PASS, 2 notes tracked; func PASS;
+  FT-1 residual materialized live → Fix A strict `submit_finding`, malformed payload
+  committed as a regression fixture). Merged: PENDING (developer merges). Spec:
+  `specs/phase-9.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

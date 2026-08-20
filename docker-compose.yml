@@ -34,6 +34,9 @@ services:
       # Re-enable network access for the passwordless default user (loopback-only
       # in recent images); host port is 127.0.0.1-bound. See the file's comment.
       - ./clickhouse/users.d/allow-network.xml:/etc/clickhouse-server/users.d/allow-network.xml:ro
+      # The agent's SELECT-only principal (Phase-9 Ruling D); reconstructed from
+      # source at container start, granted only SELECT on default.*.
+      - ./clickhouse/users.d/agent-ro.xml:/etc/clickhouse-server/users.d/agent-ro.xml:ro
     ulimits:
       nofile:
         soft: 262144
