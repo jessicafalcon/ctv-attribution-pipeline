@@ -906,3 +906,105 @@ One entry per non-obvious choice. Newest last.
   ABSTENTION, never read the `upstream_data_change` default as "the agent diagnosed
   upstream" — otherwise an escalation scores as a wrong diagnosis instead of a
   (correct-to-escalate) abstention, biasing the accuracy/false-positive tables.
+
+## Phase 10
+
+- **BACKLOG 26 (co-view adjusted factor) closed as a won't-do (Ruling A).** Row 26
+  anchored the trigger to "the Phase-10 near-miss demo (real-lift vs shared-IP)," but
+  that near-miss is a **device-graph / shared-IP** discrimination — it turns on
+  `ip_clusters.ip_resolved_fraction` and candidate counts, not on any genre number.
+  Walking Phase 10 end to end (no-fault baseline → 5-fault sweep → real_lift/shared_ip
+  near-miss), **nothing consumes a genre-adjusted advertiser number** — exactly the
+  HARD STOP condition row 26 named. Building it (rejected on the merits, not just scope):
+  the honest per-genre expected baseline does not exist in serving data (Phase-8
+  finding — the truth-side 2.5× skew collapses to a ~7% margin, sports 0.561 vs comedy
+  0.522), so a positive `co_view_bug` diagnosis would need the expected baseline fed
+  from the producer's co-view multiplier — the reporting-reads-generation-params
+  coupling row 26 forbids — or a 7%-margin detector flaky by construction. Either
+  "works" only because it was told the answer, undercutting the determinism/isolation
+  spine. **Co-view stays a producer-realism knob, not a reporting factor**;
+  `CO_VIEW_INFLATION` stays a caveated enum member the agent never returns as a
+  CONFIDENT top hypothesis. Two record-fixes: (a) **row 26's anchor was mis-specified** —
+  the near-miss is shared-IP/device-graph, not co-view, which is *why* the stop fires;
+  a future reader should not trip on the stale "near-miss needs it" text. (b)
+  `co_view_bug`'s abstention is NOT the same as `duplicate_flood`'s: duplicate_flood
+  abstains because **nothing is wrong** (a benign control); co_view_bug abstains because
+  the real fault is **undiagnosable from serving data by design** (a labeled capability
+  boundary). Both score correct-abstention, but the table + RESULTS label them
+  distinctly — never conflate "found nothing" with "couldn't see it".
+
+- **Four scoring buckets (Ruling B/C).** Every rep scores against the scenario's `kind`:
+  `fault_recall` (shared_ip_spike/late_burst — CONFIDENT ∧ top == expected is correct;
+  AMBIGUOUS is an over-cautious `ABSTAINED` miss; CONFIDENT ∧ wrong top is
+  `WRONG_DIAGNOSIS`), `negative_confirmation` (real_lift — see next bullet),
+  `capability_boundary` (co_view_bug — abstention-expected but for a *seeing* reason,
+  excluded from the FP-rate denominator), and `control` (duplicate_flood +
+  no_fault_baseline — abstention-expected because nothing is wrong; **these two are the
+  FP-rate denominator**, §4.3). `verdict == AMBIGUOUS_NEEDS_HUMAN` is ALWAYS read as
+  abstention, never the escalation-default `top_hypothesis` (the Phase-9 forward-note).
+  The rubric is a PURE function (`agent/eval/scoring.py`) unit-tested exhaustively with
+  synthetic findings, so the token-gated live sweep is a thin data-capture step — every
+  scoring path is decided offline before a token is spent.
+
+- **`real_lift` is `negative_confirmation`, not `fault_recall` (design-review fix).** A
+  first draft scored real_lift as `fault_recall` requiring a CONFIDENT
+  `real_performance_change`. That answer is **structurally unreachable from the frozen
+  context**: `AttributionContext` has `match_rate`/`match_rate_by_day`/absolute
+  `campaigns` but NO baseline/vs-prior/vs-expected field — the agent sees one run, so
+  "match rate/ROAS is UP" is not observable, and the lift is uniform (a 2×
+  caused-rate, not a temporal ramp the `campaign_attributed_by_day` probe could key on).
+  Flat `ip_resolved_fraction` only rules OUT device_graph; after ruling out every
+  distortion the honest read of real_lift is "healthy pipeline," which **Ruling E routes
+  to abstention** — so a prompt-compliant agent would abstain and the fault_recall rubric
+  would have scored that correct behavior as an `ABSTAINED` miss on the §4.3 checkpoint
+  headline (prompt-vs-rubric contradiction). Resolved on the rubric side, matching
+  PHASES.md ("DECLINES to fire device_graph_mismatch"): **correct = abstain OR confident
+  real_performance_change (bonus); FAILURE = confident device_graph_mismatch (the
+  near-miss NEGATIVE-half failure) or any other fault.** This keeps the near-miss's real
+  teeth (fire device_graph on shared_ip, do NOT on real_lift — the discrimination that IS
+  observable) without penalizing the agent for correctly not inventing a fault. Pure
+  scoring.py change, no context back-edit, no reseed. Rejected alternative: adding a
+  temporal-ramp knob + reseed — heavier, and a within-window ramp is the wrong model for
+  a performance lift.
+
+- **Full `make run` per scenario injects no spurious restatement on the in-window
+  profiles (Ruling: pinned).** The sweep runs the FULL pipeline (incl. reconciliation) so
+  late_burst's restatement signal exists, but the three in-window scenarios
+  (shared_ip_spike / real_lift / no_fault_baseline — all event-time delays inside the 7d
+  window) must recover nothing on the long window, else a spurious `roas_delta` could bait
+  a false `late_arrival_distortion`. Pinned offline
+  (`test_in_window_scenarios_recover_nothing_on_the_long_window`): attributing at
+  HOT_WINDOW (7d) and LONG_WINDOW (90d) over the same streams credits the identical
+  conversion set for all three, so reconciliation writes no corrected rows and
+  report_snapshots PRE == FINAL. late_burst is excluded — its misses are arrival lateness
+  / eviction (not event-time), so it genuinely restates.
+
+- **The no-fault baseline is `seed 1`, medium-scale, with REALISTIC co-view.** The five
+  fault profiles flatten `co_view_multiplier` to isolate one anomaly; the baseline is the
+  one profile that keeps a realistic non-flat co-view (sports 1.5, comedy 1.2) so the
+  sweep's control is realistic, not sterile (DECISIONS Phase 8). Seed 1 is offline-clean:
+  truth 90, 90 correct, 0 wrong-household, 0 state-misses, recall 1.0, delays inside the
+  7d window — nothing for the agent to confidently flag. Precision 0.71 is normal
+  last-touch organic over-credit (like tiny), not a fault. Pinned in
+  `test_fault_profiles.py` like the other profiles.
+
+- **One prompt sentence added for the no-fault abstain path (Ruling E).** The Phase-9
+  prompt asked the agent to decide whether a number is "probably WRONG" but never blessed
+  a clean-baseline outcome; the controls are a first-class §4.3 requirement, so
+  `SYSTEM_PROMPT` gains: *if no signal indicates a probably-wrong number, do not invent a
+  fault — submit AMBIGUOUS_NEEDS_HUMAN.* The cached prefix's byte value changes but stays
+  stable within Phase 10 (caching discipline intact). This is the only agent-behavior
+  change this phase; it makes "leave the control alone" an explicit instruction rather
+  than an inference the model must make unaided across 10 control reps.
+
+- **The agent is non-reproducible; the reps MEASURE residual stability (Phase-9 Ruling
+  C).** Temperature is unset on the Claude-5 family, so per-rep output varies. `EVAL_REPS
+  = 5` per scenario is exactly why the tables report a rate (k/5), not a single-run claim;
+  verdict/hypothesis stability across reps is a measurement, never a gated assertion — the
+  AI edge is carved out of the byte-identical guarantee (CLAUDE.md). The sweep drives its
+  own clean stack per scenario (`make down && up && seed && run`, full run for the
+  restatement field) because profiles share `conversion_id` space (Phase 5); FG2 (BACKLOG
+  31) is satisfied by rendering each profile's deterministic live context headline into a
+  dedicated per-profile headline table in RESULTS (`tables.headline_table`, all six
+  scenarios — not just the near-miss pair, which the coherence audit caught as an early
+  overclaim).

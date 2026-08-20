@@ -449,8 +449,33 @@ never auto-fixed, ignored, or committed around.
   turn-2 cache_read 2857. Review gate passed (code-reviewer 2 minor → CR-1 rename +
   CR-2 name-based mapping applied; security-reviewer PASS, 2 notes tracked; func PASS;
   FT-1 residual materialized live → Fix A strict `submit_finding`, malformed payload
-  committed as a regression fixture). Merged: PENDING (developer merges). Spec:
-  `specs/phase-9.md`.
+  committed as a regression fixture). Merged (PR #11). Spec: `specs/phase-9.md`.
+- Phase 10 (2026-08-19): built on `phase-10-agent-eval` — agent eval + near-miss demo
+  (CHECKPOINT). New `no_fault_baseline` profile (seed 1, medium-scale, REALISTIC
+  co-view; offline-clean: truth 90/90 correct, 0 wrong-household, recall 1.0 — nothing
+  to flag). Eval harness (`agent/eval/`): frozen 6-scenario catalog (`scenarios.py`),
+  PURE scoring rubric (`scoring.py`, four buckets — fault_recall / negative_confirmation
+  / capability_boundary / control — with `verdict==AMBIGUOUS_NEEDS_HUMAN` always read as
+  abstention, never the escalation-default hypothesis), PURE Markdown renderers
+  (`tables.py`), and the
+  token-gated `make agent-eval` sweep (`run_eval.py` — clean stack per scenario, EVAL_REPS
+  live invocations, both tables → `docs/RESULTS.md`, FG2 headlines captured). One prompt
+  sentence added for the no-fault abstain path (Ruling E). BACKLOG 26 (co-view adjusted
+  factor) closed as a DECISIONS won't-do (the near-miss is shared-IP/device-graph, not a
+  genre number — hard stop fired); co_view_bug scored as a labeled capability boundary,
+  distinct from the duplicate_flood/no_fault_baseline FP controls. BACKLOG 31 (FG2)
+  resolved via the sweep's live-headline capture. Offline green: 206 tests + lint; gate-0
+  tiny golden byte-identical. Review gate passed (code-reviewer + functionality-tester +
+  coherence-auditor; 2 blockers B1/B2 + drift D1/D2 + CR-2/CR-3 all dispositioned — one
+  offline batch; DECISIONS is a dated trail, ARCHITECTURE the one forward statement, so
+  no consolidation). Live `make agent-eval` DONE (30 invocations, Sonnet-5; ~178k cache_read
+  input, well under $10): **30/30 correct, false-positive rate 0/10 = 0%**; near-miss both
+  halves clean (real_lift → 5× CONFIDENT real_performance_change at ip_resolved_fraction
+  0.061, NEVER device_graph_mismatch; shared_ip_spike → 5× CONFIDENT device_graph_mismatch
+  at 0.420); co_view_bug → 5× AMBIGUOUS (top co_view_inflation — names the suspect, declines
+  to confirm, distinct from the controls' abstention); late_burst → 5× CONFIDENT
+  late_arrival_distortion. Both/three tables in `docs/RESULTS.md`. Done-when all met. Merged:
+  PENDING (developer merges). Spec: `specs/phase-10.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot eval report restate bench context agent-run metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
+.PHONY: setup up down seed resolve run run-hot eval report restate bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -97,6 +97,15 @@ context:
 # the Phase-9 Done-when uses PROFILE=shared_ip_spike.
 agent-run:
 	uv run python -m agent.run_agent --profile "$(PROFILE)"
+
+# Phase-10 fault->diagnosis sweep: every fault profile + the no-fault baseline, run
+# EVAL_REPS times, scored against the pure rubric, both tables written to
+# docs/RESULTS.md. Drives its own clean stack per scenario (down/up/seed/run — profiles
+# share conversion_id space, DECISIONS Phase 5), so run it on a free machine, not over a
+# stack you want to keep. This is the ONLY eval path that calls the LLM — it costs API
+# tokens (30 invocations, well under $10), so ask the developer before running (CLAUDE.md).
+agent-eval:
+	uv run python -m agent.eval.run_eval
 
 # Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
 # would probe services before skipping) from making any network attempt.
