@@ -41,8 +41,8 @@ resolution, windowed cross-device joins, dedup, late-event handling, a
 reconciliation path, an OLAP serving layer with restatements, and the operational
 tooling around all of it.
 
-**Scale posture.** The pipeline runs end to end at a few thousand messages/sec on a
-laptop. It does not attempt a live 500k/sec demo; that is impossible on free
+**Scale posture.** The pipeline runs end to end on a laptop. It does not attempt a
+live 500k/sec demo; that is impossible on free
 infrastructure and fools no one. Instead the **scaling story is a written
 deliverable** (`SCALING.md`): where the design breaks at 50k/sec and 500k/sec, and
 precisely what changes at each tier.
@@ -209,7 +209,8 @@ watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
 
 - `attributed_conversions`: **ReplacingMergeTree** keyed on `conversion_id` with
   `processed_at` as version, so a replay or a reconciliation correction supersedes
-  the earlier row. Readers use `FINAL` or `argMax` at read. Async inserts on.
+  the earlier row. Readers use `FINAL` or `argMax` at read. Inserts are synchronous
+  today; async inserts are a scaling lever (see SCALING.md), not a current property.
 - `exposures_landed`: raw exposures, for reconciliation lookups and the naive
   benchmark.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
@@ -344,7 +345,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 |---|---|
 | Streaming at scale | Two-stream Redpanda ingestion, resolve stage, stateful Bytewax engine |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; Iceberg landing as next step |
-| OLAP reporting stack | ClickHouse: ReplacingMergeTree, async inserts, scheduled rollups, restatements |
+| OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
 | On-call / incident readiness | Prometheus, Grafana, Alertmanager rules, runbook-style SCALING.md |
 | Data contracts | Pydantic-derived JSON Schemas enforced via schema registry at produce and consume |

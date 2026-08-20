@@ -1,42 +1,190 @@
 # SCALING.md — where the design breaks and what changes
 
-Full deliverable is **Phase 11** (50k/sec and 500k/sec tiers, partition math,
-state backend, Flink mapping, ClickHouse tier changes — see `PHASES.md`). This
-file exists early only to catch scaling notes at the phase that discovered them,
-so they aren't reconstructed later. Notes accumulate here; the tiered write-up is
-authored in Phase 11.
+This pipeline runs end to end on a laptop. It does **not** attempt a live 500k/sec
+demo — that is impossible on free infrastructure and
+fools no one (ARCHITECTURE §2). Instead this is the written scaling deliverable: the
+constraint that breaks first, the partition math, and precisely what changes at the
+**50k/sec** and **500k/sec** tiers — state backend, stream processor, and ClickHouse.
 
-## Notes accumulating toward the Phase 11 write-up
+Numbers here are order-of-magnitude sizing to show *where* the walls are, not
+benchmarked capacity. Per-partition consumer throughput is taken as ~5–10k msgs/sec
+(a single Python consumer doing a keyed lookup + emit); the exact figure moves the
+partition counts but not the structure.
+
+---
+
+## Baseline — what runs today
+
+- **One partition per topic**, single-process stages, a **bounded batch drain** in
+  the engine (Bytewax's Kafka source never signals EOF, so the engine drains both
+  topics to memory once and runs an arrival-ordered, watermark-gated, evicting pass —
+  ARCHITECTURE §8). Windowing, watermarks, allowed-lateness, dedup, and eviction are
+  all real, but on the drain.
+- **Hot-window state in a plain in-memory dict.** The seeded profiles span days of
+  *event-time* but only hundreds–thousands of events, so 7 days of window state is
+  a few thousand rows — trivially in memory.
+- **ClickHouse single node**: ReplacingMergeTree, **synchronous inserts** (async
+  inserts are a scale-up lever, not built here — see the 50k/500k tiers below), a
+  scheduled rollup refresh.
+
+Everything below is what has to change as the *rate* (not the event count) climbs.
+
+## The constraint that breaks first: hot-window state
+
+The hot window keeps **7 days of exposures** in processor state so late conversions
+can still match (ARCHITECTURE §3.3). That state is:
+
+```
+window_state ≈ exposure_rate × window_length × per-key-state-bytes
+```
+
+This grows with the **rate**, and it is the first thing to fall over. At an exposure
+rate of ~25k/sec (half of a 50k/sec total stream), 7 days is
+
+```
+25,000 /s × 604,800 s ≈ 1.5 × 10¹⁰ exposures  →  ~3 TB at ~200 B/exposure
+```
+
+which does not fit in the memory of any single node. This is *why* the architecture
+has two attribution paths: the **7-day hot window is a memory budget, not a time
+budget**, and the reconciliation path (≤90d against `exposures_landed` in ClickHouse)
+is what lets the effective window be long without holding it in RAM. Every tier below
+is really a question of "how much window can this tier's state backend afford, and how
+much does reconciliation carry?"
+
+## Partition math
+
+A partition is the unit of both ordering and parallelism: Redpanda/Kafka guarantees
+order only within a partition, and one consumer instance reads a partition at a time.
+So parallelism = partition count, and
+
+```
+partitions ≥ target_rate / per_partition_throughput
+```
+
+The join constraint pins the layout: `exposures` and `conversions_resolved` are both
+keyed by `household_id` and **must use the same partition count**, so a household
+hashes to the same partition on both sides and the join is partition-local (no
+shuffle). `conversions` is keyed by `device_id` with its own count — the resolve
+stage re-keys to `household_id` on the way to `conversions_resolved`.
+
+| tier | target rate | per-topic partitions (≈) | engine workers |
+|---|---|---|---|
+| laptop | ~few k/sec | 1 | 1 (batch drain) |
+| 50k/sec | 50,000 | 8–16 | one per partition |
+| 500k/sec | 500,000 | 64–128 | one per partition, sharded state |
+
+Partition count is a one-way ratchet in Kafka (you can add but not cleanly remove, and
+adding re-hashes keys), so it is provisioned for the target tier, not grown reactively.
+
+## Tier: 50k/sec
+
+- **Continuous follow, not a batch drain.** At a steady 50k/sec the finite-drain
+  idiom no longer applies; the engine follows the topics unbounded. This is the
+  deferred continuous-follow work (README → Next steps), and it forces the next two
+  changes.
+- **State backend: spill to disk.** The 7-day in-memory window no longer fits (see
+  above). Either (a) back keyed window state with an **on-disk store** (RocksDB-style)
+  sharded per partition, so each worker holds only its key-range; or (b) **shrink the
+  hot window** (e.g. to 24–48h) and let reconciliation recover the rest. In practice,
+  both.
+- **Dedup becomes TTL'd.** The batch seen-set (correct because the whole stream is in
+  memory) becomes TTL'd keyed state, evicting an id once no further duplicate can
+  plausibly arrive (`event_time + max_resend_delay` vs the watermark). See the note
+  below — the seeded fixture cannot exercise TTL sizing because its duplicate is
+  timestamp-identical to the original.
+- **ClickHouse still single-node**, but insert batching matters: async inserts with
+  larger buffers to keep insert-part count down, and a tuned rollup-refresh interval.
+  Watch part-merge lag — `FINAL` read cost grows with the number of unmerged parts.
+
+## Tier: 500k/sec
+
+- **The 7-day in-memory window is out entirely.** Hot window shrinks to hours;
+  reconciliation carries proportionally more of the recall. State is RocksDB-backed
+  per worker with checkpointing for recovery, sharded across 64–128 partitions so no
+  single worker's key-range exceeds its memory + local disk budget.
+- **Move the engine to Flink.** Bytewax is the right call for a Python-first,
+  fast-iteration build with real state/window primitives, but at 500k/sec the mature
+  choice is Flink: a battle-tested RocksDB state backend, incremental checkpointing,
+  exactly-once, and operational tooling. The operator mapping is 1:1 (below), so this
+  is a port, not a redesign.
+- **ClickHouse becomes a cluster.** ReplicatedReplacingMergeTree, sharded by a
+  household hash (keeps a conversion's corrections on one shard) or by `campaign_id`
+  (keeps a report local); a Distributed table fans inserts and reads out; buffer
+  tables or async insert smooth the insert rate; rollups become **per-shard
+  refreshable MVs**. Point the agent's SELECT-only user and the heavy report queries
+  at a read replica so triage never contends with ingestion.
+
+## State backend progression
+
+| tier | window state | dedup state | recovery |
+|---|---|---|---|
+| laptop | in-memory dict, full 7d | full seen-set | re-drain (deterministic) |
+| 50k/sec | RocksDB, sharded per partition; window ≤24–48h | TTL'd keyed state | checkpoint per partition |
+| 500k/sec | RocksDB + incremental checkpoints; window in hours | TTL'd keyed state | exactly-once checkpoint/restore |
+
+Idempotency makes every tier's recovery safe regardless of processing guarantee: the
+serving write is a ReplacingMergeTree keyed `conversion_id` versioned `processed_at`,
+so a replayed or re-checkpointed message supersedes rather than duplicates — an
+at-least-once sink is correct by construction.
+
+## Flink mapping (500k/sec port)
+
+| Bytewax construct here | Flink equivalent |
+|---|---|
+| Kafka drain, EOF-gated | `KafkaSource` + `WatermarkStrategy.forBoundedOutOfOrderness(allowed_lateness)` |
+| household-keyed join | `keyBy(household_id)` + interval join / `KeyedCoProcessFunction` |
+| hot-window exposure state | keyed `MapState` on the RocksDB backend, `StateTtlConfig` = window length |
+| watermark + allowed lateness | Flink watermarks + window `allowedLateness`; late events to a **side output** → reconciliation |
+| dedup seen-set | keyed state with TTL (the batch→TTL story maps directly) |
+| eviction (`watermark > event_time + 7d`) | state TTL / window expiry (automatic) |
+| `conversion_id`-keyed ambiguous reduction | second `keyBy(conversion_id)` + `reduce` |
+| deterministic re-drain | checkpointing + transactional/idempotent sink → exactly-once |
+
+## ClickHouse tier changes
+
+| concern | laptop | 50k/sec | 500k/sec |
+|---|---|---|---|
+| table engine | ReplacingMergeTree | ReplacingMergeTree | ReplicatedReplacingMergeTree |
+| topology | single node | single node | sharded + Distributed table |
+| inserts | synchronous | async inserts, larger buffers | buffer/Distributed fan-in |
+| rollup | scheduled refresh | scheduled, tuned interval | per-shard refreshable MVs |
+| `FINAL` read cost | negligible | watch part-merge lag | read replica for reports/agent |
+
+The rollup is the read-side scaling lever, and the build already shows why (below).
+
+---
+
+## Evidence from the build
 
 ### Rollup benchmark: the win is scan-size, and it compounds at volume (Phase 7)
 
-`make bench` (Phase 7) shows the `campaign_hourly` rollup reading 2.5× fewer rows
-and 1.6× fewer bytes than the naive full `FINAL` scan-and-join, at `long_delay`
-scale (see `RESULTS.md`). The edge is modest here only because the raw tables are
-small. What matters at scale: the **naive scan grows with every conversion and
-exposure** (and pays the `FINAL` merge over an ever-larger set), while the
-**rollup read grows only with the number of distinct `(campaign, hour)` buckets** —
-bounded by campaigns × hours in the reporting window, independent of event volume.
-At the 50k/500k tiers a per-read full-history scan is the thing that breaks; the
-scheduled-refresh rollup is what keeps read cost flat. The refresh itself is the
-cost that grows, but it is paid once on a schedule, off the read path
-(ARCHITECTURE §3.3: scheduled refresh, never insert-triggered summing MVs).
+`make bench` shows the `campaign_hourly` rollup reading **2.5× fewer rows and 1.6×
+fewer bytes** than the naive full-`FINAL` scan-and-join at `long_delay` scale
+(`RESULTS.md`). The edge is modest here only because the raw tables are small. What
+matters at scale: the **naive scan grows with every conversion and exposure** (and
+pays the `FINAL` merge over an ever-larger set), while the **rollup read grows only
+with the number of distinct `(campaign, hour)` buckets** — bounded by campaigns ×
+hours in the reporting window, independent of event volume. At 50k/500k a per-read
+full-history scan is the thing that breaks; the scheduled-refresh rollup keeps read
+cost flat. The refresh itself is the cost that grows, but it is paid once on a
+schedule, off the read path (ARCHITECTURE §3.3: scheduled refresh, never
+insert-triggered summing MVs).
 
 ### Engine dedup: full seen-set now, TTL'd under continuous follow (Phase 5)
 
-The Phase-5 engine is a **bounded batch drain** — it reads each topic start→end
-once and holds it in memory — so dedup is a full `conversion_id`/`exposure_id`
-seen-set: O(n) in the drained batch, deterministic on the single partition, and
-correct because the whole stream is present at once (ARCHITECTURE §8, DECISIONS
-Phase 5).
+The Phase-5 engine is a **bounded batch drain** — it reads each topic start→end once
+and holds it in memory — so dedup is a full `conversion_id`/`exposure_id` seen-set:
+O(n) in the drained batch, deterministic on the single partition, and correct because
+the whole stream is present at once (ARCHITECTURE §8, DECISIONS Phase 5).
 
 **What changes at scale / under continuous follow.** Once the engine follows the
-topics continuously (unbounded, no EOF), an unbounded seen-set is a memory leak.
-Then dedup must become **TTL'd state**, evicting an id once no further duplicate
-of it can plausibly arrive — keyed on `event_time + max_resend_delay` against the
-watermark, sized to the real duplicate-injector / upstream re-send delay. This is
-also where the seeded fixture stops being a faithful proxy: the fixture's
-duplicate is **timestamp-identical** to its original (same `event_time` and
-`ingest_time`), so a real deployment with genuinely-later re-send timestamps is
-needed to exercise TTL sizing. Continuous follow is deferred (no phase owns it
-yet); the two resolve BACKLOG rows re-defer on the same trigger.
+topics continuously (unbounded, no EOF), an unbounded seen-set is a memory leak. Then
+dedup must become **TTL'd state**, evicting an id once no further duplicate of it can
+plausibly arrive — keyed on `event_time + max_resend_delay` against the watermark,
+sized to the real duplicate-injector / upstream re-send delay. This is also where the
+seeded fixture stops being a faithful proxy: the fixture's duplicate is
+**timestamp-identical** to its original (same `event_time` and `ingest_time`), so a
+real deployment with genuinely-later re-send timestamps is needed to exercise TTL
+sizing. Continuous follow is deferred (no phase owns it yet); the two resolve BACKLOG
+rows re-defer on the same trigger.
