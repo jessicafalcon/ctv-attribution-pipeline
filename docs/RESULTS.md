@@ -89,6 +89,37 @@ the difference between a full-history scan and a bounded rollup read — see
 `SCALING.md`. The numbers here are reported as measured; the profile was not tuned
 to inflate the optimized win.
 
+## Observability — alert rules
+
+Four Alertmanager rules cover the deterministic conditions, each proven by
+`make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
+Prometheus image against **real captured registries** (`make metrics-capture` dumps
+each stage's terminal Prometheus registry from a knobbed run;
+`observability/gen_alert_fixtures.py` bakes those numbers into the test fixture, so
+the threshold-crossing values come from a real stage run, never hand-authored):
+
+| alert | expr | fires when |
+|---|---|---|
+| `ConsumerLag` | `resolve_input_backlog > 100` | resolve stage falls behind |
+| `WatermarkStall` | `engine_watermark_lag_seconds > 14400` | peak arrival lateness > 4h |
+| `MatchRateOutOfBand` | match rate outside band | share of conversions attributed jumps/drops |
+| `RestatementMagnitude` | `reconcile_restatement_roas_abs_delta > 1.0` | reconciliation moves a period's ROAS materially |
+
+Two honesty boundaries on what this proves:
+
+- **These four detect *operational* faults** (lag, watermark stall, match-rate move,
+  restatement magnitude), **not attribution inflation.** Catching a
+  plausible-but-wrong number — a ROAS that looks fine but is inflated by a
+  device-graph mismatch — is the **agent's** job (ARCHITECTURE §4), which is the
+  exact reason the agent earns its place. A green alert board does not mean the
+  numbers are right.
+- **The rules discriminate; they do not isolate.** The fixtures prove each rule
+  **fires on the anomalous profile (`long_delay`) and stays silent on the clean one
+  (`tiny`)** — a discrimination between a knobbed profile and a baseline. They do
+  **not** claim single-knob isolation (one knob → one alert): `long_delay` trips more
+  than one rule, and that is expected. The proven claim is "the anomalous profile
+  trips the alerts, the clean profile does not," nothing stronger.
+
 ## Agent eval — fault → diagnosis
 
 Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
