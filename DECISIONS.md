@@ -1008,3 +1008,33 @@ One entry per non-obvious choice. Newest last.
   dedicated per-profile headline table in RESULTS (`tables.headline_table`, all six
   scenarios — not just the near-miss pair, which the coherence audit caught as an early
   overclaim).
+
+## Post-Phase-11 fixes
+
+- **`make bench` canonicalizes both read sides to merged steady state before measuring
+  (BACKLOG 29, `fix/bench-direction-guard`).** Adding the magnitude-free direction assert
+  (`optimized read_rows < naive`, the row-29 guard) surfaced a latent non-determinism it
+  did not create: `read_rows` from `X-ClickHouse-Summary` counts the physical rows a
+  `FINAL` scan reads, which for a versioned-replace ReplacingMergeTree includes every
+  un-merged version-part (ARCHITECTURE §8 gotcha). `campaign_hourly` gains a full copy per
+  rollup refresh and `attributed_conversions` a superseded version per reconciled
+  conversion, so the measured read-size drifted with refresh count and background-merge
+  timing. CI runs `make bench` right after `test_reconcile.py` refreshes the rollup two
+  extra times, so it measured 1020 rollup rows and the benchmark **printed the rollup
+  reading MORE than the naive scan (0.8×)** — the RESULTS headline did not reproduce in
+  CI's run-state, and on `main` (no guard) that false-green went unnoticed because the
+  equality gate does not check direction. **Chosen fix:** `_canonicalize` runs `OPTIMIZE
+  TABLE ... FINAL` on all three read tables (`attributed_conversions`, `exposures_landed`,
+  `campaign_hourly`) at the top of `run()`. **Why all three, not just the rollup:** the
+  naive side version-stacks too (the 29 reconciled rows are higher-`processed_at` versions
+  of previously-hot `conversion_id`s), so optimizing only the rollup would compare a merged
+  rollup against a maybe-stacked naive scan — still non-deterministic, and apples-to-
+  oranges. Optimizing both is the only version that makes `read_rows` deterministic on both
+  sides AND an honest steady-state comparison (the form a scheduled rollup serves in
+  production). **Honesty consequence, not hidden:** collapsing the naive side dropped it
+  835 rows / 25.7 KB (was measured at 864 / 42 KB un-merged), so the steady-state **byte**
+  win is 1.2×, not the previously-reported 1.6×; RESULTS was updated to the both-merged
+  numbers (rows still 2.5×). Rejected alternatives: reordering CI so `bench` runs before
+  the extra-refresh tests (leaves `bench.py` non-deterministic for every other caller);
+  weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
+  test to make it pass).
