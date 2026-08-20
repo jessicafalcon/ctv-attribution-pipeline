@@ -441,10 +441,16 @@ never auto-fixed, ignored, or committed around.
   `agent/config.py` (AGENT_MODEL/AGENT_EFFORT/EVAL_REPS=5/MAX_PROBE_ROUNDS). New
   SELECT-only `agent_ro` (`clickhouse/users.d/agent-ro.xml`, grant-form) backing the
   WHOLE agent read path via `connect_agent()` (collectors re-pointed, SN2). `make
-  agent-run` (API tokens; ask first) / `make test-int-agent`. Green so far: 163 offline
-  + lint; live `make test-int-agent` (6 — write-denied INSERT/ALTER/DROP/CREATE +
-  agent_ro read path + all 5 probes execute typed). Live `make agent-run` (the
-  end-to-end valid-finding half) + review gate PENDING. Spec: `specs/phase-9.md`.
+  agent-run` (API tokens; ask first) / `make test-int-agent`. Done-when all met:
+  166 offline + lint; gate-0 tiny golden byte-identical (`make test-int` 11); live
+  `make test-int-agent` (6 — write-denied INSERT/ALTER/DROP/CREATE + agent_ro read
+  path + all 5 probes execute typed); live `make agent-run` on shared_ip_spike →
+  valid finding, top_hypothesis device_graph_mismatch, native ranked, CONFIDENT,
+  turn-2 cache_read 2857. Review gate passed (code-reviewer 2 minor → CR-1 rename +
+  CR-2 name-based mapping applied; security-reviewer PASS, 2 notes tracked; func PASS;
+  FT-1 residual materialized live → Fix A strict `submit_finding`, malformed payload
+  committed as a regression fixture). Merged: PENDING (developer merges). Spec:
+  `specs/phase-9.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
