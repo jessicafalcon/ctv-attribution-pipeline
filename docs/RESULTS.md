@@ -1,7 +1,45 @@
 # RESULTS.md
 
-Measured outcomes. Finalized in Phase 11 (accuracy tables, agent eval); this file
-starts at the Phase-7 benchmark so the numbers are captured where they were run.
+Measured outcomes, three ways the pipeline is validated: **attribution accuracy**
+against ground truth, the **rollup benchmark**, and the **agent eval**. The accuracy
+numbers are deterministic (seed-reproducible, asserted by the integration tests) and
+reproduce via `make eval`; the benchmark is captured from a real `make bench` run; the
+agent-eval spread is measured over live invocations (non-reproducible by construction,
+see below).
+
+## Attribution accuracy — engine output vs the truth side file
+
+Household-grain precision and recall (ARCHITECTURE §4.3), scored in the eval harness
+(`accuracy/`) by joining `attributed_conversions` FINAL from ClickHouse against the
+truth-link **side file** (`data/truth/<profile>/`) — truth never enters the database
+(determinism / truth-isolation, N1). Household grain is deliberate: the engine is
+last-touch, so scoring exact `exposure_id` would measure last-touch-vs-causal
+coincidence (a model property), not attribution quality; household grain isolates the
+real failure mode, wrong-household (shared-IP) attribution.
+
+| profile | path | credited | truth | correct | precision | recall | wrong-hh |
+|---|---|---|---|---|---|---|---|
+| `tiny` | hot | 52 | 35 | 35 | 0.673 | 1.000 | 0 |
+| `medium` | hot | 130 | 92 | 92 | 0.708 | 1.000 | 0 |
+| `long_delay` | hot only | 83 | 75 | 44 | — | 0.587 | — |
+| `long_delay` | post-reconcile | 112 | 75 | 73 | — | 0.973 | — |
+
+- **Precision below 1.0 on `tiny`/`medium` is last-touch *organic over-credit*, not a
+  bug.** 17 organic `tiny` conversions (no truth link) are credited to a
+  coincidentally-recent in-window exposure. Wrong-household count is **0** on both
+  clean profiles — shared-IP misattribution is a fault-profile story (see the agent
+  eval and `shared_ip_spike`), not a property of the clean runs. Recall is 1.000: the
+  hot path misses no caused conversion whose exposure is inside the 7-day window.
+  Exact-`exposure_id` match on `tiny` is a labeled diagnostic only (3/52 = 0.058),
+  never the headline.
+- **`long_delay` is the reconciliation story.** Its caused conversions arrive days
+  late, so their exposures have aged out of the 7-day hot window — the hot pass misses
+  them and recall sits at **0.587** (44/75). The periodic reconciliation pass re-runs
+  the same pure attribution leaf at 90 days against `exposures_landed`, recovers **29**
+  caused misses to their correct household, and lifts recall to **0.973** (73/75) —
+  credited 83 → 112. The 2 residual misses are wrong-household shared-IP resolutions
+  that reconciliation cannot fix. This is the recall-buys-at-some-precision-cost trade
+  the long tail exists to make, and it is the headline reconciliation number.
 
 ## Benchmark — naive full scan vs optimized rollup
 

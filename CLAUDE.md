@@ -474,8 +474,25 @@ never auto-fixed, ignored, or committed around.
   0.061, NEVER device_graph_mismatch; shared_ip_spike → 5× CONFIDENT device_graph_mismatch
   at 0.420); co_view_bug → 5× AMBIGUOUS (top co_view_inflation — names the suspect, declines
   to confirm, distinct from the controls' abstention); late_burst → 5× CONFIDENT
-  late_arrival_distortion. Both/three tables in `docs/RESULTS.md`. Done-when all met. Merged:
-  PENDING (developer merges). Spec: `specs/phase-10.md`.
+  late_arrival_distortion. Both/three tables in `docs/RESULTS.md`. Done-when all met. Merged
+  (PR #12). Spec: `specs/phase-10.md`.
+- Phase 11 (2026-08-20): built on `phase-11-docs` — docs (final phase, no pipeline
+  code). Root `README.md` as a design doc (problem → scope/honesty → architecture with
+  teaching-level stream-concept explanations → agent → results → run-it-in-two-commands
+  → determinism → repo map → Next-steps/what-was-cut). `docs/SCALING.md` finalized: the
+  hot-window-state constraint (`exposure_rate × window`, the first wall), partition math
+  (join pins equal partition counts on the two household-keyed topics), 50k/500k tiers,
+  state-backend progression (in-memory → RocksDB-sharded → checkpointed), 1:1 Bytewax→Flink
+  operator mapping, ClickHouse tier changes (single node → ReplicatedReplacingMergeTree +
+  Distributed + per-shard refreshable MVs); the two accumulated build notes kept as
+  evidence. `docs/RESULTS.md` finalized with the attribution-accuracy tables (tiny
+  0.673/1.000, medium 92/130=0.708/1.000, long_delay recall 0.587→0.973 via reconciliation)
+  alongside the existing benchmark + agent-eval sections. No new numbers invented — accuracy
+  cites the deterministic integration-test pins; benchmark/eval unchanged from where they
+  were captured. Done-when met: README → `make up` → `make seed && make run` is the lead
+  path; all internal links resolve, every README command is a real Makefile target. Green:
+  206 offline tests + lint (docs-only, no code touched). Review gate: PENDING (developer runs
+  code-reviewer + coherence-auditor). Spec: none (docs phase; Done-when from PHASES.md).
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
