@@ -247,7 +247,7 @@ no services), `make test-int` (against the running stack), `make test-alerts`
 Commands. Service UIs once `make up` is healthy: ClickHouse `:8123`, Prometheus
 `:9090`, Alertmanager `:9093`, Grafana `:3000`, Redpanda Kafka API `:19092`.
 
-## Determinism — the core design principle
+## Determinism: the core design principle
 
 The AI sits at the edge; the pipeline is deterministic.
 
