@@ -4,7 +4,7 @@ Renders are asserted offline so the RESULTS tables' shape is proven before the s
 from agent.config import EVAL_REPS
 from agent.eval import scenarios as scen
 from agent.eval.scoring import Outcome, RepResult, ScenarioResult, SweepResult
-from agent.eval.tables import fault_diagnosis_table, near_miss_table
+from agent.eval.tables import fault_diagnosis_table, headline_table, near_miss_table
 from agent.hypotheses import Hypothesis
 
 
@@ -86,6 +86,18 @@ def test_near_miss_table_shows_the_discriminator():
     assert "`real_lift`" in txt and "`shared_ip_spike`" in txt
     assert "0.420" in txt  # shared_ip elevated fraction
     assert "ip_resolved_fraction" in txt
+
+
+def test_headline_table_records_all_six_scenarios():
+    # FG2 (BACKLOG 31): every scenario's deterministic discriminator lands in RESULTS,
+    # not just the near-miss pair — so all four other profiles' headlines are durably
+    # pinned, not console-only.
+    txt = headline_table(_example_sweep())
+    for s in scen.SCENARIOS:
+        assert f"`{s.name}`" in txt
+    # the discriminator columns are present (ip for device-graph, |Δroas| for late)
+    assert "ip_resolved_fraction" in txt
+    assert "Δroas" in txt
 
 
 def test_fp_rate_reflects_a_control_false_positive():

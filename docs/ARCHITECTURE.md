@@ -105,7 +105,7 @@ RECONCILIATION JOB (periodic)          │
                    → match against exposures_landed → write corrected rows
                    → refresh rollups → write new report snapshot
                                        │
-REPORTING          ROAS / CPA / CVR / site-visit rate; co-view factor applied at read time
+REPORTING          ROAS / CPA / CVR / site-visit rate
                    restatement view: metric for period P as of time T
                    naive (full-scan) vs optimized (rollup) benchmark
 
@@ -278,8 +278,11 @@ otherwise do by hand.
 - **Match-rate anomalies**: jump/drop in the share of conversions attributed.
 - **ROAS / CPA discontinuities**: per-campaign shifts too large or too fast to be
   organic.
-- **Co-viewing inflation**: co-view-adjusted reach beyond plausible bounds for a
-  genre.
+- **Co-viewing inflation**: an implausibly high per-genre reach. This is a
+  **capability boundary**, not a scored diagnosis: the only serving-data signal is
+  RAW per-genre reach, which does not discriminate co-view inflation from noise (the
+  co-view-adjusted factor is a won't-do — DECISIONS Phase 10 / BACKLOG 26), so the
+  agent's correct outcome is to abstain (AMBIGUOUS_NEEDS_HUMAN), not to name it.
 - **Attribution-window edge effects**: spikes clustered at the window boundary.
 - **Wrong-household matches**: clusters of conversions matched via shared IPs.
 - **Late-arrival distortion**: a restatement that materially changes a period's
@@ -319,15 +322,17 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
   quality; household grain isolates the real failure mode, wrong-household
   (shared-IP) attribution. Exact-exposure-id match MAY be reported as a labeled
   diagnostic, never as the headline accuracy.
-- **Agent accuracy**: diagnosable fault profiles (shared-IP spike, late burst,
-  co-view multiplier bug, real performance lift), each scored on whether the
-  agent's top hypothesis is correct, plus **two controls the agent must correctly
-  leave alone** — a **no-fault baseline** and **duplicate_flood** (dedup absorbs it;
-  ClickHouse carries no fingerprint, so the correct output is no-fault) — each run
-  repeatedly, producing a *fault → top hypothesis → correct?* table with a
-  **false-positive rate** measured on the controls. (Co-view inflation is
-  diagnosable only once the adjusted co-view factor lands — Phase 10, §3.3
-  read-time factor; raw per-genre reach does not discriminate it, see BACKLOG.)
+- **Agent accuracy**: diagnosable fault profiles (shared-IP spike, late burst, real
+  performance lift), each scored on whether the agent's top hypothesis is correct,
+  plus **two controls the agent must correctly leave alone** — a **no-fault baseline**
+  and **duplicate_flood** (dedup absorbs it; ClickHouse carries no fingerprint, so the
+  correct output is no-fault) — each run repeatedly, producing a *fault → top
+  hypothesis → correct?* table with a **false-positive rate** measured on the controls.
+  (The **co-view multiplier bug** is a third category — a real fault that is NOT
+  diagnosable from serving data: the adjusted co-view factor is a won't-do (DECISIONS
+  Phase 10 / BACKLOG 26) and raw per-genre reach does not discriminate it, so the
+  agent correctly **abstains** — a labeled capability boundary, scored as a
+  correct-abstention but kept out of the false-positive denominator.)
 - **The near-miss pair**: a genuine performance improvement vs. an inflated match
   rate from shared-IP false positives both raise reported ROAS but demand opposite
   responses. Showing the agent tell them apart on the evidence proves real

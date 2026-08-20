@@ -25,7 +25,7 @@ from agent.config import AGENT_MODEL, EVAL_REPS
 from agent.context import AttributionContext
 from agent.eval import scenarios as scen
 from agent.eval.scoring import RepResult, ScenarioResult, SweepResult, score_rep
-from agent.eval.tables import fault_diagnosis_table, near_miss_table
+from agent.eval.tables import fault_diagnosis_table, headline_table, near_miss_table
 from agent.finding import AttributionFinding
 from agent.loop import AgentRun, run_agent
 from agent.run_context import collect
@@ -105,32 +105,35 @@ def run_scenario(
     invocations against the identical populated tables (only the LLM varies)."""
     stand_up_profile(scenario.profile)
     ch = connect_agent()
-    ctx = collect(ch, scenario.profile)
-    head = headline(ctx)
-    print(f"  headline[{scenario.name}]: {head}", flush=True)
+    try:  # one handle per scenario — close it before the next clean-stack cycle (CR-3)
+        ctx = collect(ch, scenario.profile)
+        head = headline(ctx)
+        print(f"  headline[{scenario.name}]: {head}", flush=True)
 
-    reps: list[RepResult] = []
-    for i in range(EVAL_REPS):
-        run = run_agent(ch, ctx, anthropic)
-        tally.add(run)
-        f: AttributionFinding = run.finding
-        outcome = score_rep(scenario, f)
-        reps.append(
-            RepResult(
-                scenario=scenario.name,
-                outcome=outcome,
-                verdict=f.verdict,
-                top_hypothesis=f.top_hypothesis.value,
-                probes_run=tuple(run.probes_run),
+        reps: list[RepResult] = []
+        for i in range(EVAL_REPS):
+            run = run_agent(ch, ctx, anthropic)
+            tally.add(run)
+            f: AttributionFinding = run.finding
+            outcome = score_rep(scenario, f)
+            reps.append(
+                RepResult(
+                    scenario=scenario.name,
+                    outcome=outcome,
+                    verdict=f.verdict,
+                    top_hypothesis=f.top_hypothesis.value,
+                    probes_run=tuple(run.probes_run),
+                )
             )
-        )
-        print(
-            f"  rep {i + 1}/{EVAL_REPS} [{scenario.name}]: {outcome.value} "
-            f"(verdict {f.verdict}, top {f.top_hypothesis.value}, "
-            f"probes {run.probes_run})",
-            flush=True,
-        )
-    return ScenarioResult(scenario=scenario, reps=reps, headline=head)
+            print(
+                f"  rep {i + 1}/{EVAL_REPS} [{scenario.name}]: {outcome.value} "
+                f"(verdict {f.verdict}, top {f.top_hypothesis.value}, "
+                f"probes {run.probes_run})",
+                flush=True,
+            )
+        return ScenarioResult(scenario=scenario, reps=reps, headline=head)
+    finally:
+        ch.close()
 
 
 def render_section(sweep: SweepResult) -> str:
@@ -154,6 +157,14 @@ def render_section(sweep: SweepResult) -> str:
             "### Near-miss pair — a genuine lift vs shared-IP inflation",
             "",
             near_miss_table(sweep),
+            "",
+            "### Per-profile live context headline (deterministic, LLM-free)",
+            "",
+            "The discriminator each scenario turns on, captured once per profile from "
+            "ClickHouse (FG2 — BACKLOG 31). These are seed-reproducible, so the row is "
+            "the cross-profile live pin, not the non-reproducible verdicts above.",
+            "",
+            headline_table(sweep),
             "",
             "### Honesty boundary",
             "",

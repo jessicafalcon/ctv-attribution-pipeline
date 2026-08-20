@@ -454,9 +454,10 @@ never auto-fixed, ignored, or committed around.
   (CHECKPOINT). New `no_fault_baseline` profile (seed 1, medium-scale, REALISTIC
   co-view; offline-clean: truth 90/90 correct, 0 wrong-household, recall 1.0 — nothing
   to flag). Eval harness (`agent/eval/`): frozen 6-scenario catalog (`scenarios.py`),
-  PURE scoring rubric (`scoring.py`, three buckets — fault_recall / capability_boundary /
-  control — with `verdict==AMBIGUOUS_NEEDS_HUMAN` always read as abstention, never the
-  escalation-default hypothesis), PURE Markdown renderers (`tables.py`), and the
+  PURE scoring rubric (`scoring.py`, four buckets — fault_recall / negative_confirmation
+  / capability_boundary / control — with `verdict==AMBIGUOUS_NEEDS_HUMAN` always read as
+  abstention, never the escalation-default hypothesis), PURE Markdown renderers
+  (`tables.py`), and the
   token-gated `make agent-eval` sweep (`run_eval.py` — clean stack per scenario, EVAL_REPS
   live invocations, both tables → `docs/RESULTS.md`, FG2 headlines captured). One prompt
   sentence added for the no-fault abstain path (Ruling E). BACKLOG 26 (co-view adjusted

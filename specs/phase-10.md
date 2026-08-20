@@ -117,8 +117,9 @@ live sweep adds is the real LLM outputs**, so the rubric is proven before a toke
 spent.
 
 - `agent/eval/scenarios.py` — the frozen scenario catalog: 6 `Scenario(name, profile,
-  kind, expected, note)` rows (Ruling B). `kind ∈ {fault_recall, capability_boundary,
-  control}`; `expected: Hypothesis | None`. `len(SCENARIOS) == 6` and
+  kind, expected, note)` rows (Ruling B). `kind ∈ {fault_recall,
+  negative_confirmation, capability_boundary, control}`; `expected: Hypothesis | None`.
+  `len(SCENARIOS) == 6` and
   `EVAL_REPS × len(SCENARIOS) == 30` asserted in a test (the config↔sweep contract).
 - `agent/eval/scoring.py` — PURE. `score_rep(scenario, finding) -> Outcome` (Ruling
   C); `RepResult` / `ScenarioResult` / `SweepResult` aggregates; `false_positive_rate`
@@ -152,6 +153,10 @@ Append an "Agent eval" section after the Phase-7 benchmark:
 2. **near-miss pair.** real_lift vs shared_ip_spike side by side: the deterministic
    `ip_resolved_fraction` discriminator, the agent's top_hypothesis + verdict spread,
    showing it tells a genuine lift from shared-IP inflation on the evidence.
+3. **per-profile live context headline** (FG2 — BACKLOG 31): one row per scenario with
+   its deterministic, LLM-free discriminator (`match_rate`, `ip_resolved_fraction`,
+   ambiguous/candidate counts, `max|Δroas|`, window-edge share). This is the durable
+   cross-profile pin — all six scenarios, not just the near-miss pair.
 
 Honesty boundary (checkpoint obligation, BACKLOG 22): state that the agent is
 non-reproducible by construction (reps measure residual stability, not determinism),

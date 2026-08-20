@@ -129,15 +129,21 @@ class SweepResult:
         return [s for s in self.scenarios if s.scenario.kind == "control"]
 
     @property
-    def false_positive_rate(self) -> float | None:
+    def false_positive_counts(self) -> tuple[int, int]:
+        """(false positives, control reps) over the two `control` scenarios — the ONE
+        definition of the FP numerator/denominator, reused by the rate and the table so
+        they cannot drift (CR-2)."""
         controls = self.control_results
         total = sum(s.total for s in controls)
-        if total == 0:
-            return None
         fps = sum(
             1 for s in controls for r in s.reps if r.outcome == Outcome.FALSE_POSITIVE
         )
-        return fps / total
+        return fps, total
+
+    @property
+    def false_positive_rate(self) -> float | None:
+        fps, total = self.false_positive_counts
+        return None if total == 0 else fps / total
 
     @property
     def near_miss(self) -> list[ScenarioResult]:

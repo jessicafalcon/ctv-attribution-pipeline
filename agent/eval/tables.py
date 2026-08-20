@@ -47,14 +47,11 @@ def fault_diagnosis_table(sweep: SweepResult) -> str:
             f"{_expected_outcome(sr.scenario)} | {sr.correct}/{sr.total} | "
             f"{_spread(sr.verdict_counts)} | {_spread(sr.top_hypothesis_counts)} |"
         )
+    # One definition of the FP numerator/denominator (CR-2): reuse the aggregate.
     fpr = sweep.false_positive_rate
-    controls = sweep.control_results
-    fp_reps = sum(
-        1 for s in controls for r in s.reps if r.outcome.value == "false_positive"
-    )
-    ctrl_reps = sum(s.total for s in controls)
+    fp_reps, ctrl_reps = sweep.false_positive_counts
     fpr_txt = "n/a" if fpr is None else f"{fp_reps}/{ctrl_reps} = {fpr:.0%}"
-    ctrl_names = ", ".join(f"`{s.scenario.name}`" for s in controls)
+    ctrl_names = ", ".join(f"`{s.scenario.name}`" for s in sweep.control_results)
     lines.append("")
     lines.append(
         f"**False-positive rate (controls {ctrl_names}): {fpr_txt}.** "
@@ -88,4 +85,28 @@ def near_miss_table(sweep: SweepResult) -> str:
         "`real_performance_change`). The agent must tell them apart on that named "
         'number, not on "ROAS went up".'
     )
+    return "\n".join(lines)
+
+
+def headline_table(sweep: SweepResult) -> str:
+    """Each scenario's deterministic live context discriminator, durably recorded (FG2 —
+    BACKLOG 31). These are LLM-free, ClickHouse-derived, and reproducible per seed, so
+    this row IS the cross-profile live pin: `ip_resolved_fraction` (device-graph),
+    `ambig`/`max_cand` (shared-IP fan-out), `max|Δroas|` (late-arrival restatement — the
+    late_burst signal), `near_edge` (window-edge)."""
+    lines = [
+        "| scenario | match_rate | ip_resolved_fraction | ambig | max_cand | "
+        "max\\|Δroas\\| | near_edge |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for sr in sweep.scenarios:
+        h = sr.headline
+        lines.append(
+            f"| `{sr.scenario.name}` | {_fmt(h.get('match_rate'))} | "
+            f"{_fmt(h.get('ip_resolved_fraction'))} | "
+            f"{_fmt(h.get('ambiguous_attributed'))} | "
+            f"{_fmt(h.get('max_candidate_count'))} | "
+            f"{_fmt(h.get('max_abs_roas_delta'))} | "
+            f"{_fmt(h.get('near_boundary_fraction'))} |"
+        )
     return "\n".join(lines)

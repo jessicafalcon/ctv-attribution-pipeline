@@ -6,9 +6,9 @@ free-text cause is not representable in the `AttributionFinding`, which is the p
 Each member maps to a §4.1 signal and the frozen `AttributionContext` field that
 feeds it (see the spec's catalog table). CO_VIEW_INFLATION is in the set for
 completeness but is NOT reliably discriminable from RAW `genre_reach` alone — the
-co-view-*adjusted* factor is deferred (BACKLOG 26 / Phase 10) — so the loop's prompt
-forbids returning it as a CONFIDENT top hypothesis and routes an unexplained genre
-skew to AMBIGUOUS_NEEDS_HUMAN."""
+co-view-*adjusted* factor is a won't-do (BACKLOG 26, closed DECISIONS Phase 10) — so
+the loop's prompt forbids returning it as a CONFIDENT top hypothesis and routes an
+unexplained genre skew to AMBIGUOUS_NEEDS_HUMAN (a capability boundary, not a gap)."""
 
 from enum import StrEnum
 

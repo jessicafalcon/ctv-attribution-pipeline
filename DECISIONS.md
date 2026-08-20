@@ -1004,5 +1004,7 @@ One entry per non-obvious choice. Newest last.
   AI edge is carved out of the byte-identical guarantee (CLAUDE.md). The sweep drives its
   own clean stack per scenario (`make down && up && seed && run`, full run for the
   restatement field) because profiles share `conversion_id` space (Phase 5); FG2 (BACKLOG
-  31) is satisfied by capturing each profile's deterministic live context headline into
-  the near-miss/results tables.
+  31) is satisfied by rendering each profile's deterministic live context headline into a
+  dedicated per-profile headline table in RESULTS (`tables.headline_table`, all six
+  scenarios — not just the near-miss pair, which the coherence audit caught as an early
+  overclaim).
