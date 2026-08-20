@@ -192,5 +192,12 @@ test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
 
+# Phase-15 docs trace check: every RUNBOOK.md cross-reference resolves and every
+# named guard/alert still exists in source (docs/check_runbook.py). Standalone
+# script, not a pytest file, so it doesn't re-trigger the full suite on a docs-only
+# change. No services, no network.
+check-runbook:
+	uv run python docs/check_runbook.py
+
 lint:
 	uv run pre-commit run --all-files

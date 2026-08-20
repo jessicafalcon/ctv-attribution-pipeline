@@ -279,7 +279,7 @@ agent/           collectors, hypothesis catalog, probe registry, loop, webhook, 
 accuracy/        household-grain precision/recall vs the truth side file
 tests/           pytest unit (no services); tests/integration/ against the stack
 fixtures/tiny/   golden producer output + expected resolved/attributed rows (read-only)
-docs/            ARCHITECTURE.md (spec) · PHASES.md · SCALING.md · RESULTS.md
+docs/            ARCHITECTURE.md (spec) · PHASES.md · SCALING.md · RESULTS.md · RUNBOOK.md
 DECISIONS.md     why-not-X log · BACKLOG.md deferred findings with revisit triggers
 ```
 
