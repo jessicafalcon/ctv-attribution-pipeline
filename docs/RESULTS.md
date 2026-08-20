@@ -37,8 +37,10 @@ real failure mode, wrong-household (shared-IP) attribution.
   them and recall sits at **0.587** (44/75). The periodic reconciliation pass re-runs
   the same pure attribution leaf at 90 days against `exposures_landed`, recovers **29**
   caused misses to their correct household, and lifts recall to **0.973** (73/75) —
-  credited 83 → 112. The 2 residual misses are wrong-household shared-IP resolutions
-  that reconciliation cannot fix. This is the recall-buys-at-some-precision-cost trade
+  credited 83 → 112. The 2 residuals are wrong-household shared-IP attributions —
+  reconciliation recovered every recoverable caused miss (`caused_missed=0`), but 2
+  conversions resolve to the wrong household through a shared IP, which caps recall at
+  0.973 and reconciliation cannot fix. This is the recall-buys-at-some-precision-cost trade
   the long tail exists to make, and it is the headline reconciliation number.
 
 ## Benchmark — naive full scan vs optimized rollup

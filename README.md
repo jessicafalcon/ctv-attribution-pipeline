@@ -51,8 +51,8 @@ The engineering is real: two-stream ingestion, device-graph resolution, windowed
 stateful joins, dedup, late-event handling, a reconciliation path, an OLAP serving
 layer with restatements, and the operational tooling around all of it.
 
-- **Scale posture.** It runs end to end at a few thousand messages/sec on a laptop.
-  It does **not** attempt a live 500k/sec demo — that is impossible on free
+- **Scale posture.** It runs end to end on a laptop. It does **not** attempt a live
+  500k/sec demo — that is impossible on free
   infrastructure and fools no one. The scaling story is a written deliverable:
   [`docs/SCALING.md`](docs/SCALING.md) says where the design breaks at 50k/sec and
   500k/sec and exactly what changes at each tier.
@@ -154,7 +154,9 @@ possible without 90 days of processor state.
 **Observability.** Prometheus metrics per stage (`producer_`, `resolve_`, `engine_`,
 `reconcile_`), a Grafana dashboard (JSON, committed), and Alertmanager rules for the
 deterministic conditions (consumer lag, watermark stall, match-rate band,
-restatement magnitude). Alerts fire a webhook to the agent.
+restatement magnitude). Alerts fire a webhook to the agent (the live
+scrape → Alertmanager → webhook push path is a documented cut — see
+[Next steps](#next-steps--what-was-cut-and-why)).
 
 ## The agent — attribution-integrity guardian
 

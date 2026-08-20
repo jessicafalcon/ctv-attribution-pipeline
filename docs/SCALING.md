@@ -1,7 +1,7 @@
 # SCALING.md — where the design breaks and what changes
 
-This pipeline runs end to end at a few thousand messages/sec on a laptop. It does
-**not** attempt a live 500k/sec demo — that is impossible on free infrastructure and
+This pipeline runs end to end on a laptop. It does **not** attempt a live 500k/sec
+demo — that is impossible on free infrastructure and
 fools no one (ARCHITECTURE §2). Instead this is the written scaling deliverable: the
 constraint that breaks first, the partition math, and precisely what changes at the
 **50k/sec** and **500k/sec** tiers — state backend, stream processor, and ClickHouse.
@@ -23,8 +23,9 @@ partition counts but not the structure.
 - **Hot-window state in a plain in-memory dict.** The seeded profiles span days of
   *event-time* but only hundreds–thousands of events, so 7 days of window state is
   a few thousand rows — trivially in memory.
-- **ClickHouse single node**: ReplacingMergeTree, async inserts, a scheduled rollup
-  refresh.
+- **ClickHouse single node**: ReplacingMergeTree, **synchronous inserts** (async
+  inserts are a scale-up lever, not built here — see the 50k/500k tiers below), a
+  scheduled rollup refresh.
 
 Everything below is what has to change as the *rate* (not the event count) climbs.
 
@@ -146,7 +147,7 @@ at-least-once sink is correct by construction.
 |---|---|---|---|
 | table engine | ReplacingMergeTree | ReplacingMergeTree | ReplicatedReplacingMergeTree |
 | topology | single node | single node | sharded + Distributed table |
-| inserts | async inserts | async, larger buffers | buffer/Distributed fan-in |
+| inserts | synchronous | async inserts, larger buffers | buffer/Distributed fan-in |
 | rollup | scheduled refresh | scheduled, tuned interval | per-shard refreshable MVs |
 | `FINAL` read cost | negligible | watch part-merge lag | read replica for reports/agent |
 
