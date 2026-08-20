@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot eval report restate bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
+.PHONY: setup up down seed resolve run run-hot scale-curve eval report restate bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -55,6 +55,16 @@ run:
 run-hot:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
+
+# Measured scaling curve (offline, no compose): drain the engine over tiered event
+# counts (1k/10k/100k exposures resident in the hot window), report the STRUCTURAL
+# per-exposure state cost (deterministic — deep sys.getsizeof of retained state ÷
+# entries), engine_join_state_current occupancy, and a tracemalloc cross-check, then
+# rewrite the measured-constant block in docs/SCALING.md. Occupancy (state size),
+# not throughput. In-process over the scale_curve profile, same idiom as the oracle
+# suites — no `make up` (Phase 14).
+scale-curve:
+	uv run python -m streaming.scale_probe
 
 # Naive-vs-optimized reporting benchmark: the same four-metric question run as a
 # full FINAL scan of the raw serving tables (report.sql) vs the pre-aggregated

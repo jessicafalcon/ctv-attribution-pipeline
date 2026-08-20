@@ -1052,3 +1052,42 @@ One entry per non-obvious choice. Newest last.
   muddied that). A forward-response playbook is a deliberately separate, later artifact
   that would relax invent-nothing **under human review** — recorded here as a boundary
   chosen, not a Phase-15 omission.
+
+## Phase 14
+
+- **The asserted `bytes_per_exposure` is a STRUCTURAL measure; `tracemalloc` is a
+  labeled cross-check only.** `tracemalloc` peak drifts with the Python allocator and
+  GC timing (nondeterministic run to run), so building the SCALING constant on it would
+  break the determinism policy — the same trap as the Phase-7 `FINAL read_rows` fix.
+  The reported number is instead `deep sys.getsizeof(retained hot-window state) ÷ entry
+  count` (`streaming/scale_probe.deep_sizeof`): shared objects (interned category
+  strings) counted once via an id() set, so the total is the real object-graph RAM and
+  is identical on every re-run under a fixed seed and single thread. Measured **~571
+  B/exposure** (571–573 across the 1k/10k/100k curve), replacing the old ~200 B guess;
+  `tracemalloc` (~0.75× the structural total) is shown alongside purely as an
+  independent sanity check and is never asserted (`test_scale_probe` asserts only the
+  structural fields; the determinism test excludes `tracemalloc_peak_bytes`).
+- **Only `bytes_per_exposure` moved asserted → measured; the rate and the product stay
+  extrapolation.** SCALING's "order-of-magnitude sizing, not benchmarked capacity"
+  framing still governs everything except the one constant. The 25k/sec rate and the
+  `rate × window × per-exposure` multiplication remain an assumption — the block labels
+  the `~8.6 TB` line "Extrapolation" explicitly. The curve measures event COUNT in-window
+  (state **occupancy**), which models `exposure_rate × window` directly; it is NOT a
+  msgs/sec throughput benchmark (that needs continuous follow, deferred, owned by no
+  phase).
+- **Tiers scale households with the event count (fixed per-household density), not one
+  giant household.** The batch drain's per-household streaming pass is O(exposures²) per
+  key, so 100k exposures in ~20 households (5k each) does not finish; realistic scaling
+  keeps each household seeing few ads and adds households, so the drain stays cheap (100k
+  in ~2.5s) AND the model is realistic (a household seeing 5k ads in 4 days is not). The
+  fixed span (`SPAN_HOURS=100` < 7-day window) means nothing evicts, so the retained
+  state equals the deduped input — `measure_tier` asserts `evicted == 0` so the
+  structural measure stays valid; if a future retune makes eviction fire it raises rather
+  than silently mismeasuring.
+- **Spec-vs-repo file convention: the spec named `producer/profiles/scale_curve.py`, but
+  profiles in this repo are JSON (`producer/profiles/*.json`).** Followed the real
+  convention — a single reusable `scale_curve.json` (the 100k top tier) that
+  `streaming/scale_probe.py` scales down per tier via `Profile.model_copy`. Surfaced, not
+  silently "fixed" in the spec (workflow rule). The base profile is deliberately the full
+  volume tier so Phase 13 (cost levers — skip indexes/projections are no-ops below one
+  8192-row granule) can reuse it directly rather than duplicating a volume profile.
