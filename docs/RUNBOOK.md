@@ -40,7 +40,7 @@ background-merge timing — not table size. (An even earlier capture reported th
 naive side at 864 rows / 42 KB and a 1.6× byte win; same artifact, opposite
 direction.) See [`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-gotchas), gotcha "A
 `FINAL` scan's `read_rows` counts un-merged version-parts", and
-[`RESULTS.md` — "Why the numbers moved"](RESULTS.md#benchmark--naive-full-scan-vs-optimized-rollup).
+[`RESULTS.md` → "Why each change works"](RESULTS.md#benchmark--naive-full-scan-vs-optimized-rollup).
 
 **Fix.** [`queries/bench.py`](../queries/bench.py) `_canonicalize` runs
 `OPTIMIZE TABLE ... FINAL` on every read table before measuring, so `read_rows`

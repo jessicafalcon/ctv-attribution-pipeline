@@ -104,6 +104,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values,
   silent on tiny's (offline; needs the image, not the compose stack)
+- `make check-runbook` — standalone trace check for docs/RUNBOOK.md: every
+  link/anchor resolves and every named guard/alert still exists in source (offline;
+  not a pytest file, to avoid the run-tests-hook full-suite re-trigger)
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
