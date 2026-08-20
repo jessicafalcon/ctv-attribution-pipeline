@@ -98,6 +98,13 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make bench` — naive (full FINAL scan-and-join) vs optimized (`campaign_hourly`
   rollup): latency, rows read, bytes read; asserts identical metric rows. Run after
   `make run` populated the rollup
+- `make scale-curve` — measured hot-window scaling curve (offline, no compose):
+  drain the engine over tiered event counts (1k/10k/100k exposures resident), print
+  the measured STRUCTURAL per-exposure window-state cost and the occupancy curve (deep
+  sys.getsizeof of retained state ÷ entries — deterministic; `tracemalloc` peak printed
+  as a console-only cross-check, never asserted or committed), then rewrite the
+  measured-constant block in `docs/SCALING.md`. Occupancy (state size), not throughput
+  (Phase 14)
 - `make metrics-capture PROFILE=<p>` — dump each stage's terminal Prometheus
   registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
   promtool alert fixtures; live-stack, run after `make up && make seed`)
@@ -535,6 +542,35 @@ never auto-fixed, ignored, or committed around.
   repo-map pointer added. Review gate: PENDING (developer runs code-reviewer +
   functionality-tester + coherence-auditor; security-reviewer not triggered — no
   CI/.env/compose/CH-user/agent change). Merged: PENDING. Spec: `specs/phase-15-runbook.md`.
+- Phase 14 (2026-08-20): built on `phase-14-scaling-curve` — measured scaling curve
+  (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Turns
+  SCALING.md's guessed ~200 B/exposure into ONE measured constant. New reusable volume
+  profile `producer/profiles/scale_curve.json` (seed 20, 100k exposures / 2000 households
+  / ~100h span < 7d window so nothing evicts — occupancy == count; co-view flat, no fault;
+  the top tier, so Phase 13 cost levers can reuse it for granule volume). `streaming/
+  scale_probe.py` (`make scale-curve`, offline, no compose): drains the REAL engine
+  (`build_flow`+`run_main`, EOF) over tiers 1k/10k/100k, measures the STRUCTURAL
+  per-exposure state cost (`deep_sizeof` = recursive sys.getsizeof of the retained
+  hot-window exposures ÷ entry count, id()-dedup so shared category strings count once —
+  deterministic on re-run), reads Phase-7 `engine_join_state_current` (no new metric), and
+  rewrites a marked block in `docs/SCALING.md`. **Measured ~571 B/exposure** (571–573 across
+  the curve, ~2.9× the retired guess) → extrapolation re-derived to **~8.6 TB** at 25k/sec ×
+  7d (labeled extrapolation — only the per-exposure cost moved asserted→measured; the rate
+  and product stay order-of-magnitude sizing). `tracemalloc` peak (~0.75× structural) is a
+  console-only cross-check line, NEVER asserted and never committed to the doc (the
+  determinism trap this phase exists to avoid — same discipline as the Phase-7 FINAL
+  read_rows fix). Households scale with count
+  (fixed per-household density) so the O(n²)-per-key drain stays cheap (100k in ~2.5s) and
+  realistic; `measure_tier` raises if eviction ever fires (retained==input guard). DONE green:
+  `make scale-curve && make test (213 offline) && make lint`; gate-0 tiny golden byte-identical;
+  SCALING.md byte-stable across re-runs. Spec-vs-repo note: spec named `scale_curve.py` but
+  profiles are JSON — followed the real convention, surfaced not silently repaired (DECISIONS
+  Phase 14). BACKLOG 35 (stale `sink.py:2` async marker) done in-branch (trigger fired — in
+  `streaming/`); BACKLOG 36 (docs accuracy-pin test) trigger fired (added a test file) but
+  consciously re-deferred pending developer decision (orthogonal to scaling; would widen the
+  PR). Review gate: PENDING (developer runs code-reviewer + functionality-tester +
+  coherence-auditor; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
+  change). Merged: PENDING. Spec: `specs/phase-14-scaling-curve.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

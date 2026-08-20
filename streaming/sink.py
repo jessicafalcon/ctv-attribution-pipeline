@@ -1,6 +1,7 @@
 """ClickHouse sink for the Bytewax engine: a DynamicSink whose partitions
-insert batches synchronously (async inserts → Phase 7). One ClickHouse client
-per worker partition, built from env via clickhouse.client.connect.
+insert batches synchronously; async inserts are a SCALING lever, not built
+(SCALING.md 50k/500k tiers). One ClickHouse client per worker partition, built
+from env via clickhouse.client.connect.
 
 `insert_attributed` and `insert_exposures` are the row builders — they map a
 pydantic model to the DDL column order. Inserts are idempotent by table design:
