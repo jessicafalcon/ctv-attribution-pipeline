@@ -159,7 +159,7 @@ The rollup is the read-side scaling lever, and the build already shows why (belo
 
 ### Rollup benchmark: the win is scan-size, and it compounds at volume (Phase 7)
 
-`make bench` shows the `campaign_hourly` rollup reading **2.5× fewer rows and 1.6×
+`make bench` shows the `campaign_hourly` rollup reading **2.5× fewer rows and 1.2×
 fewer bytes** than the naive full-`FINAL` scan-and-join at `long_delay` scale
 (`RESULTS.md`). The edge is modest here only because the raw tables are small. What
 matters at scale: the **naive scan grows with every conversion and exposure** (and

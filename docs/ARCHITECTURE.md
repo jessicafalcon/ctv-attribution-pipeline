@@ -463,6 +463,29 @@ handled.*
   `ambiguous_count`); consumers that unpack rows positionally don't care about the
   name. Same class as the ORDER BY/GROUP BY alias-vs-column ambiguities — when an
   alias shares a column's name, the filter is the surprising place it bites.
+- **A `FINAL` scan's `read_rows` counts un-merged version-parts, not logical
+  rows.** A ReplacingMergeTree keeps every superseded version as physical rows in
+  separate parts until a background merge collapses them; `SELECT ... FINAL`
+  returns the collapsed result but ClickHouse still physically **reads** all the
+  un-merged versions to do the collapse. So `read_rows`/`read_bytes` (from
+  `X-ClickHouse-Summary`) grow with each un-merged write and *drift with
+  background-merge timing* — they are NOT the logical table size. It bit the Phase-7
+  benchmark: `campaign_hourly` (rewritten wholesale each rollup refresh) and
+  `attributed_conversions` (a new higher-`processed_at` version per reconciled
+  conversion) both version-stack, so `make bench` measured a different rollup
+  read-size depending on how many refreshes/corrections had happened and whether a
+  merge had fired — in CI, running right after a test that refreshed twice more, the
+  rollup measured 1020 physical rows and *lost* to the naive scan (0.8×), while
+  locally after one refresh it read 340 and won 2.5×. Fix (`queries/bench.py`
+  `_canonicalize`): `OPTIMIZE TABLE ... FINAL` every read table before measuring, so
+  `read_rows` reflects merged steady state — deterministic, re-run-identical, and the
+  honest apples-to-apples comparison (a scheduled rollup serves its merged form in
+  production). `OPTIMIZE ... FINAL` is synchronous on single-node (`alter_sync=1`)
+  and a no-op when already merged (`optimize_throw_if_noop=0`) — both relied-upon
+  ClickHouse **defaults**, not overridden in `clickhouse/`; overriding either would
+  silently reintroduce this non-determinism (a re-run could throw, or measure before
+  the merge completes). Rule: never treat a `FINAL` scan's `read_rows` as a stable
+  structural number without first forcing the merge.
 
 ---
 

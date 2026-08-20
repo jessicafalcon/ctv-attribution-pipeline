@@ -54,13 +54,17 @@ campaign) run two ways over the `long_delay` profile after a full pipeline pass
   (`queries/report.sql`: `attributed_conversions` ⋈ `exposures_landed`).
 - **optimized** — the pre-aggregated `campaign_hourly` rollup (`queries/bench.sql`).
 
-Both return the identical metric rows (the benchmark asserts equality to 6 dp).
+Both return the identical metric rows (the benchmark asserts equality to 6 dp), and
+the benchmark reads **both sides at merged steady state** — it runs `OPTIMIZE ...
+FINAL` on all three read tables before measuring (see below), so the figures are the
+form a scheduled rollup actually serves in production, not a transient just-refreshed
+state.
 
 | metric | naive (full scan) | optimized (rollup) | naive/opt |
 |---|---|---|---|
-| rows read | 864 | 340 | 2.5× |
-| bytes read | 42,246 | 25,840 | 1.6× |
-| latency (ms, median) | 8.49 | 3.21 | 2.6× |
+| rows read | 835 | 340 | 2.5× |
+| bytes read | 25,686 | 21,760 | 1.2× |
+| latency (ms, median) | 4.17 | 2.29 | 1.8× |
 
 ### Why each change works
 
@@ -70,17 +74,32 @@ Both return the identical metric rows (the benchmark asserts equality to 6 dp).
   `campaign_hourly`, which holds one pre-aggregated row per `(campaign, hour)` — the
   join and the aggregation were already done once, at rollup-refresh time, so the
   read touches far fewer rows.
-- **Bytes read (1.6×).** Fewer rows, and narrower ones: the rollup stores only the
+- **Bytes read (1.2×).** Fewer rows, and narrower ones: the rollup stores only the
   numeric components it sums (spend, counts, revenue), whereas the naive scan must
   read the wide raw rows including the string ids it joins on. The byte ratio is
   smaller than the row ratio because `campaign_hourly` is keyed
   `(campaign_id, hour)` — a low-cardinality profile has few hour buckets, so the
   rollup is not as many-times smaller in bytes as in rows here.
-- **Latency (2.6×).** Fewer rows/bytes and no join at read time. At this profile
+- **Latency (~1.8×).** Fewer rows/bytes and no join at read time. At this profile
   scale latency is noisy (single-digit ms, cache and scheduling jitter dominate),
   so the **rows/bytes read are the reliable signal** — they are deterministic and
   cache-independent (from ClickHouse's `X-ClickHouse-Summary`), and both queries run
   with the query cache off.
+- **Why the numbers moved (and why the benchmark now OPTIMIZEs first).** An earlier
+  capture reported the naive side at 864 rows / 42 KB and a 1.6× byte win. That was a
+  measurement artifact: `campaign_hourly` and `attributed_conversions` are
+  versioned-replace ReplacingMergeTrees, and a `FINAL` scan physically **reads every
+  un-merged version-part** before collapsing it — so read_rows/read_bytes counted
+  transient part-bloat (a full rollup copy per refresh, a superseded row per
+  reconciled conversion) that background merges had not yet collapsed. CI, running
+  `make bench` right after a test that refreshes the rollup two extra times, measured
+  the rollup at 1020 rows and the benchmark actually printed the rollup reading
+  **more** rows than the naive scan (0.8×) — the "rollup wins" headline did not
+  reproduce in CI's run-state. The benchmark now canonicalizes **both** sides to
+  merged steady state (`OPTIMIZE ... FINAL`) before measuring, so read_rows reflects
+  logical table size on both sides, the numbers are deterministic on re-run, and a
+  magnitude-free **direction assert** (`optimized read_rows < naive`) fails the run
+  if the rollup ever stops being the smaller read.
 
 ### Honesty boundary
 

@@ -206,9 +206,10 @@ clean ones. Household grain is deliberate: the engine is last-touch, so scoring 
 `exposure_id` would measure last-touch-vs-causal coincidence, not attribution quality.
 
 **Benchmark** (naive full `FINAL` scan-and-join vs the `campaign_hourly` rollup, same
-four-metric report, `long_delay`): rollup reads **2.5× fewer rows, 1.6× fewer bytes,
-~2.6× faster** — and the structural point is that the naive scan grows with every
-event while the rollup read is bounded by `(campaign, hour)` buckets.
+four-metric report, `long_delay`): rollup reads **2.5× fewer rows, 1.2× fewer bytes,
+~1.8× faster** — measured with both sides at merged steady state — and the structural
+point is that the naive scan grows with every event while the rollup read is bounded
+by `(campaign, hour)` buckets.
 
 **Agent eval** (every fault + a no-fault baseline, 5× each, 30 live invocations):
 **30/30 correct, false-positive rate 0/10 = 0%.** The near-miss holds both ways —
