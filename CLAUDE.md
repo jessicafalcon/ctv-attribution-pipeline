@@ -449,8 +449,23 @@ never auto-fixed, ignored, or committed around.
   turn-2 cache_read 2857. Review gate passed (code-reviewer 2 minor → CR-1 rename +
   CR-2 name-based mapping applied; security-reviewer PASS, 2 notes tracked; func PASS;
   FT-1 residual materialized live → Fix A strict `submit_finding`, malformed payload
-  committed as a regression fixture). Merged: PENDING (developer merges). Spec:
-  `specs/phase-9.md`.
+  committed as a regression fixture). Merged (PR #11). Spec: `specs/phase-9.md`.
+- Phase 10 (2026-08-19): built on `phase-10-agent-eval` — agent eval + near-miss demo
+  (CHECKPOINT). New `no_fault_baseline` profile (seed 1, medium-scale, REALISTIC
+  co-view; offline-clean: truth 90/90 correct, 0 wrong-household, recall 1.0 — nothing
+  to flag). Eval harness (`agent/eval/`): frozen 6-scenario catalog (`scenarios.py`),
+  PURE scoring rubric (`scoring.py`, three buckets — fault_recall / capability_boundary /
+  control — with `verdict==AMBIGUOUS_NEEDS_HUMAN` always read as abstention, never the
+  escalation-default hypothesis), PURE Markdown renderers (`tables.py`), and the
+  token-gated `make agent-eval` sweep (`run_eval.py` — clean stack per scenario, EVAL_REPS
+  live invocations, both tables → `docs/RESULTS.md`, FG2 headlines captured). One prompt
+  sentence added for the no-fault abstain path (Ruling E). BACKLOG 26 (co-view adjusted
+  factor) closed as a DECISIONS won't-do (the near-miss is shared-IP/device-graph, not a
+  genre number — hard stop fired); co_view_bug scored as a labeled capability boundary,
+  distinct from the duplicate_flood/no_fault_baseline FP controls. BACKLOG 31 (FG2)
+  resolved via the sweep's live-headline capture. Offline green: 200 tests + lint; gate-0
+  tiny golden byte-identical. Live `make agent-eval` (30 invocations, API tokens): PENDING
+  developer approval. Review gate: PENDING. Merged: PENDING. Spec: `specs/phase-10.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

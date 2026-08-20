@@ -161,3 +161,31 @@ def test_duplicate_flood_is_a_benign_control(runs) -> None:
 
     assert decide(on) == decide(off)
     assert run.score().caused_wrong_household == 0
+
+
+# --- Phase 10: the no-fault baseline (the sweep's entry condition) -----------
+# A healthy pipeline the agent must LEAVE ALONE — offline-pinned non-alarming, the
+# same way the fault profiles are pinned. Not in FAULT_PROFILES: it carries no fault.
+
+
+def test_no_fault_baseline_is_reproducible() -> None:
+    p = load_profile("no_fault_baseline")
+    a = generate(p, p.seed)
+    b = generate(p, p.seed)
+    assert jsonl(a.exposures) == jsonl(b.exposures)
+    assert jsonl(a.conversions) == jsonl(b.conversions)
+    assert jsonl(a.truth_links) == jsonl(b.truth_links)
+
+
+def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
+    run = FaultRun("no_fault_baseline")
+    r = run.score()
+    assert r.caused_wrong_household == 0  # no shared-IP misattribution
+    assert r.caused_missed == 0  # no state-misses
+    assert r.recall == 1.0
+    assert (r.truth_links, r.household_correct) == (90, 90)
+    # Delays sit inside the 7d hot window — nothing for reconciliation to restate.
+    peak_late = max(
+        (c.ingest_time - c.event_time).total_seconds() for c in run.stream.conversions
+    )
+    assert peak_late < 7 * 86400
