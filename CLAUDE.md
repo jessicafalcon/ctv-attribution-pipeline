@@ -464,9 +464,18 @@ never auto-fixed, ignored, or committed around.
   factor) closed as a DECISIONS won't-do (the near-miss is shared-IP/device-graph, not a
   genre number — hard stop fired); co_view_bug scored as a labeled capability boundary,
   distinct from the duplicate_flood/no_fault_baseline FP controls. BACKLOG 31 (FG2)
-  resolved via the sweep's live-headline capture. Offline green: 200 tests + lint; gate-0
-  tiny golden byte-identical. Live `make agent-eval` (30 invocations, API tokens): PENDING
-  developer approval. Review gate: PENDING. Merged: PENDING. Spec: `specs/phase-10.md`.
+  resolved via the sweep's live-headline capture. Offline green: 206 tests + lint; gate-0
+  tiny golden byte-identical. Review gate passed (code-reviewer + functionality-tester +
+  coherence-auditor; 2 blockers B1/B2 + drift D1/D2 + CR-2/CR-3 all dispositioned — one
+  offline batch; DECISIONS is a dated trail, ARCHITECTURE the one forward statement, so
+  no consolidation). Live `make agent-eval` DONE (30 invocations, Sonnet-5; ~178k cache_read
+  input, well under $10): **30/30 correct, false-positive rate 0/10 = 0%**; near-miss both
+  halves clean (real_lift → 5× CONFIDENT real_performance_change at ip_resolved_fraction
+  0.061, NEVER device_graph_mismatch; shared_ip_spike → 5× CONFIDENT device_graph_mismatch
+  at 0.420); co_view_bug → 5× AMBIGUOUS (top co_view_inflation — names the suspect, declines
+  to confirm, distinct from the controls' abstention); late_burst → 5× CONFIDENT
+  late_arrival_distortion. Both/three tables in `docs/RESULTS.md`. Done-when all met. Merged:
+  PENDING (developer merges). Spec: `specs/phase-10.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
