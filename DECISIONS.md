@@ -1096,3 +1096,49 @@ One entry per non-obvious choice. Newest last.
   silently "fixed" in the spec (workflow rule). The base profile is deliberately the full
   volume tier so Phase 13 (cost levers — skip indexes/projections are no-ops below one
   8192-row granule) can reuse it directly rather than duplicating a volume profile.
+
+## Phase 13
+
+- **Schema-reality correction: the spec's levers named columns/keys the serving schema
+  does not have; corrected in the open before any build.** The `specs/phase-13-query-cost-levers.md`
+  contract, as written, was wrong on two counts, verified against `clickhouse/ddl.sql`:
+  (1) it put a projection `(campaign_id, event_time)` on `attributed_conversions`, but
+  that table has **no `campaign_id` column** — campaign is derived by joining
+  `attributed_conversions.exposure_id → exposures_landed.campaign_id` (`queries/report.sql`),
+  and a projection can only order by columns the table has; (2) it put a bloom
+  data-skipping index on `exposures_landed.campaign_id`, but `exposures_landed` is ordered
+  `(campaign_id, event_time, exposure_id)` — campaign_id is the **leading** primary-key
+  column, so the sparse primary index already prunes a campaign filter and a secondary
+  index on the same column is strictly redundant (before ≈ after, the direction assert
+  would fail). Per the workflow rule (spec seems wrong → STOP and report, never silently
+  repair), this was surfaced to the developer, who approved the corrections and a spec
+  edit as the first commit. Corrected levers: projection ordered by **`event_time`** on
+  `attributed_conversions` (same alternate-ordering mechanism, buildable column) + a
+  **date-scoped report variant** to exercise it; lever 2 **measured** (see below); PREWHERE
+  measured `optimize_move_to_prewhere=0` vs explicit `PREWHERE`.
+- **The all-time per-campaign report is already near-optimal for this schema; the levers
+  win on date-/dimension-scoped access patterns.** Consequence of the two facts above:
+  campaign is primary-key-pruned on `exposures_landed`, and the report has no other
+  selective predicate, so there is nothing left to prune on the all-time report. That is
+  not a gap — it is exactly when a platform reaches for projections/skip indexes/PREWHERE:
+  a scoped access pattern (a date range, one genre) that the base sort key does not serve.
+  Each lever therefore carries the query variant that exercises it; "a lever needs a query
+  that exercises it" is expected, not a fudge.
+- **Lever 2 is measured, not assumed; a documented negative result is a first-class
+  landing.** A secondary skip index wins only when the indexed column is physically
+  clustered (correlated with row order), which on the seeded data depends on the generator,
+  not on wishes; and `SELECT ... FINAL` is often already optimized. So lever 2 is decided
+  by measurement, ranked FINAL-vs-`argMax(...) GROUP BY conversion_id` (the schema-native
+  lever — the serving layer is all ReplacingMergeTree + FINAL, the exact cost RUNBOOK
+  incident #1 is about) > a clustered non-leading skip index (clustering measured) >
+  a documented negative result (stating precisely *why* a secondary skip index does not
+  help on this schema and the condition that would change it). Rejected: adding a
+  denormalized `campaign_id` column to manufacture a projection win — that is schema
+  surgery that trips the golden gate and is the "tuning the setup to inflate the win" the
+  spec's own out-of-scope forbids.
+- **New `bench_large` profile, not `scale_curve` reuse.** Phase 14's `scale_curve`
+  (100k exposures) was sized for an in-process engine drain, not a full pipeline load into
+  ClickHouse; Phase 13 adds `bench_large` sized so `attributed_conversions` and
+  `exposures_landed` cross **several** 8192-row granules through the live stack. Counts are
+  verified above the granule floor before any lever is measured (a sub-granule table is one
+  granule and every lever is a no-op).
