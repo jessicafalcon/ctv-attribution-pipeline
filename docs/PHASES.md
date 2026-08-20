@@ -203,3 +203,68 @@ section listing what was cut and why.
 
 **Done when.** A reader can go from README to a running demo with `make up` and
 `make seed && make run`.
+
+---
+
+# Proposed extensions (post-plan — JD alignment)
+
+Phases 12–15 are **proposed**, not part of the original plan above (which ends at
+the Phase 11 checkpoint and yields a coherent submission on its own). They sharpen
+the fit against a data-platform posting — lakehouse storage + compute, an
+orchestrator, a real query-cost story, a measured scaling point, and a runbook.
+Each has a spec under `specs/phase-N-<slug>.md` and is marked PROPOSED there: none
+opens a branch until approved, and Phase 12 additionally needs dependency sign-off
+and an ARCHITECTURE §3.5 scope reversal. They are independent except that Phase 13
+reuses Phase 14's volume profile if that lands first.
+
+## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
+
+**Goal.** Land raw exposures to a local Iceberg table (day-partitioned); move the
+reconciliation pass to a day-partitioned Dagster software-defined asset that reads
+exposures from Iceberg via DuckDB, feeding the unchanged `attribute_household` leaf.
+ClickHouse `exposures_landed` stays as the serving copy (dual-write). Adds the
+lakehouse storage angle (Iceberg), compute angle (DuckDB), and an orchestrator.
+
+**Done when.** Reconciled output is byte-identical to the current ClickHouse-sourced
+pass (asserted on row content — Iceberg metadata is carved out of the determinism
+guarantee); a Dagster partition backfill is demonstrated; `make eval` reproduces
+long_delay recall 0.973. **Needs first:** 5-package allowlist add + ARCHITECTURE §3.5
+reversal. Spec: `specs/phase-12-lakehouse-landing.md`.
+
+## Phase 13 — Query cost levers (PROPOSED)
+
+**Goal.** A real "made this query measurably cheaper, and why" story: projection,
+data-skipping index, and PREWHERE each measured before/after on the report query via
+`X-ClickHouse-Summary`, reusing `bench.py`'s `OPTIMIZE FINAL` canonicalization.
+Requires a multi-granule profile (levers are no-ops below one 8192-row granule).
+
+**Done when.** Each lever direction-asserts a `read_bytes` reduction, returns
+identical result rows (6 dp), and carries a written why + tradeoff in RESULTS.md;
+gate-0 tiny golden byte-identical (lever DDL off the golden path). No new deps.
+Spec: `specs/phase-13-query-cost-levers.md`.
+
+## Phase 14 — Measured scaling curve (PROPOSED)
+
+**Goal.** Replace SCALING.md's asserted ~200 B/exposure with a measured occupancy
+curve: drain the engine over tiered event counts, report structural
+`bytes_per_exposure` and `engine_join_state_current` per tier, re-derive the TB
+extrapolation from the measured constant. Offline, no compose.
+
+**Done when.** `make scale-curve` emits the curve and rewrites the SCALING.md
+constant; the reported number is structural (deterministic), with `tracemalloc` as a
+labeled cross-check only; gate-0 tiny golden byte-identical. No new deps.
+Spec: `specs/phase-14-scaling-curve.md`.
+
+## Phase 15 — Runbook and incident log (PROPOSED)
+
+**Goal.** Elevate the two real incidents already in ARCHITECTURE §8 (the `FINAL
+read_rows` benchmark non-determinism; the clickhouse-connect timezone round-trip)
+into `docs/RUNBOOK.md` post-incident writeups, plus the batch-drain operational
+boundary as a documented known-limitation. Answers the posting's "runbooks you
+actually wrote" bullet. Docs-only, invent nothing (every claim traces to a recorded
+fact).
+
+**Done when.** `docs/RUNBOOK.md` exists with both incidents in symptom → detection →
+root cause → fix → generalization form; a trace check confirms every cross-reference
+resolves; un-alerted failure modes are named as un-alerted. No new deps.
+Spec: `specs/phase-15-runbook.md`.
