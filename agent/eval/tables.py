@@ -9,6 +9,9 @@ from agent.eval.scoring import SweepResult
 
 EXPECTED_LABEL = {
     "fault_recall": lambda s: f"CONFIDENT {s.expected.value}",
+    "negative_confirmation": lambda s: (
+        f"abstain or CONFIDENT {s.expected.value} (never device_graph_mismatch)"
+    ),
     "capability_boundary": lambda s: "abstain (capability boundary)",
     "control": lambda s: "abstain (control)",
 }

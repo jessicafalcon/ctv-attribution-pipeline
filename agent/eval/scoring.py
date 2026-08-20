@@ -47,6 +47,18 @@ def score_rep(scenario: Scenario, finding: AttributionFinding) -> Outcome:
             if finding.top_hypothesis == scenario.expected
             else Outcome.WRONG_DIAGNOSIS
         )
+    if scenario.kind == "negative_confirmation":
+        # A genuine lift: abstaining is correct (the honest read of a healthy-but-higher
+        # pipeline from the frozen context), and a CONFIDENT real_performance_change is
+        # the bonus. ANY other CONFIDENT verdict is a failure — a CONFIDENT
+        # device_graph_mismatch is the near-miss NEGATIVE-half failure §4.3 warns of.
+        if is_abstention(finding):
+            return Outcome.CORRECT_ABSTENTION
+        return (
+            Outcome.CORRECT_DIAGNOSIS
+            if finding.top_hypothesis == scenario.expected
+            else Outcome.WRONG_DIAGNOSIS
+        )
     # capability_boundary or control: correct == abstain.
     return (
         Outcome.CORRECT_ABSTENTION if is_abstention(finding) else Outcome.FALSE_POSITIVE

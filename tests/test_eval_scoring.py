@@ -75,7 +75,17 @@ def test_escalation_default_never_read_as_a_diagnosis():
 REAL_LIFT = scen.by_name("real_lift")  # expected = REAL_PERFORMANCE_CHANGE
 
 
-def test_real_lift_confident_real_change_is_correct():
+def test_real_lift_abstain_is_correct_not_a_miss():
+    # THE load-bearing fix: a genuine lift is a healthy-but-higher pipeline, and the
+    # honest read from the frozen context (no baseline field, flat ip_resolved_fraction)
+    # is an abstention (Ruling E). Scoring that as a miss would penalize correct work
+    # and collide with the prompt. negative_confirmation scores it CORRECT_ABSTENTION.
+    f = finding(Hypothesis.UPSTREAM_DATA_CHANGE, "AMBIGUOUS_NEEDS_HUMAN")
+    assert score_rep(REAL_LIFT, f) == Outcome.CORRECT_ABSTENTION
+
+
+def test_real_lift_confident_real_change_is_the_bonus_correct():
+    # Reaching real_performance_change by elimination is also correct (the bonus).
     f = finding(Hypothesis.REAL_PERFORMANCE_CHANGE, "CONFIDENT")
     assert score_rep(REAL_LIFT, f) == Outcome.CORRECT_DIAGNOSIS
 
@@ -84,6 +94,11 @@ def test_real_lift_confident_device_graph_is_the_near_miss_failure():
     # The exact negative-half failure §4.3 warns about: firing device_graph_mismatch
     # on a genuine lift.
     f = finding(Hypothesis.DEVICE_GRAPH_MISMATCH, "CONFIDENT")
+    assert score_rep(REAL_LIFT, f) == Outcome.WRONG_DIAGNOSIS
+
+
+def test_real_lift_confident_other_fault_is_also_a_failure():
+    f = finding(Hypothesis.LATE_ARRIVAL_DISTORTION, "CONFIDENT")
     assert score_rep(REAL_LIFT, f) == Outcome.WRONG_DIAGNOSIS
 
 

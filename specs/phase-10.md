@@ -38,10 +38,19 @@ correct outcome is **abstention** (`AMBIGUOUS_NEEDS_HUMAN`), exactly what the Ph
 prompt already routes an unexplained genre skew to. Two record-fixes carried in the
 won't-do (below).
 
-**Ruling B — three scoring buckets, and the two abstentions are NOT the same thing.**
+**Ruling B — four scoring buckets, and the two abstentions are NOT the same thing.**
 - **fault-recall** (agent must CONFIDENTLY name the right cause): `shared_ip_spike →
-  DEVICE_GRAPH_MISMATCH`, `real_lift → REAL_PERFORMANCE_CHANGE`, `late_burst →
-  LATE_ARRIVAL_DISTORTION`.
+  DEVICE_GRAPH_MISMATCH`, `late_burst → LATE_ARRIVAL_DISTORTION`.
+- **negative-confirmation** (the near-miss NEGATIVE half, `real_lift`): a genuine lift
+  is NOT a wrong number — the number is right, just higher. From the frozen context the
+  honest read is "healthy pipeline" (flat `ip_resolved_fraction`, no distortion signal),
+  which Ruling E routes to abstention; there is **no baseline/vs-prior field**, so a
+  CONFIDENT `REAL_PERFORMANCE_CHANGE` is structurally unreachable and would collide with
+  Ruling E. Resolved on the rubric side (matching PHASES.md "DECLINES to fire
+  device_graph_mismatch"): **correct = abstain OR confident `REAL_PERFORMANCE_CHANGE`**
+  (the bonus, by elimination); **FAILURE = confidently firing `DEVICE_GRAPH_MISMATCH`**
+  (the exact near-miss failure §4.3 warns of) **or any other fault**. Not a control,
+  not in the FP-rate denominator.
 - **capability-boundary** (abstention-expected, but for a *seeing* reason):
   `co_view_bug` — a real fault the agent CANNOT diagnose from serving data by design
   (Ruling A). Correct = abstain. Labeled a known capability boundary with the
@@ -61,8 +70,11 @@ AMBIGUOUS_NEEDS_HUMAN` is always read as ABSTENTION (never `top_hypothesis` — 
 an escalation is the neutral `upstream_data_change` default, DECISIONS Phase 9).
 - fault-recall rep → `CORRECT_DIAGNOSIS` (CONFIDENT ∧ top == expected) ·
   `ABSTAINED` (AMBIGUOUS — over-cautious miss on a diagnosable fault) ·
-  `WRONG_DIAGNOSIS` (CONFIDENT ∧ top ≠ expected — the dangerous case; on `real_lift`,
-  a CONFIDENT `DEVICE_GRAPH_MISMATCH` is the near-miss NEGATIVE-half failure).
+  `WRONG_DIAGNOSIS` (CONFIDENT ∧ top ≠ expected — the dangerous case).
+- negative-confirmation rep (`real_lift`) → `CORRECT_ABSTENTION` (AMBIGUOUS) ·
+  `CORRECT_DIAGNOSIS` (CONFIDENT `REAL_PERFORMANCE_CHANGE`, the bonus) ·
+  `WRONG_DIAGNOSIS` (any other CONFIDENT verdict — a CONFIDENT `DEVICE_GRAPH_MISMATCH`
+  is the near-miss NEGATIVE-half failure).
 - capability-boundary / control rep → `CORRECT_ABSTENTION` (AMBIGUOUS) ·
   `FALSE_POSITIVE` (CONFIDENT with any real-fault hypothesis).
 

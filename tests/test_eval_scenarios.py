@@ -13,16 +13,19 @@ def test_catalog_is_six_scenarios_matching_config():
     assert scen.TOTAL_INVOCATIONS == EVAL_REPS * 6
 
 
-def test_exactly_two_controls_and_one_capability_boundary():
+def test_scenario_kinds_are_the_expected_split():
     kinds = [s.kind for s in scen.SCENARIOS]
-    assert kinds.count("control") == 2
-    assert kinds.count("capability_boundary") == 1
-    assert kinds.count("fault_recall") == 3
+    assert kinds.count("control") == 2  # the FP-rate denominator
+    assert kinds.count("capability_boundary") == 1  # co_view_bug
+    assert kinds.count("fault_recall") == 2  # shared_ip_spike, late_burst
+    assert kinds.count("negative_confirmation") == 1  # real_lift (near-miss ⊖)
 
 
-def test_fault_recall_scenarios_carry_an_expected_hypothesis():
+def test_only_diagnosable_scenarios_carry_an_expected_hypothesis():
+    # fault_recall AND negative_confirmation carry an expected (the latter for the
+    # bonus match / table label); the abstention-only kinds carry None.
     for s in scen.SCENARIOS:
-        if s.kind == "fault_recall":
+        if s.kind in ("fault_recall", "negative_confirmation"):
             assert isinstance(s.expected, Hypothesis)
         else:
             assert s.expected is None

@@ -19,10 +19,11 @@ from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
 from producer.serialize import jsonl
+from reconcile.reconcile import LONG_WINDOW
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
-from streaming.attribute import ALLOWED_LATENESS, attribute, dedup_streams
+from streaming.attribute import ALLOWED_LATENESS, HOT_WINDOW, attribute, dedup_streams
 from streaming.dataflow import build_flow
 
 FAULT_PROFILES = [
@@ -189,3 +190,29 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
         (c.ingest_time - c.event_time).total_seconds() for c in run.stream.conversions
     )
     assert peak_late < 7 * 86400
+
+
+# --- Phase 10: the full-run sweep injects no spurious restatement ------------
+# `make agent-eval` runs the FULL pipeline (incl. reconciliation) per scenario so
+# late_burst's restatement exists. Confirm the three IN-WINDOW scenarios (all event-time
+# delays inside the 7d window) recover nothing on the long window — so reconciliation
+# writes no corrected rows, report_snapshots PRE == FINAL, and no spurious roas_delta
+# baits a false late_arrival_distortion. (late_burst is excluded: its misses are arrival
+# lateness / eviction, not event-time, so it genuinely restates.)
+
+
+@pytest.mark.parametrize("name", ["shared_ip_spike", "real_lift", "no_fault_baseline"])
+def test_in_window_scenarios_recover_nothing_on_the_long_window(name: str) -> None:
+    p = load_profile(name)
+    s = generate(p, p.seed)
+    idx = GraphIndex.from_households(s.graph.households)
+    exps, res, _ = dedup_streams(s.exposures, resolve_stream(s.conversions, idx))
+
+    def attributed_ids(window):
+        return {r.conversion_id for r in attribute(exps, res, window) if r.attributed}
+
+    hot = attributed_ids(HOT_WINDOW)
+    long = attributed_ids(LONG_WINDOW)
+    # The long window credits exactly the hot set — reconciliation recovers nothing,
+    # so no restatement (roas_delta) is produced on these profiles.
+    assert long == hot
