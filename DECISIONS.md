@@ -1038,3 +1038,17 @@ One entry per non-obvious choice. Newest last.
   the extra-refresh tests (leaves `bench.py` non-deterministic for every other caller);
   weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
   test to make it pass).
+
+## Phase 15
+
+- **The runbook is a retrospective incident log by choice, not a forward playbook.**
+  Phase 15's "elevate, invent nothing" constraint (spec central constraint) means
+  `docs/RUNBOOK.md` carries only incidents that already happened and trace to an
+  ARCHITECTURE §8 gotcha / DECISIONS / RESULTS fact. The named cost: it cannot carry
+  speculative first-response guidance ("snapshot count doubled → check client tz first")
+  that no recorded gotcha states verbatim — the per-incident *generalization* lines bridge
+  that only partly. This was the right trade for this phase (its whole value was provable
+  traceability and earning the review gate's trust; speculative remediation would have
+  muddied that). A forward-response playbook is a deliberately separate, later artifact
+  that would relax invent-nothing **under human review** — recorded here as a boundary
+  chosen, not a Phase-15 omission.

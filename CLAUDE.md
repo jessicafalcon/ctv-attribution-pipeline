@@ -104,6 +104,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values,
   silent on tiny's (offline; needs the image, not the compose stack)
+- `make check-runbook` — standalone trace check for docs/RUNBOOK.md: every
+  link/anchor resolves and every named guard/alert still exists in source (offline;
+  not a pytest file, to avoid the run-tests-hook full-suite re-trigger)
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
@@ -509,6 +512,29 @@ never auto-fixed, ignored, or committed around.
   scoped to `agent-run`/`agent-eval`). Own `fix/agent-env-load` branch off main after Phase 11
   merges; mandatory security-review; proof is a fresh-shell `make agent-run PROFILE=shared_ip_spike`
   (key only in .env) reaching `messages.create` (~$1.50, ask first); close row 34 when green.
+- Phase 15 (2026-08-20): built on `phase-15-runbook` — runbook + incident log
+  (post-plan extension, NOT in the original PHASES.md 0–11; spec added in PR #17).
+  Docs-only, no pipeline code. `docs/RUNBOOK.md`: two recorded incidents in
+  symptom→detection→root-cause→fix→generalization→would-catch-it-next-time form —
+  (1) the benchmark that lied in CI (`FINAL read_rows` counts un-merged version-parts:
+  CI rollup 1020 rows lost 0.8×, local 340 rows won 2.5×; guard = `queries/bench.py`
+  `_canonicalize` OPTIMIZE + magnitude-free direction assert), (2) the timezone
+  round-trip that quadrupled the snapshots (clickhouse-connect renders DateTime in
+  client-local tz; guard = server-side `reported_at` in `reconcile/rollup.py` +
+  tz-free `toUnixTimestamp64Milli` version read in `reconcile/reconcile.py`) — plus
+  the batch-drain known-limitation (windowing proven on a bounded drain; continuous
+  follow / spill-to-disk state / TTL'd dedup NOT operated → SCALING.md Flink mapping).
+  Would-catch honesty: NEITHER incident is covered by the four `observability/rules/`
+  alerts (FINAL read_rows is offline, not scraped; the tz collapse sits below
+  `RestatementMagnitude`'s >1.0 threshold) — said so, not implied. Elevate-invent-nothing
+  discipline: every number/fix traces to a §8 gotcha / DECISIONS / RESULTS fact.
+  Trace check = standalone `docs/check_runbook.py` (`make check-runbook`), NOT a pytest
+  file (avoids the run-tests-hook full-suite re-trigger, per BACKLOG 36): verifies every
+  RUNBOOK link/anchor resolves and every named guard/alert still exists in source. DONE
+  green: `make test` (206 offline) + `make lint` clean; `make check-runbook` OK. README
+  repo-map pointer added. Review gate: PENDING (developer runs code-reviewer +
+  functionality-tester + coherence-auditor; security-reviewer not triggered — no
+  CI/.env/compose/CH-user/agent change). Merged: PENDING. Spec: `specs/phase-15-runbook.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
