@@ -15,9 +15,12 @@ Determinism (the trap this phase exists to avoid): the reported
 `bytes_per_exposure` is a STRUCTURAL measure — the deep `sys.getsizeof` of the
 retained hot-window state divided by its entry count — which is identical on every
 re-run under a fixed seed and single thread. `tracemalloc` peak is allocation- and
-GC-nondeterministic (it drifts with runtime timing), so it is reported as a
-labeled cross-check column only and NEVER asserted. Same discipline as the Phase-7
-`FINAL read_rows` fix.
+GC-nondeterministic (it drifts with runtime timing), so it is printed by
+`make scale-curve` as a labeled console cross-check only — NEVER asserted and
+NEVER written into the committed `docs/SCALING.md` (which would make the make
+target non-idempotent). Same discipline as the Phase-7 `FINAL read_rows` fix.
+Rule this enforces: every column in the byte-stable committed doc is a
+deterministic structural field, each one pinned by `test_scale_probe.py`.
 
 Occupancy, not throughput: the curve dials event COUNT up across tiers (state
 occupancy), which models `exposure_rate × window` directly. It is NOT a msgs/sec
@@ -150,6 +153,11 @@ def measure_tier(base: Profile, n_exposures: int) -> CurvePoint:
     _, tm_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
+    # Eviction MUST NOT fire during a measured tier: the per-exposure number is a
+    # pure occupancy measure only while the retained state equals the deduped input
+    # (`deep_sizeof(exposures)` below). If a future retune lets eviction run, the
+    # measure silently sizes the wrong set — so fail loud here rather than relax it.
+    # SPAN_HOURS < HOT_WINDOW is what guarantees no eviction; keep it that way.
     evicted = metrics.EXPOSURES_EVICTED._value.get()
     if evicted:
         raise RuntimeError(
@@ -176,16 +184,18 @@ def run_curve(tiers: tuple[int, ...] = TIERS) -> list[CurvePoint]:
 
 
 def render_table(points: list[CurvePoint]) -> str:
+    # Every column here lands in the byte-stable committed doc, so every column
+    # must be a DETERMINISTIC structural field — the tracemalloc peak is excluded
+    # by design (it drifts run to run; it prints console-only in main()). Adding a
+    # column here means adding it to the determinism assert in test_scale_probe.py.
     header = (
         "| exposures in window | structural state | "
-        "bytes/exposure (measured) | `engine_join_state_current` | "
-        "`tracemalloc` peak (cross-check) |\n"
-        "|---|---|---|---|---|\n"
+        "bytes/exposure (measured) | `engine_join_state_current` (per-household) |\n"
+        "|---|---|---|---|\n"
     )
     rows = "".join(
         f"| {p.exposures_in_window:,} | {p.structural_bytes / 1e6:.1f} MB | "
-        f"{p.bytes_per_exposure:.0f} B | {p.join_state_current} | "
-        f"{p.tracemalloc_peak_bytes / 1e6:.1f} MB |\n"
+        f"{p.bytes_per_exposure:.0f} B | {p.join_state_current} |\n"
         for p in points
     )
     return header + rows
@@ -204,16 +214,21 @@ def render_block(points: list[CurvePoint]) -> str:
     return (
         f"{_BEGIN}\n"
         f"**Measured** (`make scale-curve`, offline engine drain over the "
-        f"`scale_curve` profile): the retained hot-window state costs "
-        f"**~{anchor:.0f} B/exposure** ({lo:.0f}–{hi:.0f} B across the curve, "
-        f"structural — deep `sys.getsizeof` of the retained exposures ÷ entry "
-        f"count; deterministic on re-run). This replaces the old ~200 B guess.\n\n"
+        f"`scale_curve` profile): each retained exposure payload in the hot-window "
+        f"state costs **~{anchor:.0f} B** ({lo:.0f}–{hi:.0f} B across the curve, "
+        f"structural — deep `sys.getsizeof` of the retained exposure objects ÷ entry "
+        f"count; deterministic on re-run). This replaces the old ~200 B guess. The "
+        f"engine's per-household dict/list container adds ~0.4% on top (excluded "
+        f"here — it does not move the extrapolation).\n\n"
         f"{render_table(points)}\n"
         f"Occupancy (entries in window) scales linearly with the event count, and "
         f"the per-exposure cost is flat across the curve — exactly the "
-        f"`exposure_rate × window × per-exposure-bytes` shape. `tracemalloc` peak "
-        f"is shown only as an independent cross-check; it is allocation-"
-        f"nondeterministic and is not the asserted number.\n\n"
+        f"`exposure_rate × window × per-exposure-bytes` shape. `engine_join_state_"
+        f"current` is the Phase-7 per-household occupancy gauge (one household's "
+        f"retained count, shown beside the whole-engine total); it does not feed the "
+        f"extrapolation. A `tracemalloc` allocation peak is printed by "
+        f"`make scale-curve` as an independent cross-check but is allocation-"
+        f"nondeterministic, so it is deliberately not committed here.\n\n"
         f"**Extrapolation** (the per-exposure cost is measured; the rate and the "
         f"product are still order-of-magnitude sizing, not benchmarked capacity):\n\n"
         f"```\n"

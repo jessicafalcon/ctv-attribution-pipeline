@@ -23,14 +23,20 @@ from streaming.scale_probe import (
 SMALL_TIERS = (500, 1_000, 2_000)
 
 
-def _structural(p: CurvePoint) -> tuple[int, int, int, float]:
-    """The deterministic fields only — tracemalloc_peak_bytes is excluded on
-    purpose (it drifts run to run)."""
+def _structural(p: CurvePoint) -> tuple[int, int, int, float, int, int]:
+    """Every field that reaches the byte-stable committed SCALING.md must be pinned
+    here — that is the rule the tracemalloc blocker taught: an unpinned rendered
+    column is how nondeterminism slips into the committed doc. So this covers all
+    four table columns (exposures_in_window, structural_bytes, bytes_per_exposure,
+    join_state_current) plus join_state_peak. Only tracemalloc_peak_bytes is
+    excluded, and only because it is console-only, never written to the doc."""
     return (
         p.n_exposures,
         p.exposures_in_window,
         p.structural_bytes,
         p.bytes_per_exposure,
+        p.join_state_current,
+        p.join_state_peak,
     )
 
 

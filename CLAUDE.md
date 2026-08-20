@@ -99,11 +99,12 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   rollup): latency, rows read, bytes read; asserts identical metric rows. Run after
   `make run` populated the rollup
 - `make scale-curve` — measured hot-window scaling curve (offline, no compose):
-  drain the engine over tiered event counts (1k/10k/100k exposures resident), report
-  the STRUCTURAL per-exposure state cost (`~571 B`, deep sys.getsizeof of retained
-  state ÷ entries — deterministic; `tracemalloc` is a labeled cross-check, never
-  asserted), `engine_join_state_current` occupancy, then rewrite the measured-constant
-  block in `docs/SCALING.md`. Occupancy (state size), not throughput (Phase 14)
+  drain the engine over tiered event counts (1k/10k/100k exposures resident), print
+  the measured STRUCTURAL per-exposure window-state cost and the occupancy curve (deep
+  sys.getsizeof of retained state ÷ entries — deterministic; `tracemalloc` peak printed
+  as a console-only cross-check, never asserted or committed), then rewrite the
+  measured-constant block in `docs/SCALING.md`. Occupancy (state size), not throughput
+  (Phase 14)
 - `make metrics-capture PROFILE=<p>` — dump each stage's terminal Prometheus
   registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
   promtool alert fixtures; live-stack, run after `make up && make seed`)

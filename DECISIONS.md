@@ -1064,9 +1064,14 @@ One entry per non-obvious choice. Newest last.
   strings) counted once via an id() set, so the total is the real object-graph RAM and
   is identical on every re-run under a fixed seed and single thread. Measured **~571
   B/exposure** (571–573 across the 1k/10k/100k curve), replacing the old ~200 B guess;
-  `tracemalloc` (~0.75× the structural total) is shown alongside purely as an
-  independent sanity check and is never asserted (`test_scale_probe` asserts only the
-  structural fields; the determinism test excludes `tracemalloc_peak_bytes`).
+  `tracemalloc` (~0.75× the structural total) is printed by `make scale-curve` as an
+  independent console cross-check and is never asserted AND never written into the
+  committed `docs/SCALING.md` — committing it would make the make target non-idempotent
+  (the Phase-14 review-gate blocker: the doc block first shipped a tracemalloc column at
+  0.1 MB precision that drifted on re-run). Rule this locks in: every column in the
+  byte-stable committed doc is a deterministic structural field, each pinned by the
+  `test_scale_probe` determinism assert (`_structural` covers all four table columns +
+  `join_state_peak`; it excludes only `tracemalloc_peak_bytes`, which is console-only).
 - **Only `bytes_per_exposure` moved asserted → measured; the rate and the product stay
   extrapolation.** SCALING's "order-of-magnitude sizing, not benchmarked capacity"
   framing still governs everything except the one constant. The 25k/sec rate and the
