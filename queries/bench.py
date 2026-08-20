@@ -60,7 +60,10 @@ def _canonicalize(client: Client) -> None:
     (a higher-processed_at version of the hot row). `OPTIMIZE ... FINAL` forces the
     merge — synchronous on single-node (alter_sync=1), a no-op if already merged
     (optimize_throw_if_noop=0) — so read_rows measures the steady state a scheduled
-    rollup serves in production: deterministic and identical on re-run."""
+    rollup serves in production: deterministic and identical on re-run. Both settings
+    are relied-upon ClickHouse DEFAULTS (not overridden in `clickhouse/`): overriding
+    alter_sync or optimize_throw_if_noop would silently reintroduce the very non-
+    determinism this collapses (a re-run could throw, or measure before the merge)."""
     for table in _READ_TABLES:
         client.command(f"optimize table {table} final")
 

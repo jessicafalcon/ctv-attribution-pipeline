@@ -481,9 +481,11 @@ handled.*
   `read_rows` reflects merged steady state — deterministic, re-run-identical, and the
   honest apples-to-apples comparison (a scheduled rollup serves its merged form in
   production). `OPTIMIZE ... FINAL` is synchronous on single-node (`alter_sync=1`)
-  and a no-op when already merged (`optimize_throw_if_noop=0`). Rule: never treat a
-  `FINAL` scan's `read_rows` as a stable structural number without first forcing the
-  merge.
+  and a no-op when already merged (`optimize_throw_if_noop=0`) — both relied-upon
+  ClickHouse **defaults**, not overridden in `clickhouse/`; overriding either would
+  silently reintroduce this non-determinism (a re-run could throw, or measure before
+  the merge completes). Rule: never treat a `FINAL` scan's `read_rows` as a stable
+  structural number without first forcing the merge.
 
 ---
 
