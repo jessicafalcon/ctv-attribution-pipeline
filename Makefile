@@ -5,6 +5,16 @@
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
 
+# Load ANTHROPIC_API_KEY from .env for the token targets ONLY (agent-run,
+# agent-eval). `uv run --env-file` injects into the child process it spawns, not
+# the interactive shell, and uv's precedence keeps an already-exported key (CI, a
+# future secret) authoritative over the file. `$(wildcard .env)` → no .env, no
+# flag, so a fresh clone that exports the key still runs. Scoped to these two
+# recipes; NOT a global `include .env` (which would leak every var into every
+# recipe). .env is gitignored. Security-reviewed (BACKLOG 34).
+ENV_FILE  := $(wildcard .env)
+AGENT_ENV := $(if $(ENV_FILE),--env-file .env,)
+
 # Digest-pinned prometheus image (must match docker-compose.yml) — promtool ships
 # inside it, so the alert-rule tests need no new dependency and no floating tag.
 PROM_IMAGE = prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
@@ -96,7 +106,7 @@ context:
 # `make run` populated the serving tables. Pass PROFILE explicitly (like context/eval);
 # the Phase-9 Done-when uses PROFILE=shared_ip_spike.
 agent-run:
-	uv run python -m agent.run_agent --profile "$(PROFILE)"
+	uv run $(AGENT_ENV) python -m agent.run_agent --profile "$(PROFILE)"
 
 # Phase-10 fault->diagnosis sweep: every fault profile + the no-fault baseline, run
 # EVAL_REPS times, scored against the pure rubric, both tables written to
@@ -105,7 +115,7 @@ agent-run:
 # stack you want to keep. This is the ONLY eval path that calls the LLM — it costs API
 # tokens (30 invocations, well under $10), so ask the developer before running (CLAUDE.md).
 agent-eval:
-	uv run python -m agent.eval.run_eval
+	uv run $(AGENT_ENV) python -m agent.eval.run_eval
 
 # Offline: no broker/ClickHouse. --ignore keeps the integration suite (which
 # would probe services before skipping) from making any network attempt.
