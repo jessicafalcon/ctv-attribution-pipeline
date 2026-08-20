@@ -491,8 +491,24 @@ never auto-fixed, ignored, or committed around.
   cites the deterministic integration-test pins; benchmark/eval unchanged from where they
   were captured. Done-when met: README → `make up` → `make seed && make run` is the lead
   path; all internal links resolve, every README command is a real Makefile target. Green:
-  206 offline tests + lint (docs-only, no code touched). Review gate: PENDING (developer runs
-  code-reviewer + coherence-auditor). Spec: none (docs phase; Done-when from PHASES.md).
+  206 offline tests + lint (docs-only, no code touched). Review gate PASSED
+  (code-reviewer + functionality-tester + coherence-auditor; security-reviewer not
+  triggered — no CI/.env/compose/CH-user/agent-context change): coherence found a BLOCKER
+  (docs claimed "async inserts on" but the sink inserts synchronously — no `async_insert`
+  anywhere) + a drift (RESULTS mislabeled the 2 long_delay wrong-household attributions as
+  "misses") + code-reviewer flagged an unmeasured "few thousand msgs/sec" throughput claim;
+  all fixed in-branch (async reframed as a SCALING lever in ARCHITECTURE §3.3/§5 + SCALING;
+  residuals reworded to caused_missed=0/recall-capped; throughput dropped to non-numeric;
+  README webhook forward-points to the live-push cut), re-audit clean. Two loose ends filed,
+  not fixed (branch stays docs-only): BACKLOG 35 (stale `sink.py:2` async marker → next
+  streaming/ touch), BACKLOG 36 (a test guarding the docs accuracy table vs the integration
+  pins → next tests/ touch). Merged: PENDING (developer merges). Spec: none (docs phase;
+  Done-when from PHASES.md).
+- Phase 11 follow-on (not in the docs PR): BACKLOG 34 — make the token targets auto-load
+  `.env` via `uv run --env-file` (guarded `AGENT_ENV := $(if $(wildcard .env),--env-file .env,)`,
+  scoped to `agent-run`/`agent-eval`). Own `fix/agent-env-load` branch off main after Phase 11
+  merges; mandatory security-review; proof is a fresh-shell `make agent-run PROFILE=shared_ip_spike`
+  (key only in .env) reaching `messages.create` (~$1.50, ask first); close row 34 when green.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
