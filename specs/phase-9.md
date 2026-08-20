@@ -207,7 +207,7 @@ committed (`tests/fixtures/malformed_submit_finding_input.json`) and asserted th
 A small, explicit manual tool-use loop (chosen over the SDK Tool Runner for control
 and testability: we need agent_ro probe execution, param validation, the terminal
 `submit_finding` escalation, prefix caching, and a mock-client unit test — an explicit
-`while stop_reason == "tool_use"` loop is the interview-explainable standard here).
+`while stop_reason == "tool_use"` loop is the standard, explainable choice here).
 
 1. **Observe** — `agent/run_context.collect(connect_agent(), profile)` builds the
    frozen §4.2 `AttributionContext` (Phase-8 collectors, now via `agent_ro`).
