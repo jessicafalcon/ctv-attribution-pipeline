@@ -128,7 +128,9 @@ make cost-levers && make test && make lint
 - `queries/cost_levers.sql` (the three lever DDLs + before/after query pairs),
   `queries/measure_levers.py` (drives the pairs through `bench.py`'s summary reader),
   `Makefile` `cost-levers`.
-- `producer/profiles/bench_large.py` (if not reusing phase-14's `scale_curve`).
+- `producer/profiles/bench_large.json` (a new profile — profiles are JSON;
+  `scale_curve` was sized for an in-process drain, not a ClickHouse load, DECISIONS
+  Phase 13).
 - `docs/RESULTS.md` (a "Query cost levers" section with the three tables + why/tradeoff).
 - Tests: each lever's direction assert and row-equality as offline-shaped unit tests
   where possible; the measured run is the live gate.

@@ -66,6 +66,8 @@ def test_ratio_formats_and_guards_zero():
 
 def _synthetic_out() -> dict:
     return {
+        "sizes": {"attributed_conversions": 25168, "exposures_landed": 55000},
+        "ip_value": "100.64.0.273",
         "lever1": {
             "before": _m(25168, 427856, [(5428, 154945.18)]),
             "after": _m(16384, 278528, [(5428, 154945.18)]),
@@ -108,3 +110,15 @@ def test_render_is_deterministic_and_carries_the_measured_numbers():
     assert "| 0 |" in section  # 0 granules skipped
     assert "157 of 55,000" in section
     assert "clustering, not selectivity" in section
+    # size headline derived from count() (round(n/8192) granules), not literals
+    assert "25,168 rows ≈ 3 granules" in section
+    assert "55,000 ≈ 7 granules" in section
+    assert "ip = '100.64.0.273'" in section  # dynamic ip value, not a hardcoded literal
+
+
+def test_render_size_headline_tracks_the_sizes_dict():
+    out = _synthetic_out()
+    out["sizes"] = {"attributed_conversions": 40960, "exposures_landed": 81920}
+    section = ml.render(out)
+    assert "40,960 rows ≈ 5 granules" in section  # round(40960/8192)=5
+    assert "81,920 ≈ 10 granules" in section  # round(81920/8192)=10

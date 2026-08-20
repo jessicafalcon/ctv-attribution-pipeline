@@ -98,9 +98,14 @@ from exposures_landed
 where program_genre = 'sports'
 
 -- >>> lever2b_ip
+-- `{ip}` is substituted by measure_levers.py with the highest-row-count shared-pool
+-- IP, chosen deterministically (order by count() desc, ip) — no seed-pinned literal.
+-- The producer's shared-IP pool is 100.64.0.{i+1} (producer/graph.py), a plain
+-- counter that intentionally overflows the last octet past 255 (a sim convention,
+-- not a real RFC IPv4 address), so the value is genuine generator output.
 select count(), round(sum(spend), 4)
 from exposures_landed
-where ip = '100.64.0.273'
+where ip = '{ip}'
 
 -- ==================== LEVER 3: PREWHERE ====================
 -- A wide-column read behind a selective window predicate. WHERE (with

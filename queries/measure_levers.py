@@ -108,6 +108,21 @@ def measure(client: Client | None = None) -> dict:
 
     out: dict = {}
 
+    # Logical table sizes from count() on the canonicalized tables — the
+    # intention-revealing, pruning-independent size headline. NOT a lever query's
+    # read_rows, which equals the row count only because that side happens to prune
+    # nothing (a fragile coupling exactly where the phase is about pruning).
+    out["sizes"] = {
+        t: client.query(f"select count() from {t} final").result_rows[0][0]
+        for t in ("attributed_conversions", "exposures_landed")
+    }
+    # Highest-row-count shared-pool IP, chosen deterministically (ip tie-break) so the
+    # skip-index probe carries no seed-pinned literal and re-runs identically.
+    out["ip_value"] = client.query(
+        "select ip from exposures_landed final "
+        "group by ip order by count() desc, ip limit 1"
+    ).result_rows[0][0]
+
     # ---- Lever 1: projection (non-FINAL), toggled by optimize_use_projections ----
     before = _measure(client, sql["lever1_query"], {"optimize_use_projections": 0})
     after = _measure(client, sql["lever1_query"], {"optimize_use_projections": 1})
@@ -140,6 +155,8 @@ def measure(client: Client | None = None) -> dict:
     out["lever2b"] = {}
     for col in ("genre", "ip"):
         q = sql[f"lever2b_{col}"]
+        if col == "ip":
+            q = q.format(ip=out["ip_value"])
         no_idx = _measure(client, q, {"use_skip_indexes": 0})
         with_idx = _measure(client, q, {"use_skip_indexes": 1})
         if not _rows_equal(no_idx, with_idx):
@@ -194,13 +211,18 @@ def render(out: dict) -> str:
     f, a = out["lever2a"]["final"], out["lever2a"]["argmax"]
     g = out["lever2b"]["genre"]
     ip = out["lever2b"]["ip"]
+    ip_val = out["ip_value"]
+    # Size headline from count() — logical row count, pruning-independent.
+    ac_n = out["sizes"]["attributed_conversions"]
+    el_n = out["sizes"]["exposures_landed"]
+    ac_gran, el_gran = round(ac_n / 8192), round(el_n / 8192)
     parts = [
         _START,
         "",
         "_Measured by `make cost-levers` on `bench_large` "
-        f"(attributed_conversions {l1b['read_rows']:,} rows ≈ 3 granules; "
-        "exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged "
-        "steady state first; rows/bytes are ClickHouse's cache-independent "
+        f"(attributed_conversions {ac_n:,} rows ≈ {ac_gran} granules; "
+        f"exposures_landed {el_n:,} ≈ {el_gran} granules). Both tables canonicalized "
+        "to merged steady state first; rows/bytes are ClickHouse's cache-independent "
         "`X-ClickHouse-Summary`. Re-run byte-stable._",
         "",
         "**Lever 1 — projection ordered by `event_time` (WINS).** A date-scoped "
@@ -234,13 +256,13 @@ def render(out: dict) -> str:
         "`_canonicalize` (correctly) removes.",
         "",
         "_2b — bloom skip index on a non-leading column (`program_genre`, and the "
-        f"far-more-selective `ip` — {ip['no_idx']['rows'][0][0]} of 55,000 rows):_",
+        f"far-more-selective `ip` — {ip['no_idx']['rows'][0][0]} of {el_n:,} rows):_",
         "",
         "| query | rows read, no index | rows read, bloom index | granules skipped |",
         "|---|---|---|---|",
         f"| `program_genre = 'sports'` | {g['no_idx']['read_rows']:,} "
         f"| {g['with_idx']['read_rows']:,} | 0 |",
-        f"| `ip = '100.64.0.273'` | {ip['no_idx']['read_rows']:,} "
+        f"| `ip = '{ip_val}'` | {ip['no_idx']['read_rows']:,} "
         f"| {ip['with_idx']['read_rows']:,} | 0 |",
         "",
         "The index skips **zero** granules for either predicate — even the "

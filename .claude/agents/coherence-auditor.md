@@ -47,6 +47,14 @@ missing their stage prefix.
 - docs/ARCHITECTURE.md "Gotchas" missing findings the code clearly worked
   around; DECISIONS.md entries that no longer describe what the code does.
 - Non-obvious choices in the code with NO DECISIONS.md entry at all.
+- **docs/PHASES.md behavioral clauses vs the actual landing.** A completed
+  phase's narrative is frozen history, but any *behavioral* clause (a "Done
+  when" claim the code can falsify) is a live contract. If a phase's landing
+  diverged from its pre-written "Done when" (e.g. Phase 13 landed lever 2 as a
+  documented negative result, not "each lever reduces read_bytes"), the
+  PHASES.md clause must be corrected at exit — flag it as a BLOCKER. (Correct
+  PHASES.md, never the spec/DECISIONS/RESULTS to match it — those are
+  authoritative.)
 A stale record corrupts every future check — flag these as BLOCKERs.
 
 ### 4. Forward coherence
