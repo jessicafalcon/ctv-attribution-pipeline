@@ -76,6 +76,17 @@ def run(client: Client | None = None) -> tuple[dict, dict]:
             "benchmark mismatch: optimized rollup disagrees with the naive scan "
             f"(rounded to {_ROUND} dp)\n  naive={naive_rows}\n  opt  ={opt_rows}"
         )
+    # Direction guard: equal metric rows alone don't prove the rollup is still the
+    # thing being read — bench.sql could revert to scanning the raw tables and still
+    # return equal rows, silently voiding the "rollup reads less" claim while green.
+    # A magnitude-free assert pins the optimization direction (the actual claim)
+    # without pinning any tunable number (long_delay: 340 < 864, comfortable margin).
+    if optimized["read_rows"] >= naive["read_rows"]:
+        raise AssertionError(
+            "benchmark lost its optimization: the optimized query read no fewer rows "
+            f"than the naive scan (opt={optimized['read_rows']} >= "
+            f"naive={naive['read_rows']}) — is bench.sql still reading campaign_hourly?"
+        )
     return naive, optimized
 
 
