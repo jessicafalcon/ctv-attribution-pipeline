@@ -238,10 +238,17 @@ data-skipping index, and PREWHERE each measured before/after on the report query
 `X-ClickHouse-Summary`, reusing `bench.py`'s `OPTIMIZE FINAL` canonicalization.
 Requires a multi-granule profile (levers are no-ops below one 8192-row granule).
 
-**Done when.** Each lever direction-asserts a `read_bytes` reduction, returns
-identical result rows (6 dp), and carries a written why + tradeoff in RESULTS.md;
-gate-0 tiny golden byte-identical (lever DDL off the golden path). No new deps.
-Spec: `specs/phase-13-query-cost-levers.md`.
+**Done when.** Levers 1 (projection ordered by `event_time`) and 3 (PREWHERE) each
+direction-assert a `read_bytes` reduction; Lever 2 (FINAL-avoidance / skip index) lands
+as a **documented negative result**, asserted to NOT improve — this schema does not
+reward a secondary skip index (leading key already prunes campaign, non-key columns
+scattered), and showing *when not to add one* is the phase's point. (Corrected from the original "each lever reduces read_bytes" framing — the
+proposed levers named a `campaign_id` column `attributed_conversions` never had and a
+skip index on `exposures_landed`'s leading sort key; see the spec and **DECISIONS
+Phase 13** for the schema-reality correction, which are authoritative.) Every
+measurement returns identical result rows (6 dp) and carries a written why + tradeoff
+in RESULTS.md; gate-0 tiny golden byte-identical (lever DDL off the golden path). No
+new deps. Spec: `specs/phase-13-query-cost-levers.md`.
 
 ## Phase 14 — Measured scaling curve (PROPOSED)
 

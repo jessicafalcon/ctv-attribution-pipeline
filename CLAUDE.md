@@ -98,6 +98,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make bench` — naive (full FINAL scan-and-join) vs optimized (`campaign_hourly`
   rollup): latency, rows read, bytes read; asserts identical metric rows. Run after
   `make run` populated the rollup
+- `make cost-levers` — three ClickHouse-native query-cost levers, each a before/after
+  on a scoped report query over the `bench_large` serving tables (live-stack): a
+  projection ordered by `event_time` on `attributed_conversions` (WINS — date-range
+  prune), a FINAL-avoidance / bloom-skip-index candidate (documented NEGATIVE result —
+  the schema doesn't reward one: leading key already prunes campaign, non-key columns
+  scattered), and PREWHERE (WINS). Reuses `bench.py`'s canonicalization + summary
+  reader; magnitude-free direction asserts + 6dp row-equality; rewrites the "Query cost
+  levers" block in `docs/RESULTS.md`. Run after `make up && make seed PROFILE=bench_large
+  && make run` (Phase 13)
 - `make scale-curve` — measured hot-window scaling curve (offline, no compose):
   drain the engine over tiered event counts (1k/10k/100k exposures resident), print
   the measured STRUCTURAL per-exposure window-state cost and the occupancy curve (deep
@@ -571,6 +580,38 @@ never auto-fixed, ignored, or committed around.
   PR). Review gate: PENDING (developer runs code-reviewer + functionality-tester +
   coherence-auditor; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
   change). Merged: PENDING. Spec: `specs/phase-14-scaling-curve.md`.
+- Phase 13 (2026-08-20): built on `phase-13-query-cost-levers` — query cost levers
+  (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Three
+  ClickHouse-native cost levers measured before/after on scoped report queries over a
+  new multi-granule `bench_large` profile (seed 13, 55k exposures / 25,168 conversions
+  → attributed_conversions ~3 granules, exposures_landed ~7 granules; sized under
+  librdkafka's ~100k-message producer buffer, BACKLOG). **Spec corrected first (in the
+  open, first commit + DECISIONS Phase 13):** the proposed levers named a `campaign_id`
+  column `attributed_conversions` never had and a skip index on `exposures_landed`'s
+  LEADING sort key (already primary-pruned) — surfaced not silently repaired (workflow
+  rule), developer approved the buildable set. Levers: (1) **projection ordered by
+  `event_time`** on attributed_conversions — WINS (427,856→278,528 bytes on the
+  date-scoped non-FINAL slice; base table is conversion_id-sorted so event_time can't
+  prune today); (2) **FINAL-avoidance / skip index — DOCUMENTED NEGATIVE result** (a
+  first-class landing): argMax GROUP BY reads 3.8× MORE than `FINAL` on merged
+  single-version data, and a bloom index on genre AND the 0.3%-selective ip skips ZERO
+  granules — the blocker is physical clustering, not selectivity; (3) **PREWHERE** —
+  WINS (8,061,895→6,660,392 bytes, wide cols read only for survivors). `queries/
+  cost_levers.sql` + `queries/measure_levers.py` (reuses `bench.py` `_canonicalize`
+  UNCHANGED + `_measure` given a backward-compat `settings=` param; magnitude-free
+  direction asserts — winners read fewer bytes, negatives asserted NOT to help so a
+  silent regression fails loudly — + 6dp row-equality), `make cost-levers` rewrites a
+  marked `docs/RESULTS.md` "Query cost levers" block (byte-stable). Lever DDL runs ONLY
+  inside `make cost-levers` against bench_large, never on `clickhouse/ddl.sql` — gate-0
+  tiny golden byte-identical. ClickHouse 24.8 gotchas logged (ARCHITECTURE §8):
+  projection on a ReplacingMergeTree needs `deduplicate_merge_projection_mode='rebuild'`
+  and can't serve a FINAL query. Green: `make cost-levers` live + 6 offline unit tests
+  (`test_cost_levers.py`, pure parse/predicate/render) + `make test` + `make lint`;
+  `make check-runbook` OK (bench.py `_canonicalize` citation still resolves, BACKLOG 37
+  re-deferred). Review gate: PENDING (developer runs code-reviewer +
+  functionality-tester + coherence-auditor; security-reviewer NOT triggered — no
+  CI/.env/compose/CH-user/agent change; a projection/index DDL is not a user/exposure
+  change). Merged: PENDING. Spec: `specs/phase-13-query-cost-levers.md`.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

@@ -479,6 +479,21 @@ handled.*
   silently reintroduce this non-determinism (a re-run could throw, or measure before
   the merge completes). Rule: never treat a `FINAL` scan's `read_rows` as a stable
   structural number without first forcing the merge.
+- **A projection on a ReplacingMergeTree needs `deduplicate_merge_projection_mode`
+  set, and cannot serve a `FINAL` query.** Adding a projection to a
+  ReplacingMergeTree (Phase-13 cost levers, `queries/cost_levers.sql`) raises code
+  344 (`SUPPORT_IS_DISABLED`) on ClickHouse 24.8 unless the table sets
+  `deduplicate_merge_projection_mode = 'rebuild'` (or `'drop'`) — ClickHouse needs to
+  know how the projection is handled when a dedup merge collapses versions;
+  `'rebuild'` recomputes the projection on merge. Second surprise: even once built, a
+  projection is **not** used for a `SELECT ... FINAL` query — ClickHouse can't
+  guarantee the projection copy is deduplicated to the same latest-version rows the
+  base table's `FINAL` returns, so it falls back to the full base scan. The Phase-13
+  projection lever is therefore measured non-FINAL, valid because the table is
+  canonicalized to a single version per key first (so FINAL and non-FINAL return
+  identical rows). Both facts kept the projection off the golden DDL path
+  (`clickhouse/ddl.sql`) — it is added only inside `make cost-levers` against the
+  `bench_large` run, so gate-0 tiny golden stays byte-identical.
 
 ---
 

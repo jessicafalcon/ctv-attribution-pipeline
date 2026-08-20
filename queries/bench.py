@@ -73,14 +73,19 @@ def _round_row(row: tuple) -> tuple:
     return tuple(round(v, _ROUND) if isinstance(v, float) else v for v in row)
 
 
-def _measure(client: Client, sql: str) -> dict:
+def _measure(client: Client, sql: str, settings: dict | None = None) -> dict:
     """Run `sql` _RUNS times (query cache off), return median latency plus the
-    server's read_rows/read_bytes and the result rows (deterministic across runs)."""
+    server's read_rows/read_bytes and the result rows (deterministic across runs).
+
+    `settings` adds ClickHouse query settings (e.g. optimize_use_projections=0)
+    for the cost-lever before/after pairs (queries/measure_levers.py); the query
+    cache is always forced off and cannot be overridden here."""
     latencies = []
     result = None
+    q_settings = {**(settings or {}), "use_query_cache": 0}
     for _ in range(_RUNS):
         start = time.perf_counter()
-        result = client.query(sql, settings={"use_query_cache": 0})
+        result = client.query(sql, settings=q_settings)
         latencies.append((time.perf_counter() - start) * 1000.0)
     summary = result.summary
     return {

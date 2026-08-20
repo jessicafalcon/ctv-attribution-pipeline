@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot scale-curve eval report restate bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
+.PHONY: setup up down seed resolve run run-hot scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -72,6 +72,17 @@ scale-curve:
 # each. Run after `make run` populated the rollup (e.g. seed long_delay && run).
 bench:
 	uv run python -m queries.bench
+
+# Query cost levers (Phase 13): three before/after measurements on the report
+# query over the bench_large serving tables — a projection ordered by event_time
+# (WINS), a FINAL-avoidance / bloom-skip-index candidate (documented NEGATIVE
+# result — the schema doesn't reward one), and PREWHERE (WINS). Reuses bench.py's
+# canonicalization + summary reader; asserts direction (winners read fewer bytes;
+# the negatives are asserted NOT to help) and identical result rows; rewrites the
+# "Query cost levers" block in docs/RESULTS.md. Live-stack: run after
+# `make up && make seed PROFILE=bench_large && make run`.
+cost-levers:
+	uv run python -m queries.measure_levers
 
 # Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
 # textfiles under data/out/<profile>/metrics/. This is the provenance of the
