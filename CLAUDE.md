@@ -557,8 +557,9 @@ never auto-fixed, ignored, or committed around.
   the curve, ~2.9× the retired guess) → extrapolation re-derived to **~8.6 TB** at 25k/sec ×
   7d (labeled extrapolation — only the per-exposure cost moved asserted→measured; the rate
   and product stay order-of-magnitude sizing). `tracemalloc` peak (~0.75× structural) is a
-  labeled cross-check column, NEVER asserted (the determinism trap this phase exists to
-  avoid — same discipline as the Phase-7 FINAL read_rows fix). Households scale with count
+  console-only cross-check line, NEVER asserted and never committed to the doc (the
+  determinism trap this phase exists to avoid — same discipline as the Phase-7 FINAL
+  read_rows fix). Households scale with count
   (fixed per-household density) so the O(n²)-per-key drain stays cheap (100k in ~2.5s) and
   realistic; `measure_tier` raises if eviction ever fires (retained==input guard). DONE green:
   `make scale-curve && make test (213 offline) && make lint`; gate-0 tiny golden byte-identical;
