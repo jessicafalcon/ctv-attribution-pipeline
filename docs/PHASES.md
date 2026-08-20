@@ -238,12 +238,11 @@ data-skipping index, and PREWHERE each measured before/after on the report query
 `X-ClickHouse-Summary`, reusing `bench.py`'s `OPTIMIZE FINAL` canonicalization.
 Requires a multi-granule profile (levers are no-ops below one 8192-row granule).
 
-**Done when.** The two winning levers (projection ordered by `event_time`, PREWHERE)
-each direction-assert a `read_bytes` reduction; the third (data-skipping index /
-FINAL-avoidance) lands as a **documented negative result**, asserted to NOT reduce
-bytes — this schema does not reward a secondary skip index (leading key already prunes
-campaign, non-key columns scattered), and showing *when not to add one* is the phase's
-point. (Corrected from the original "each lever reduces read_bytes" framing — the
+**Done when.** Levers 1 (projection ordered by `event_time`) and 3 (PREWHERE) each
+direction-assert a `read_bytes` reduction; Lever 2 (FINAL-avoidance / skip index) lands
+as a **documented negative result**, asserted to NOT improve — this schema does not
+reward a secondary skip index (leading key already prunes campaign, non-key columns
+scattered), and showing *when not to add one* is the phase's point. (Corrected from the original "each lever reduces read_bytes" framing — the
 proposed levers named a `campaign_id` column `attributed_conversions` never had and a
 skip index on `exposures_landed`'s leading sort key; see the spec and **DECISIONS
 Phase 13** for the schema-reality correction, which are authoritative.) Every
