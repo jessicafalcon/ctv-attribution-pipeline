@@ -40,11 +40,13 @@ make down && make up && make seed PROFILE=bench_large && make run && \
 make cost-levers && make test && make lint
 ```
 
-- `make cost-levers` measures three before/after lever pairs on the report query,
-  reads `read_rows`/`read_bytes` from `X-ClickHouse-Summary`, canonicalizes both sides
-  to merged steady state first, asserts each lever reduces `read_bytes` (direction,
-  magnitude-free) and returns identical result rows (6 dp), and writes the explanation
-  to `docs/RESULTS.md`.
+- `make cost-levers` measures three levers on scoped report queries, reads
+  `read_rows`/`read_bytes` from `X-ClickHouse-Summary`, canonicalizes every read table
+  to merged steady state first, and writes the explanation to `docs/RESULTS.md`. Each
+  measurement returns identical result rows (6 dp). Direction asserts are magnitude-free:
+  the two winning levers (projection, PREWHERE) must read fewer `read_bytes` after; the
+  negative-result lever (FINAL-avoidance / skip index) is asserted to NOT improve — so a
+  silent future change that made it help fails the run and flags the writeup stale.
 - `make test` + `make lint` green; gate-0 tiny golden byte-identical.
 
 ## Done-when

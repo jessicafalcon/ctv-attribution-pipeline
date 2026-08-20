@@ -111,6 +111,62 @@ the difference between a full-history scan and a bounded rollup read — see
 `SCALING.md`. The numbers here are reported as measured; the profile was not tuned
 to inflate the optimized win.
 
+## Query cost levers
+
+Three ClickHouse-native cost levers, each a before/after on a scoped report query
+over the `bench_large` serving tables (a multi-granule profile — `attributed_conversions`
+~25k rows, `exposures_landed` 55k — so pruning has something to skip; below one 8192-row
+granule every lever is a no-op). The pre-aggregation rollup (`make bench`, above) is the
+*least* specific lever; these are the specific, explainable ones a data platform rewards.
+Measured by `make cost-levers`, reusing `bench.py`'s canonicalization and summary reader.
+The block below is regenerated verbatim by that command:
+
+<!-- COST_LEVERS_START -->
+
+_Measured by `make cost-levers` on `bench_large` (attributed_conversions 25,168 rows ≈ 3 granules; exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged steady state first; rows/bytes are ClickHouse's cache-independent `X-ClickHouse-Summary`. Re-run byte-stable._
+
+**Lever 1 — projection ordered by `event_time` (WINS).** A date-scoped reporting slice over `attributed_conversions`. The base table is sorted by `conversion_id`, so `event_time` is scattered across every granule and the range predicate prunes nothing; the projection keeps an alternate copy ordered by `event_time` that ClickHouse auto-picks for the range.
+
+| measure | no projection | projection | ratio |
+|---|---|---|---|
+| rows read | 25,168 | 16,384 | 1.54x |
+| bytes read | 427,856 | 278,528 | 1.54x |
+
+- _Why the bytes drop:_ the projection reads only the window's granules instead of the whole table. _Cost:_ a projection is a second physical copy of the table (more disk) maintained on every insert (slower writes). _Caveat:_ a projection can't serve a `FINAL` query — measured non-FINAL, valid because the canonicalized table is single-version, so FINAL and non-FINAL return identical rows here.
+
+**Lever 2 — FINAL-avoidance / skip index (DOCUMENTED NEGATIVE RESULT).** The schema does not reward a secondary lever here, and knowing when *not* to add one is the point. Two candidates measured, both lose:
+
+_2a — `SELECT ... FINAL` vs explicit `argMax(...) GROUP BY conversion_id`:_
+
+| measure | FINAL | argMax GROUP BY | ratio |
+|---|---|---|---|
+| rows read | 25,168 | 25,168 | 1.00x |
+| bytes read | 226,512 | 855,712 | 0.26x |
+
+`argMax` reads MORE, not less: on merged single-version data `FINAL` reads only the columns it needs, while the manual collapse must scan `conversion_id`, `revenue`, `attributed`, and `processed_at` for every row and build a hash table. `FINAL` is already optimal — the version-part cost RUNBOOK incident #1 describes exists only *before* the merge, which `_canonicalize` (correctly) removes.
+
+_2b — bloom skip index on a non-leading column (`program_genre`, and the far-more-selective `ip` — 157 of 55,000 rows):_
+
+| query | rows read, no index | rows read, bloom index | granules skipped |
+|---|---|---|---|
+| `program_genre = 'sports'` | 55,000 | 55,000 | 0 |
+| `ip = '100.64.0.273'` | 55,000 | 55,000 | 0 |
+
+The index skips **zero** granules for either predicate — even the 0.3%-selective `ip`. The blocker is physical clustering, not selectivity: `exposures_landed` is sorted `(campaign_id, event_time, exposure_id)`, so the leading key already prunes a campaign filter (a bloom on `campaign_id` would be redundant), and every non-key column is uniformly scattered across all granules — an `ip`'s rows sit in every granule, so no granule can be excluded. _The condition that would change it:_ physical clustering of the filtered column (a sort key that groups it, or naturally clustered data). _Cost of adding one anyway:_ write-time index maintenance and disk for a summary that prunes nothing.
+
+**Lever 3 — PREWHERE the window predicate (WINS).** A wide-column read behind the selective window filter.
+
+| measure | WHERE (no auto-move) | PREWHERE | ratio |
+|---|---|---|---|
+| rows read | 25,168 | 25,168 | 1.00x |
+| bytes read | 8,061,895 | 6,660,392 | 1.21x |
+
+- _Why the bytes drop:_ `WHERE` (with `optimize_move_to_prewhere = 0`) reads every selected column for all scanned rows, then filters; `PREWHERE` reads the filter columns first and fetches the wide columns (the `assists` array, ids) only for surviving rows. Same rows read (the window doesn't prune granules without the projection), fewer bytes. _Cost:_ none structural — but measured against ClickHouse's default (which auto-moves the predicate already) the delta is zero, so this only 'wins' relative to an explicitly disabled move.
+
+_Honesty boundary: these are `bench_large` numbers; the mechanisms are the claim, not the magnitudes. All three win on **scoped** access (a date range, one dimension) — the all-time per-campaign report is already near-optimal for this schema (campaign is the leading sort key), which is exactly the setting where a platform reaches for these levers. The profile was not tuned to inflate any win; lever 2 is reported as the negative result it measured._
+
+<!-- COST_LEVERS_END -->
+
 ## Observability — alert rules
 
 Four Alertmanager rules cover the deterministic conditions, each proven by
