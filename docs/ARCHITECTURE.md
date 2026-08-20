@@ -25,13 +25,6 @@ followed impression" as causation and over-credits about as often as it
 under-credits. That ambiguity is why advertisers distrust the numbers, and why
 getting the pipeline right matters commercially.
 
-**Why this beats a generic ad-metrics dashboard.** Aggregating impressions into a
-dashboard is table stakes. A stream-to-stream join across a device graph, with
-windowed and late-tolerant matching and a reconciliation path, is a harder
-data-engineering problem, and it is the machinery an attribution business runs on.
-Because the producer emits ground-truth causal links, attribution accuracy can be
-scored against truth we control, which almost no portfolio project can do.
-
 ## 2. Scope and honesty boundary
 
 This is a **simulation of the pipeline shape** attribution requires, not a
@@ -339,9 +332,9 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
   responses. Showing the agent tell them apart on the evidence proves real
   reasoning, not pattern-matching on "ROAS went up."
 
-## 5. How it maps to a data-platform posting
+## 5. Capabilities
 
-| Requirement | Where the project delivers it |
+| Capability | Where the project delivers it |
 |---|---|
 | Streaming at scale | Two-stream Redpanda ingestion, resolve stage, stateful Bytewax engine |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; Iceberg landing as next step |
@@ -381,7 +374,7 @@ CLAUDE.md        invariants, commands, conventions
 
 See `PHASES.md`. Each phase stands on its own, so the project degrades gracefully:
 even without the agent, a clean two-stream attribution spine with reconciliation,
-benchmark, and ground-truth accuracy is a strong submission.
+benchmark, and ground-truth accuracy stands on its own.
 
 ## 8. Gotchas
 
@@ -489,7 +482,7 @@ handled.*
 
 ---
 
-*The sentence to leave a reviewer with: this project builds the pipeline
+*The one-sentence summary: this project builds the pipeline
 attribution actually runs on, a windowed, late-tolerant, cross-device stream join
 with a reconciliation path serving an OLAP reporting layer with restatements,
 validates it against ground truth, and puts an AI agent where it earns its keep:

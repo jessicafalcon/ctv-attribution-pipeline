@@ -15,7 +15,7 @@ condition — it does not exist yet); an **eval harness** (`agent/eval/`) that r
 every scenario live, `EVAL_REPS` times, scores each finding against a pure,
 offline-tested rubric, and renders the two tables; the **fault → top hypothesis →
 correct? table with false-positive rate** and the **near-miss pair table** in
-`docs/RESULTS.md`. This is a checkpoint: stopping here yields a coherent submission
+`docs/RESULTS.md`. This is a checkpoint: stopping here yields a coherent project
 (the agent story, proven against ground truth).
 
 ## Design-review rulings settled with the developer (do not re-litigate)

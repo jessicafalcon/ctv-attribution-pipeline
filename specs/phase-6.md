@@ -229,7 +229,7 @@ generating** (Phase-5 medium precedent), never invented in this spec.
     `make eval` report precision at both the hot-only state and post-reconcile**
     (the test flow scores accuracy after the hot pass and again after
     reconciliation), so the recall-for-precision trade is **visible**. That trade
-    is the portfolio story — recovery buys recall at some precision cost — not a
+    is the reconciliation story — recovery buys recall at some precision cost — not a
     defect to hide. RESULTS/README states it honestly (BACKLOG honesty-boundary
     row).
 

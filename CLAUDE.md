@@ -2,7 +2,7 @@
 
 ## What this is
 
-A portfolio-grade streaming data pipeline: a seeded producer emits TV
+A self-contained streaming data pipeline: a seeded producer emits TV
 ad-exposure and conversion events into Redpanda, a resolve stage maps
 conversions to households through a device graph, a Bytewax engine does a
 windowed, late-tolerant, cross-device stream join, a periodic reconciliation
@@ -222,7 +222,7 @@ topics, watermarks and allowed lateness, stateful operators and eviction,
 ReplacingMergeTree and FINAL, async inserts, refreshable materialized
 views, sort keys), add a 2-4 sentence plain-language explanation of what
 it is and why it's used here, BEFORE the implementation. Every line merged
-must be explainable by the developer in a job interview. Prefer the simple,
+must be explainable by the developer in a design review. Prefer the simple,
 standard way over the clever way.
 
 ## Workflow rules
