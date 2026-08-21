@@ -153,6 +153,20 @@ def test_ambiguous_never_probes_state_even_with_one_exposure() -> None:
         attribute_household(exps, [conv], HOT_WINDOW)
 
 
+def test_mixed_topic_fanout_is_refused_with_a_reseed_message() -> None:
+    # Two profiles' events under shared conversion_ids: dedup collapses a fan-out
+    # pair and an ambiguous row arrives with fewer candidates than its count. The
+    # validator must name the real fix (re-seed a clean broker), not
+    # "re-run the engine" (review gate, functionality-tester F3).
+    with pytest.raises(ValueError, match="MIXED topic.*re-seed"):
+        attribute_household(
+            [],
+            [_res("c-1", "h-a", T, ambiguous=True, candidate_count=2)],
+            HOT_WINDOW,
+            {"c-1": ["h-a"]},
+        )
+
+
 def test_last_touch_leaf_is_ambiguity_blind() -> None:
     # Reconciliation scores each candidate household with the leaf directly.
     exps = [_exp("e-a", "h-a", T - H)]

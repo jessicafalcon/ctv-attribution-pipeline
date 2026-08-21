@@ -55,7 +55,7 @@ from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
 from lake.iceberg_catalog import bucket_of, configure
 from lake.land_attributed import land_attributed
-from lake.read_attributed import PrePhase17RowError, read_current  # noqa: F401
+from lake.read_attributed import read_current
 from lake.read_exposures import read_exposures_by_household
 from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
@@ -292,7 +292,10 @@ def run(client: Client | None = None) -> dict[str, int]:
     apply_ddl()
     client = client or connect()
 
-    # Imported here: the offline suites import this module without Dagster.
+    # Imported at call time, not module top: the offline suites import this
+    # module (and streaming.dataflow) and must not pay for, or depend on, the
+    # Dagster stack; orchestration.replay's lazy import is the other reason — a
+    # genuine cycle (orchestration.run imports replay).
     from orchestration.run import materialize_load
 
     reconciled_at = reconciled_at_for(_max_ingest(client))

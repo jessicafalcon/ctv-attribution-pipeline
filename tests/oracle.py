@@ -2,14 +2,19 @@
 ClickHouse sink through Phase 16. Since Phase 17 no product path writes the
 serving tables from the engine: rows go engine → Iceberg lake → Dagster load →
 ClickHouse (`lake/load_serving.py` is the one serving-table writer). This module
-keeps the old model→column VALUE mapping (the insert functions were deleted at the
-review gate — nothing may write the serving tables but the loader; datetimes go
-through the loader's `_utc`, so the oracle cannot reproduce the §8 naive-write
-shift) so the integration parity proof
+keeps the old model→column VALUE mapping so the integration parity proof
 (tests/integration/test_lakehouse.py) can assert lake-loaded serving rows ==
 exactly what the direct writer would have inserted. Test-only; never imported
 by product code (tests/test_column_contract.py pins its column order to the
-model, the DDL and the loader)."""
+model, the DDL and the loader).
+
+INDEPENDENCE: this mapping is the Phase-3→16 direct writer, independent of the
+loader BY HISTORY — it is deliberately not derived from `lake/load_serving.py`,
+or the parity test would be a tautology. It shares exactly one thing with the
+loader, `_utc` (so the oracle cannot reproduce the §8 naive-write shift); every
+other line is maintained by hand and pinned to the model by
+tests/test_column_contract.py / test_sink.py. The insert functions were deleted at
+the review gate — nothing may write the serving tables but the loader."""
 
 from lake.load_serving import _utc
 from producer.models import AttributedConversion, Exposure

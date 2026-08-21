@@ -61,6 +61,8 @@ def truncate_and_reload(days: set[str]) -> dict[str, int]:
     client = connect()
     for table in SERVING_TABLES:
         client.command(f"truncate table {table}")
-    from orchestration.run import materialize_load  # the one CLI owns the loader
+    # Lazy: orchestration.run imports this module (a real cycle, unlike the
+    # cost-avoidance lazy imports in the engine and the reconcile job).
+    from orchestration.run import materialize_load
 
     return materialize_load(days)

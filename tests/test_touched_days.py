@@ -73,6 +73,16 @@ def test_materialize_load_of_no_days_touches_nothing(monkeypatch) -> None:
     assert run.materialize_load(set()) == {"exposures": 0, "attributed": 0}
 
 
+def test_materialize_load_names_the_calendar_for_an_unknown_day(monkeypatch) -> None:
+    import orchestration.run as run
+
+    monkeypatch.setattr(run, "_materialize", lambda *a, **k: pytest.fail("ran"))
+    with pytest.raises(
+        ValueError, match=r"unknown day partition.*2020-01-01.*2026-08-01"
+    ):
+        run.materialize_load({"2020-01-01"})
+
+
 def test_land_returns_the_event_time_days_it_wrote() -> None:
     assert land([_exp("e-1", T), _exp("e-2", T + timedelta(days=2))]) == {
         "2026-08-10",

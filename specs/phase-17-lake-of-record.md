@@ -187,7 +187,7 @@ make test && make lint \
 ## Out of scope (deferred, recorded)
 
 - Object store + REST catalog; Spark/Trino execution — SCALING.md tier note.
-- Continuous follow / stream framework choice — still the open Phase 17+/18 question;
+- Continuous follow / stream framework choice — still open after Phase 18 ("Phase 18+");
   this phase keeps the batch drain.
 - Incremental rollups, part-count alerts, async inserts, query cost in dollars, schema
   compat BACKWARD — Phase 18 (cost & ops).

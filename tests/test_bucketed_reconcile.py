@@ -18,6 +18,7 @@ import pytest
 from lake.iceberg_catalog import bucket_of, ensure_exposures, metadata_path
 from lake.land_attributed import land_attributed
 from lake.land_exposures import land
+from lake.read_attributed import read_current
 from producer.config import load_profile
 from producer.generate import generate
 from producer.models import Exposure
@@ -96,6 +97,23 @@ def test_accumulated_lake_reconciles_identically_to_a_fresh_one(
             [r.model_dump_json() for d in candidate_days() for r in recover_day(d, at)]
         )
     assert outputs[0] and outputs[0] == outputs[1]
+
+
+def test_two_full_cycles_land_byte_identical_rows(tmp_path, monkeypatch) -> None:
+    # Two independent engine cycles into two fresh lakes → every row, INCLUDING
+    # processed_at (ingest_time on hot rows, the data-derived reconciled_at on
+    # corrections — never wall-clock), reads back byte-identical.
+    cycles = []
+    for name in ("a", "b"):
+        monkeypatch.setenv("LAKE_ROOT", str(tmp_path / name))
+        exps, hot = _hot_run("long_delay")
+        land(exps)
+        land_attributed(hot)
+        at = reconciled_at_for(max(e.ingest_time for e in exps))
+        land_attributed([r for d in candidate_days() for r in recover_day(d, at)])
+        cycles.append([r.model_dump_json() for r in read_current()])
+    assert cycles[0] == cycles[1]
+    assert any('"path":"reconciled"' in r for r in cycles[0])
 
 
 def test_recover_day_issues_one_bucket_homogeneous_read_per_bucket(monkeypatch) -> None:

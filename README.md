@@ -22,6 +22,7 @@ Two commands to a running demo:
 ```bash
 make up
 make seed PROFILE=tiny && make run
+# second and later runs: a clean state is two stores — `make down && make lake-reset CONFIRM=yes` first
 ```
 
 ---

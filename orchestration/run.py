@@ -26,6 +26,7 @@ from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
 from lake.iceberg_catalog import configure
 from orchestration.assets import (
+    DAY_PARTITIONS,
     attributed_iceberg,
     clickhouse_attributed_conversions,
     clickhouse_exposures_landed,
@@ -69,6 +70,13 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     totals = {"exposures": 0, "attributed": 0}
     if not days:
         return totals
+    known = DAY_PARTITIONS.get_partition_keys()
+    unknown = sorted(d for d in days if d not in known)
+    if unknown:
+        raise ValueError(
+            f"load: unknown day partition(s) {unknown} — the static day calendar "
+            f"covers {known[0]} … {known[-1]} (orchestration.assets.DAY_PARTITIONS)"
+        )
     instance = DagsterInstance.ephemeral()
     _materialize([exposures_iceberg, attributed_iceberg], instance)
     for day in sorted(days):

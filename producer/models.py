@@ -105,8 +105,10 @@ class AttributedConversion(ResolvedConversion):
             raise ValueError(
                 f"{self.conversion_id}: candidate_households must be the "
                 f"{self.candidate_count} sorted distinct candidates, got {hhs} "
-                "(an ambiguous row written before the Phase-17 migration? "
-                "re-run the engine)"
+                "(fewer candidates than candidate_count usually means a MIXED "
+                "topic — two profiles' events under shared conversion_ids, so "
+                "dedup collapsed a fan-out pair; re-seed a clean broker: "
+                "make down && make up && make seed PROFILE=<p>)"
             )
         if self.household_id not in hhs:
             raise ValueError(

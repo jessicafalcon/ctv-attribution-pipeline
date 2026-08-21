@@ -32,6 +32,7 @@ from confluent_kafka import Consumer
 from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from common.kafka import drain
+from lake.iceberg_catalog import configure
 from lake.land_attributed import land_attributed
 from lake.land_exposures import land
 from producer.models import (
@@ -214,9 +215,8 @@ def main(argv: list[str] | None = None) -> None:
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
-    # Imported here, not at module top: the offline oracle suites import this
-    # module and must not pay for (or depend on) the Dagster stack.
-    from lake.iceberg_catalog import configure
+    # Imported at call time, not module top: the offline oracle suites import
+    # this module and must not pay for (or depend on) the Dagster stack.
     from orchestration.run import materialize_load
 
     configure(args.profile)

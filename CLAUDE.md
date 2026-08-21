@@ -108,7 +108,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 
 - `make setup` — uv sync, pre-commit install
 - `make up` / `make down` — compose up with health checks / down with volumes
-  (`down` and `lake-reset` are the only sanctioned destructive paths)
+  (`down` plus the three paths in `lake/destructive.py` — `lake-reset`,
+  `replay-serving`, `lake-maintain` — are the sanctioned destructive paths; one
+  process each: validate the profile, prompt on a tty, act)
 - `make seed PROFILE=tiny|medium|<fault>` — run producer (deterministic per
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
@@ -118,7 +120,8 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
   reloads touched days → rollup + snapshots; a single pass, not a daemon); the full
   pipeline over the seeded stream. Every row in ClickHouse arrived through the lake
-  (Phase 17). One lake per PROFILE: `LAKE_ROOT = data/lake/$(PROFILE)`
+  (Phase 17). One lake per PROFILE, `data/lake/<profile>`, bound by each entry
+  point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override)
 - `make run-hot` — engine → lake → load only, no reconciliation; backs the hot-path
   oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
   reconciliation pass would over-credit long-tail organics and shift the pins. Hot
@@ -133,7 +136,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   `attributed_conversions` (destructive → prompts unless CONFIRM=yes), reload every
   day the lake holds (current rows: hot or reconciled), stamp `eval_meta`; `make
   eval` then reproduces the pins (Phase 17)
-- `make lake-reset PROFILE=<p> [CONFIRM=yes]` — the SECOND sanctioned destructive
+- `make lake-reset PROFILE=<p> [CONFIRM=yes]` — one of the three sanctioned destructive
   path beside `make down`: delete this profile's lake (`data/lake/<p>/`); prompts
   unless CONFIRM=yes. `make down` never touches `data/lake/`. The clean-stack
   `test-int-*` targets pass CONFIRM=yes for their own profile (a clean stack is a
@@ -214,10 +217,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   runs under it (SN2). No LLM call, no API tokens; isolated for the same reason
 - `make test-int-lakehouse` — clean long_delay-only stack + lake (make down &&
   lake-reset && up && seed long_delay && run-hot long_delay) → the Phase-17 live
-  lake-of-record proof: lake-loaded serving rows == the direct-write oracle
-  (`tests/oracle.py`) rows; an ACCUMULATED lake (3 more appends) reloads
-  byte-identically; reconcile output is byte-identical across the ClickHouse source,
-  the Iceberg source and the bucket-aligned lake pass; the Dagster-orchestrated pass
+  lake-of-record proof (the module writes only to a tmp lake it owns): lake-loaded
+  serving rows == the direct-write oracle (`tests/oracle.py`) rows; an ACCUMULATED
+  lake (3 more appends) reloads byte-identically; the bucket-aligned lake pass ==
+  the same candidates matched against exposures read from ClickHouse
+  (`exposures_landed FINAL`, a test-local read); the Dagster-orchestrated pass
   writes the same reconciled rows. No API tokens; isolated for the same
   shared-conversion_id reason
 - `make lint` — ruff via pre-commit

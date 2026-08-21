@@ -167,10 +167,12 @@ def test_destructive_recipes_are_one_python_process_each() -> None:
         assert yes_line.rstrip().endswith("--yes")
 
 
-def test_confirm_counts_only_from_the_command_line() -> None:
-    # `$(origin CONFIRM)`: an exported CONFIRM=yes must not become --yes.
+@pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
+def test_confirm_counts_only_from_the_command_line(target: str) -> None:
+    # `$(origin CONFIRM)`: an exported CONFIRM=yes must not become --yes, on any
+    # of the three destructive paths (round 3: replay-serving had its own check).
     out = subprocess.run(
-        ["make", "-n", "lake-reset", "PROFILE=tiny"],
+        ["make", "-n", target, "PROFILE=tiny"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

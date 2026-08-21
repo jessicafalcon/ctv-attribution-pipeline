@@ -1316,8 +1316,9 @@ Phase 17 sits directly below the fixes.
   `_utc` so it cannot reproduce the §8 naive write; the load stage has a metric
   (`lake_rows_loaded_total{table}`) like every stage; stale prose (RESULTS
   cost-lever provenance, `read_exposures` header, CI description in CLAUDE.md)
-  corrected. Left as-is on the developer's ruling: the seven "Phase-17+ decision"
-  labels for continuous follow, type hints outside touched code.
+  corrected. Left as-is on the developer's ruling: type hints outside touched
+  code. (The continuous-follow labels were later normalized to "Phase 18+"
+  everywhere — round 2, item 7.)
 - **`reconciled_at` stays anchored in ClickHouse (`_max_ingest` over the loaded
   serving tables), not in the lake — for now.** Reconciliation reads the record
   for candidates and exposures but stamps its version from the derived store;

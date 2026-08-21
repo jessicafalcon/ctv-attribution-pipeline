@@ -44,7 +44,8 @@ alter table attributed_conversions add column if not exists reason Nullable(Stri
 -- explodes this array — it no longer reads the device graph — and household_id
 -- on an ambiguous row stays the min-candidate placeholder (the RMT key, never a
 -- decision). An ambiguous row written before this column exists reads back as []
--- and is refused by the model validator until the next engine pass rewrites it.
+-- and is refused by the lake read (lake/read_attributed.py PrePhase17RowError,
+-- naming the fix: re-populate from the engine) before any model is built.
 alter table attributed_conversions
     add column if not exists candidate_households Array(String);
 
