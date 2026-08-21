@@ -1,11 +1,17 @@
-"""Dagster Definitions — the code location the webserver and CLI load.
+"""Dagster Definitions — the code location the webserver loads.
 
-`dagster dev -m orchestration.definitions` serves the asset graph UI; the headless
-make target uses orchestration.run instead (no server needed).
+`make dagster-ui` = `DAGSTER_PROFILE=<p> dagster dev -m orchestration.definitions`:
+the asset-graph viewer, with materialize working for the ONE profile bound here
+(there is no default lake root — an unbound code location renders the graph but
+every asset fails loud with `LakeRootUnset`). The headless CLI
+(`orchestration.run`) binds its own profile from `--profile` and never loads this.
 """
+
+import os
 
 from dagster import Definitions
 
+from lake.iceberg_catalog import configure
 from orchestration.assets import (
     attributed_iceberg,
     clickhouse_attributed_conversions,
@@ -15,6 +21,9 @@ from orchestration.assets import (
     reconciled_report,
 )
 from orchestration.maintenance import lake_maintenance
+
+if os.environ.get("DAGSTER_PROFILE"):
+    configure(os.environ["DAGSTER_PROFILE"])
 
 defs = Definitions(
     assets=[

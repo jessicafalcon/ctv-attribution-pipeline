@@ -1254,7 +1254,21 @@ Phase 17 sits directly below the fixes.
   a user who controls the environment; that user can run `rm -rf` directly.
   `MAKEFLAGS='CONFIRM=yes'` is therefore a stated residual, like `$(shell …)` in
   an env-origin PROFILE. `override LAKE_ROOT` left the Makefile with the last
-  shell guard: nothing reads it now.
+  shell guard: nothing reads it now. Also in round 3: the outside-pytest
+  `LAKE_ROOT` refusal moved from `configure()` into `_lake_root()` — the one
+  resolver — so no importer can bypass it; `make dagster-ui` binds ONE profile
+  via `DAGSTER_PROFILE` (the Dagster code location had no way to bind a lake
+  once the default root was gone — an unbound location renders the graph and
+  fails loud on materialize) and is worded as what a test proves: an
+  asset-graph viewer, materialize for the bound profile — "backfill controls"
+  went, untested dev tooling earns no claim; the three command chains the
+  clean-state guard did not reach (RESULTS benchmark provenance, `cost-levers`,
+  `metrics-capture`) now carry `lake-reset` + `PROFILE=` on every step and the
+  guard covers RESULTS + the Makefile comments plus a seed→run same-profile
+  check; `tests/conftest.py` skips the integration suite without `CTV_INT=1`
+  (exported only by the `make test-int*` targets) and unbinds the lake per test
+  — a bare `pytest` that seeds the live broker and re-stamps `eval_meta` is the
+  same hazard class as an unbounded `rm -rf` (closes BACKLOG 57).
 - **Review gate, round 2 (security + code + coherence + functionality, second
   pass).** (1) `--profile` OWNS the lake root: every entry point binds
   `data/lake/<profile>` through `lake.iceberg_catalog.configure`; there is no

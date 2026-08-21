@@ -120,15 +120,16 @@ replay-serving:
 lake-maintain:
 	uv run python -m lake.destructive maintain --profile "$(PROFILE)" $(_YES)
 
-# Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
-# controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.
-# DAGSTER_HOME under gitignored data/ so instance sqlite + run logs never touch the
-# repo (carries no secrets). Not needed for make reconcile-dagster (headless,
-# ephemeral instance). A containerized/published webserver is a deployment lever,
-# not built (DECISIONS Phase 12).
+# Phase 12/17 (optional, dev only): the Dagster asset-graph viewer; materialize
+# works for the ONE profile bound by DAGSTER_PROFILE (= PROFILE — there is no
+# default lake root, so an unbound code location only renders the graph). Bound
+# to loopback (-h 127.0.0.1) — never published, never 0.0.0.0. DAGSTER_HOME under
+# gitignored data/ so instance sqlite + run logs never touch the repo (carries no
+# secrets). Not needed for make reconcile-dagster (headless, ephemeral instance).
+# A containerized/published webserver is a deployment lever, not built.
 dagster-ui:
 	mkdir -p data/dagster_home
-	DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
+	DAGSTER_PROFILE=$(PROFILE) DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
 
 # Measured scaling curve (offline, no compose): drain the engine over tiered event
 # counts (1k/10k/100k exposures resident in the hot window), report the STRUCTURAL
@@ -154,7 +155,9 @@ bench:
 # canonicalization + summary reader; asserts direction (winners read fewer bytes;
 # the negatives are asserted NOT to help) and identical result rows; rewrites the
 # "Query cost levers" block in docs/RESULTS.md. Live-stack: run after
-# `make up && make seed PROFILE=bench_large && make run`.
+# `make lake-reset PROFILE=bench_large CONFIRM=yes && make up && make seed
+# PROFILE=bench_large && make run PROFILE=bench_large` (a clean lake + the same
+# PROFILE on every step — the engine binds its lake from --profile).
 cost-levers:
 	uv run python -m queries.measure_levers
 
@@ -167,6 +170,12 @@ cost-levers:
 # needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
 # FINAL, so these two are not producible service-free — like test-int-long-delay.
 # The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
+# Dump each stage's terminal Prometheus registry from a REAL run (the provenance
+# of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make
+# lake-reset PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p> && make
+# metrics-capture PROFILE=<p>` — over a populated lake the reconcile candidates
+# are the lake's CURRENT rows, so a second capture sees zero and the numbers
+# differ. The fixtures are recaptured in Phase 18 (alert rules).
 metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
 	uv run python -m streaming.dataflow --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/engine.prom
@@ -224,6 +233,10 @@ test:
 # long_delay lakehouse test each need a clean single-profile stack (profiles share
 # conversion_id space; DECISIONS Phase 5), so they are excluded here and run via
 # test-int-medium / test-int-long-delay / test-int-lakehouse.
+# CTV_INT=1: the integration suite runs ONLY under these targets (tests/conftest.py
+# skips it otherwise — a bare pytest used to seed the live broker and re-stamp
+# eval_meta over whatever stack was up; review gate, round 3).
+test-int: export CTV_INT = 1
 test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
@@ -239,6 +252,7 @@ test-int:
 # reconciling here would shift the pinned hot-only precision (92/130). The medium
 # proof is a hot-engine proof by design.
 test-int-medium: PROFILE = medium
+test-int-medium: export CTV_INT = 1
 test-int-medium:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=medium CONFIRM=yes
@@ -252,6 +266,7 @@ test-int-medium:
 # DECISIONS Phase 5). Recovers the long-delay misses, then asserts the recovery
 # delta + restatement against ClickHouse FINAL.
 test-int-long-delay: PROFILE = long_delay
+test-int-long-delay: export CTV_INT = 1
 test-int-long-delay:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
@@ -268,6 +283,7 @@ test-int-long-delay:
 # shared-IP fault observed: 69/80 correct, 11 wrong-household, Row 20) and the
 # populated context (report_snapshots exists once that pass has run).
 test-int-shared-ip: PROFILE = shared_ip_spike
+test-int-shared-ip: export CTV_INT = 1
 test-int-shared-ip:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
@@ -282,6 +298,7 @@ test-int-shared-ip:
 # runs under agent_ro (SN2). NO LLM call, so no API tokens: the loop is unit-tested
 # with a mocked client (tests/test_loop.py); this proves the DB boundary live.
 test-int-agent: PROFILE = shared_ip_spike
+test-int-agent: export CTV_INT = 1
 test-int-agent:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
@@ -304,6 +321,7 @@ test-int-agent:
 # `make lake-reset PROFILE=long_delay CONFIRM=yes && make run PROFILE=long_delay`
 # before a `make replay-serving PROFILE=long_delay`.
 test-int-lakehouse: PROFILE = long_delay
+test-int-lakehouse: export CTV_INT = 1
 test-int-lakehouse:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes

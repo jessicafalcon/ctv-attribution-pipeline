@@ -109,6 +109,22 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         assert re.search(pin, MAKEFILE.read_text(), re.M), (
             f"{target}: missing target-specific `PROFILE = {seed}`"
         )
+        marker = rf"^{target}: export CTV_INT = 1$"
+        assert re.search(marker, MAKEFILE.read_text(), re.M), (
+            f"{target}: must export CTV_INT=1 (integration tests skip without it)"
+        )
+
+
+def test_integration_tests_skip_without_the_marker() -> None:
+    out = subprocess.run(
+        ["uv", "run", "pytest", "tests/integration/test_engine.py", "-q", "-rs"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in _ENV.items() if k != "CTV_INT"},
+    ).stdout
+    assert "SKIPPED" in out and "passed" not in out, out
+    assert "CTV_INT" in out
 
 
 def _make_in_sandbox(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:

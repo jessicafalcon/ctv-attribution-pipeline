@@ -19,6 +19,21 @@ from orchestration.assets import (
 from orchestration.definitions import defs
 
 
+def test_definitions_bind_the_lake_from_dagster_profile(monkeypatch) -> None:
+    import importlib
+
+    import orchestration.definitions as defs_mod
+    from lake import iceberg_catalog as cat
+
+    monkeypatch.setenv("DAGSTER_PROFILE", "long_delay")
+    importlib.reload(defs_mod)
+    assert cat.profile() == "long_delay"
+    monkeypatch.delenv("DAGSTER_PROFILE")
+    monkeypatch.setattr(cat, "_profile", None)
+    importlib.reload(defs_mod)  # unbound: renders, but every asset would raise
+    assert cat.profile() is None
+
+
 def test_definitions_expose_the_six_assets() -> None:
     keys = {a.key.to_user_string() for a in defs.assets}
     assert keys == {

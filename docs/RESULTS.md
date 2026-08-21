@@ -53,7 +53,7 @@ real failure mode, wrong-household (shared-IP) attribution.
 
 The same four-metric advertiser report (ROAS, CPA, CVR, site-visit rate per
 campaign) run two ways over the `long_delay` profile after a full pipeline pass
-(`make down && make up && make seed PROFILE=long_delay && make run && make bench`):
+(`make down && make lake-reset PROFILE=long_delay CONFIRM=yes && make up && make seed PROFILE=long_delay && make run PROFILE=long_delay && make bench`):
 
 - **naive** — full `FINAL` scan-and-join of the raw serving tables
   (`queries/report.sql`: `attributed_conversions` ⋈ `exposures_landed`).

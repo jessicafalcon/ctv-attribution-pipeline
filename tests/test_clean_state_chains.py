@@ -25,7 +25,16 @@ CHAINS = {
     "docs/PHASES.md": 1,
     "CLAUDE.md": 2,
     "README.md": 2,
+    "docs/RESULTS.md": 1,  # the benchmark provenance chain (round 3)
 }
+
+# `make run` / `make metrics-capture` after a non-tiny seed must carry PROFILE=<p>:
+# every entry point binds its lake from --profile, so a bare `make run` after
+# `make seed PROFILE=long_delay` lands long_delay into data/lake/tiny.
+SEED_THEN_RUN = re.compile(
+    r"make seed PROFILE=(\w+)\s*&&\s*make (?:run|run-hot|metrics-capture)"
+    r"(?:\s+PROFILE=(\w+))?"
+)
 
 
 def test_every_documented_clean_state_chain_resets_the_lake() -> None:
@@ -40,8 +49,24 @@ def test_current_docs_never_go_down_then_up_without_a_lake_reset() -> None:
     # The negative form: `make down && make up` with nothing in between is the
     # stale pattern this guard exists to catch (living docs only; PHASES keeps
     # earlier phases' Done-when commands verbatim).
-    for rel in ("README.md", "CLAUDE.md", "specs/phase-17-lake-of-record.md"):
+    for rel in (
+        "README.md",
+        "CLAUDE.md",
+        "specs/phase-17-lake-of-record.md",
+        "docs/RESULTS.md",
+        "Makefile",
+    ):
         assert "make down && make up" not in (ROOT / rel).read_text(), rel
+
+
+def test_every_seed_then_run_chain_carries_the_same_profile() -> None:
+    for rel in ("README.md", "CLAUDE.md", "docs/RESULTS.md", "Makefile"):
+        text = (ROOT / rel).read_text()
+        for m in SEED_THEN_RUN.finditer(text):
+            seed, run_profile = m.group(1), m.group(2)
+            if seed == "tiny":
+                continue  # PROFILE defaults to tiny
+            assert run_profile == seed, f"{rel}: `{m.group(0)}` — add PROFILE={seed}"
 
 
 def test_ci_resets_the_lake_before_populating() -> None:

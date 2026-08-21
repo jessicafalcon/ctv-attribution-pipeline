@@ -142,7 +142,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   each day partition that accumulated >1 file per bucket (one file per (day,
   bucket)) and expire snapshots older than `LAKE_SNAPSHOT_MAX_AGE_DAYS` (7). Off
   the `make run` path; rows unchanged (Phase 17)
-- `make dagster-ui` — optional dev-only Dagster asset-graph UI + backfill controls,
+- `make dagster-ui PROFILE=<p>` — optional dev-only Dagster asset-graph viewer;
+  materialize works for the one profile bound via `DAGSTER_PROFILE` (no default
+  lake root, so an unbound code location only renders the graph),
   bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
@@ -165,8 +167,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   the schema doesn't reward one: leading key already prunes campaign, non-key columns
   scattered), and PREWHERE (WINS). Reuses `bench.py`'s canonicalization + summary
   reader; magnitude-free direction asserts + 6dp row-equality; rewrites the "Query cost
-  levers" block in `docs/RESULTS.md`. Run after `make up && make seed PROFILE=bench_large
-  && make run` (Phase 13)
+  levers" block in `docs/RESULTS.md`. Run after `make lake-reset PROFILE=bench_large
+  CONFIRM=yes && make up && make seed PROFILE=bench_large
+  && make run PROFILE=bench_large` (Phase 13)
 - `make scale-curve` — measured hot-window scaling curve (offline, no compose):
   drain the engine over tiered event counts (1k/10k/100k exposures resident), print
   the measured STRUCTURAL per-exposure window-state cost and the occupancy curve (deep
@@ -176,7 +179,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (Phase 14)
 - `make metrics-capture PROFILE=<p>` — dump each stage's terminal Prometheus
   registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
-  promtool alert fixtures; live-stack, run after `make up && make seed`)
+  promtool alert fixtures; a CLEAN-STACK capture: `make down && make lake-reset
+  PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p>` first — over a
+  populated lake the reconcile candidates are the lake's current rows and a second
+  capture differs; recaptured in Phase 18)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values;
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates

@@ -341,7 +341,7 @@ not speculative code.
   touched day, reconciliation is a bucket-aligned DuckDB-over-Iceberg join proven
   byte-identical to the single in-memory pass, and `make replay-serving` rebuilds
   the serving tables from the lake with no Kafka (headless `make
-  reconcile-dagster`; local `dagster dev` UI). Object store / REST catalog /
+  reconcile-dagster`; local `dagster dev` asset-graph viewer bound to one profile). Object store / REST catalog /
   Spark-Trino compute / a containerized Dagster webserver stay the SCALING port. See
   RESULTS.md and ARCHITECTURE §5.
 - **Multi-touch models, schema evolution beyond v1, co-view inside the engine** — out

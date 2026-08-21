@@ -75,11 +75,6 @@ def configure(profile: str) -> Path:
     global _profile
     if not _PROFILE_RE.match(profile):
         raise LakeRootUnset(f"profile {profile!r} is not [a-z0-9_]+")
-    if os.environ.get("LAKE_ROOT") and not os.environ.get("PYTEST_CURRENT_TEST"):
-        raise LakeRootUnset(
-            "LAKE_ROOT is test-only (tmp fixtures); entry points bind the lake with "
-            "--profile — unset LAKE_ROOT"
-        )
     _profile = profile
     return _lake_root()
 
@@ -91,6 +86,14 @@ def profile() -> str | None:
 def _lake_root() -> Path:
     env = os.environ.get("LAKE_ROOT")
     if env:
+        # Test-only: honoured under pytest, refused everywhere else — here, in
+        # the one resolver, so no importer (an entry point, the Dagster code
+        # location, a notebook) can bypass the rule (review gate, round 3).
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            raise LakeRootUnset(
+                "LAKE_ROOT is test-only (tmp fixtures); entry points bind the lake "
+                "with --profile — unset LAKE_ROOT"
+            )
         return Path(env)
     if _profile:
         return _LAKES / _profile
