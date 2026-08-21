@@ -180,6 +180,58 @@ value pin (stored money equals the source to the cent) and the offline SQL guard
 [`tests/test_rollup_decimal.py`](../tests/test_rollup_decimal.py) (no money
 `sum()` without `toDecimal64`). **No alert covers a recurrence**: a last-digit
 difference moves no metric past any threshold.
+## Incident 3 — the reconciled rows that moved with the laptop's clock
+
+**Symptom.** Every row the reconciliation pass wrote (`path='reconciled'`) carried
+`event_time` and `ingest_time` shifted by the **machine's UTC offset** (+6h on an
+MDT laptop; 0 in CI), for ten phases (6–16). Campaign totals, the accuracy pins,
+the restatement snapshots and every integration test are offset-invariant, so
+nothing moved that any guard could see; the exposure was the hour-grain
+`campaign_hourly` buckets of reconciled rows — and "same answer on a different
+machine", the determinism policy's own question, which had a silent "no".
+
+**Detection.** Found **by inspection, not by any test or alert**: the Phase-17
+lake → ClickHouse loader's first live parity check compared lake-loaded rows with
+the in-memory oracle and found `c-000000` stored as `18:02:51` for a `12:02:51Z`
+event. A direct probe (`_tz_probe`, a naive and an aware copy of the same instant
+inserted into a `DateTime64(3,'UTC')` column) showed the naive copy stored +6h.
+The same mechanism had been running under `reconcile.recover` since Phase 6 — its
+rows were read back naive-UTC and inserted naive — and the Phase-12 lakehouse
+parity proof passed because **both** sides were shifted equally.
+
+**Root cause.** `clickhouse-connect` is asymmetric at the boundary: it reads a
+`DateTime64(3,'UTC')` column back as a **naive** UTC wall-clock, but interprets a
+**naive** datetime on insert as the client's **local** wall-clock. See
+[`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-gotchas), gotcha "clickhouse-connect
+writes a NAIVE datetime as the client's LOCAL wall-clock", and
+[`DECISIONS.md`](../DECISIONS.md) (Phase 17, "clickhouse-connect writes a NAIVE
+datetime as local wall-clock"). Incident 2's read-side lesson had been applied
+only to the one value used for cross-process identity (`reported_at` /
+`reconciled_at`); the row timestamps took the same naive round-trip unnoticed.
+
+**Fix.** Since Phase 17 there is ONE writer of the serving tables,
+[`lake/load_serving.py`](../lake/load_serving.py): `_utc` makes every datetime
+tz-aware UTC before `client.insert` (a naive value is taken as UTC — what the
+readers return by contract — an aware value is converted). The engine and the
+reconcile job land to the lake (tz-aware `timestamptz`, ms-truncated) and never
+call the ClickHouse client with a row; the old direct sink survives only as the
+test oracle (`tests/oracle.py`). No committed artifact carries the shift: the
+fixtures are model-serialized producer/engine output, and no doc quotes a
+reconciled-row timestamp (checked in Phase 17).
+
+**Generalization.** Incident 2, made stronger: **every datetime is tz-aware UTC at
+every I/O boundary — a naive datetime never reaches a client call.** Reading
+tz-free (epoch millis, server-side arithmetic) protects identity; writing
+tz-aware protects content. Offset-invariant metrics are not evidence that row
+content is offset-invariant.
+
+**Would catch it next time.** [`tests/test_tz_invariance.py`](../tests/test_tz_invariance.py)
+runs the reconcile write path (candidates shaped exactly as the naive-UTC
+read-back → `reconcile` → land → lake read → loader values) once under
+`TZ=UTC` and once under a non-UTC zone (`time.tzset()`), and asserts the
+serialized rows are byte-identical and every datetime handed to the client is
+tz-aware UTC. **No alert covers a recurrence**: a uniform shift keeps every
+campaign-grain number and every alert rule exactly where it was.
 
 ---
 

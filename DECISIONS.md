@@ -1184,7 +1184,15 @@ Phase 17 sits directly below the fixes.
   `ingest_time` came from the same naive-UTC read through the same naive write —
   shifted by the developer machine's UTC offset on the reconciled path (campaign
   totals, pins and snapshots are offset-invariant, so nothing caught it; CI is
-  UTC). That sink is now test-only; a BACKLOG row records it pending the ruling.
+  UTC). That sink is now test-only. Developer ruling: not a note — RUNBOOK
+  incident 3 (same family as incident 2, the generalization made stronger: every
+  datetime is tz-aware UTC at every I/O boundary) plus an offline guard,
+  `tests/test_tz_invariance.py`, that runs the reconcile write path under
+  TZ=UTC and two non-UTC zones and asserts byte-identical rows — the "different
+  machine" answer the determinism question was missing for ten phases. Artifact
+  audit: no committed doc quotes a reconciled-row timestamp; fixtures are
+  model-serialized producer/engine output; the Phase-12 parity proof passed
+  because both sides were shifted equally.
 - **Reconciliation reads the lake, bucket-aligned, with the Dagster asset
   day-partitioned and the bucket loop inside it — not `day × bucket` (spec D2,
   deviation reported).** `recover_day(day)`: the day's current hot-unattributed

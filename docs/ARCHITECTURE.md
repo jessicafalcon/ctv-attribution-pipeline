@@ -594,6 +594,17 @@ handled.*
   identical rows). Both facts kept the projection off the golden DDL path
   (`clickhouse/ddl.sql`) — it is added only inside `make cost-levers` against the
   `bench_large` run, so gate-0 tiny golden stays byte-identical.
+- **clickhouse-connect writes a NAIVE datetime as the client's LOCAL wall-clock,
+  but reads a `DateTime64(3,'UTC')` column back as a naive UTC wall-clock.** The
+  mirror image of the gotcha above, on the write side, and asymmetric with it: a
+  value read back naive-UTC and re-inserted naive is shifted by the machine's UTC
+  offset (probe on an MDT laptop: naive `12:02:51` stored as `18:02:51`; the same
+  instant inserted tz-aware UTC stored exactly). Found by inspection in Phase 17
+  when the first lake-loaded rows sat +6h off the in-memory oracle — and it had
+  been shifting the reconciled rows' `event_time`/`ingest_time` since Phase 6 on
+  every non-UTC machine (RUNBOOK incident 3). Rule: every datetime is tz-aware UTC
+  at every I/O boundary; a naive datetime never reaches a client call
+  (`lake/load_serving.py` `_utc`; guard `tests/test_tz_invariance.py`).
 - **Phase-17 first-hour stack check (spec D11) — all four supported by the pinned
   versions, no workaround needed.** pyiceberg 0.11.1 + pyiceberg-core, duckdb 1.5.5,
   verified on a scratch catalog before any lake-of-record code was written:
