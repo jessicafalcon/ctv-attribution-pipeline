@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pyarrow as pa
 
-from lake.iceberg_catalog import ensure_table
+from lake.iceberg_catalog import ensure_exposures
 from producer.models import Exposure
 
 # Arrow schema mirrors EXPOSURE_SCHEMA: timestamptz(UTC) at microsecond precision
@@ -76,6 +76,6 @@ def land(exposures: list[Exposure]) -> int:
     (DECISIONS Phase 12)."""
     if not exposures:
         return 0
-    table = ensure_table()
+    table = ensure_exposures()
     table.append(_to_arrow(exposures))
     return len(exposures)

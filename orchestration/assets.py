@@ -21,7 +21,7 @@ from dagster import (
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from lake.iceberg_catalog import ensure_table
+from lake.iceberg_catalog import ensure_exposures
 from reconcile.reconcile import (
     LONG_WINDOW,
     _max_ingest,
@@ -58,7 +58,7 @@ def exposures_iceberg() -> MaterializeResult:
     make lake-land). This asset observes it — ensures it exists and reports its
     row count — it does not re-land; landing rides the engine so the lake and
     ClickHouse share one input set (DECISIONS Phase 12)."""
-    table = ensure_table()
+    table = ensure_exposures()
     rows = table.scan().to_arrow().num_rows
     return MaterializeResult(metadata={"rows": MetadataValue.int(rows)})
 

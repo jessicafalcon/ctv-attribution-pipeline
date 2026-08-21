@@ -28,20 +28,13 @@ from datetime import datetime
 
 import duckdb
 
-from lake.iceberg_catalog import ensure_table
+from lake.iceberg_catalog import ensure_exposures, metadata_path
 from producer.models import Exposure
 
 _SELECT_COLS = (
     "exposure_id, event_time, ingest_time, campaign_id, household_id, "
     "ip, app_id, program_genre, spend"
 )
-
-
-def _metadata_path() -> str:
-    """Local filesystem path to the table's current metadata JSON (strip the
-    file:// scheme pyiceberg stores)."""
-    loc = ensure_table().metadata_location
-    return loc[len("file://") :] if loc.startswith("file://") else loc
 
 
 def read_exposures_by_household(
@@ -74,7 +67,7 @@ def read_exposures_by_household(
     rows = con.execute(
         f"select distinct {_SELECT_COLS} "
         f"from iceberg_scan(?) where {where} order by exposure_id",
-        [_metadata_path(), *params],
+        [metadata_path(ensure_exposures()), *params],
     ).fetchall()
     by_household: dict[str, list[Exposure]] = defaultdict(list)
     for r in rows:

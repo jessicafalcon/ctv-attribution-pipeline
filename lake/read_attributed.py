@@ -1,0 +1,69 @@
+"""Read attributed rows back from the lake via DuckDB (Phase 17).
+
+The lake is an append-only log (spec D4): a conversion_id may have a hot row and
+a later reconciled row, and exact re-lands of the same row. `read_current` gives
+the CURRENT row per conversion_id — the highest `processed_at`, i.e. what the
+ClickHouse ReplacingMergeTree(processed_at) FINAL would keep — computed in SQL
+(`distinct` then `row_number() over (partition by conversion_id order by
+processed_at desc) = 1`, the argMax form). Never assume one row per key.
+
+Same naive-UTC-ms round-trip as lake.read_exposures: `set timezone='UTC'`, then
+drop tzinfo, so a row read back compares equal to the clickhouse-connect
+representation and to the engine's in-memory row.
+"""
+
+from datetime import datetime
+
+import duckdb
+
+from lake.iceberg_catalog import ensure_attributed, metadata_path
+from producer.models import AttributedConversion
+
+_COLS = list(AttributedConversion.model_fields)
+_SELECT = ", ".join(_COLS)
+
+
+def _connect() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute("load iceberg")  # LOAD only — installed once at setup (Phase 12)
+    con.execute("set timezone='UTC'")
+    return con
+
+
+def _row(r: tuple) -> AttributedConversion:
+    d = dict(zip(_COLS, r, strict=True))
+    for k in ("event_time", "ingest_time", "processed_at"):
+        d[k] = d[k].replace(tzinfo=None)
+    d["assists"] = list(d["assists"])
+    d["candidate_households"] = list(d["candidate_households"])
+    return AttributedConversion(**d)
+
+
+def read_current(
+    days: list[str] | None = None, min_event_time: datetime | None = None
+) -> list[AttributedConversion]:
+    """Current row per conversion_id, ordered by conversion_id. `days`
+    (YYYY-MM-DD event_time days) and/or `min_event_time` prune day partitions;
+    both are output-invariant filters on the conversion's own event_time."""
+    predicates: list[str] = []
+    params: list[object] = [metadata_path(ensure_attributed())]
+    if days is not None:
+        predicates.append("strftime(event_time, '%Y-%m-%d') = any(?)")
+        params.append(sorted(days))
+    if min_event_time is not None:
+        predicates.append("event_time >= ?")
+        params.append(min_event_time)
+    where = ("where " + " and ".join(predicates)) if predicates else ""
+    rows = (
+        _connect()
+        .execute(
+            f"select {_SELECT} from ("
+            f"select distinct {_SELECT} from iceberg_scan(?) {where}) "
+            "qualify row_number() over ("
+            "partition by conversion_id order by processed_at desc) = 1 "
+            "order by conversion_id",
+            params,
+        )
+        .fetchall()
+    )
+    return [_row(r) for r in rows]
