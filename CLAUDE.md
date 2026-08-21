@@ -670,10 +670,22 @@ never auto-fixed, ignored, or committed around.
   symbols untouched, re-deferred). Spec-vs-reality surfaced not repaired: hook wording
   (dataflow list, not insert_exposures site), `pyiceberg[sql]`→no extra + pyiceberg-core,
   Dagster UI compose-vs-dev contradiction, StaticPartitions determinism — all in DECISIONS
-  + spec corrected. Review gate: PENDING (developer runs code-reviewer + security-reviewer
-  [re-scoped: 5-package supply surface + loopback UI + DAGSTER_HOME hygiene] +
-  functionality-tester + coherence-auditor). Merged: PENDING. Spec:
-  `specs/phase-12-lakehouse-landing.md`.
+  + spec corrected. Review gate: PASSED. code-reviewer 2 (② load-only extension fix,
+  ④ type hint) + coherence-auditor 1 BLOCKER (PHASES.md:230 bare make eval → PROFILE=
+  long_delay) + 1 drift (stale _read_exposures_for docstring) + notes (SCALING port
+  pointer, determinism carve-out sentence) → all fixed in-branch; security-reviewer
+  PASS then re-PASS 0-findings after the CI-edit re-trigger; functionality-tester WORKS
+  (4/4). 3 findings BACKLOG'd (N-append/count-grain tests; lake accumulation/compaction;
+  test-int-lakehouse-in-CI weighed holistically w/ row 33). Merged: PENDING (developer;
+  not pushed). Spec: `specs/phase-12-lakehouse-landing.md`.
+- Phase 12 follow-on (NOT in the lakehouse PR): `fix/eval-demo-profile` — the pre-existing
+  bare-`make eval` bug in CLAUDE.md's eval prose (":108" "for the last profile") + the
+  long_delay canonical demo (":176"), shipped since Phase 6 (eval defaults to tiny; no
+  last-profile mechanism). Own tiny PR off main after Phase 12 merges: :176 → `make eval
+  PROFILE=long_delay`, prose → "for the given PROFILE (default tiny)". The durable
+  fail-loud guard (error on truth-profile/DB mismatch) is a BACKLOG row (next accuracy/
+  touch). Carved out of Phase 12 per the "phase reveals an earlier-phase change → own fix
+  PR" rule.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
