@@ -32,15 +32,19 @@ deterministic ClickHouse copy.
 
 ```
 make down && make up && make seed PROFILE=long_delay && make lake-land && \
-make reconcile-dagster PROFILE=long_delay && make eval && make test && make lint
+make reconcile-dagster PROFILE=long_delay && make eval PROFILE=long_delay && make test && make lint
 ```
 
 - `make lake-land` appends the seeded exposures to the Iceberg `raw.exposures` table
   (Gate 1: table exists, row count == exposures produced, day-partitioned).
 - `make reconcile-dagster` materializes the day-partitioned reconciliation asset,
   reading exposures from Iceberg via DuckDB (Gate 2).
-- `make eval` reproduces long_delay recall **0.973**, unchanged from the
-  ClickHouse-sourced reconcile — the swap of exposure source is output-invariant.
+- `make eval PROFILE=long_delay` reproduces long_delay recall **0.973**, unchanged
+  from the ClickHouse-sourced reconcile — the swap of exposure source is
+  output-invariant. (`PROFILE=long_delay` is REQUIRED: `make eval` defaults to tiny —
+  bare `make eval` here scores tiny's truth against a long_delay DB, a meaningless
+  ~0.17. DECISIONS Phase 12; the CLAUDE.md prose/demo have the same latent bug, fixed
+  in a separate PR.)
 - `make test` + `make lint` green; gate-0 tiny golden byte-identical.
 
 ## Done-when

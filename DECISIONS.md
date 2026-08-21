@@ -1218,3 +1218,13 @@ One entry per non-obvious choice. Newest last.
   into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
   `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
   in the same order, so `make run` is byte-identical.
+- **DONE-command `make eval` needs an explicit `PROFILE=long_delay` (5th spec-vs-reality
+  fix).** `make eval` is `accuracy.run --profile "$(PROFILE)"` with `PROFILE ?= tiny` and
+  no "last profile" mechanism, so bare `make eval` scores tiny's truth file against the
+  long_delay DB → a meaningless ~0.17, not the Gate's 0.973. The spec's DONE command +
+  Gate note are corrected to `make eval PROFILE=long_delay` (proven: recall 0.9733). The
+  same latent bug lives in CLAUDE.md's `make eval` prose (:108 "for the last profile") and
+  its long_delay canonical demo (:176) — pre-existing since Phase 6, carved into a
+  separate `fix/eval-demo-profile` PR (not folded into this lakehouse phase, per the
+  "phase reveals an earlier-phase change → its own fix PR" rule); the durable fail-loud
+  guard is a BACKLOG row (next `accuracy/` touch).
