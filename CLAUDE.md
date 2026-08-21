@@ -58,8 +58,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   graph generator, seeded stream generator, `profiles/` (tiny, medium, fault
   scenarios). Truth links written to `data/truth/`, never read by the pipeline.
 - `resolve/` — conversion → household resolution, called IN-PROCESS by the
-  engine (`resolve_one`, the Phase-2 signature; `stage.py` is now only the
-  compacted-topic graph loader). Offline replay = `make resolve`. No topic.
+  engine (`resolve_one`, the Phase-2 signature; `graph_loader.py` = the
+  compacted-topic graph loader, was `stage.py`). Offline replay = `make resolve`.
+  No topic.
 - `streaming/` — the engine: `attribute.py` pure core (hot rule, watermark,
   eviction, dedup) + `dataflow.py` batch-drain driver. No Bytewax (Phase 16).
 - `reconcile/` — periodic long-window matcher (state-misses AND the deferred

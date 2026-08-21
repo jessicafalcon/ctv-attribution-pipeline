@@ -6,12 +6,12 @@ graph without every historical edit. The engine drains it once at startup into
 a `GraphIndex` and resolves each conversion in-process with
 `resolve.resolver.resolve_one` — the Phase-2 function signature is the seam.
 
-Until Phase 16 this module was a separate consumer that republished resolved
-records to a `conversions_resolved` topic. That topic, its schema-registry
-subject and the producer path are gone: a second consumer group + topic + subject
-bought nothing for an in-memory dict lookup. Resolve becomes a separate service
-again when the device graph is owned by another team or a vendor; the interface
-is the function, not the topic (DECISIONS Phase 2/16).
+Until Phase 16 this module (then `resolve/stage.py`) was a separate consumer
+that republished resolved records to a `conversions_resolved` topic. That topic,
+its schema-registry subject and the producer path are gone: a second consumer
+group + topic + subject bought nothing for an in-memory dict lookup. Resolve
+becomes a separate service again when the device graph is owned by another team
+or a vendor; the interface is the function, not the topic (DECISIONS Phase 2/16).
 """
 
 from confluent_kafka import Consumer

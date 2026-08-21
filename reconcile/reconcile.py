@@ -48,9 +48,9 @@ from producer.models import (
 )
 from reconcile import metrics, rollup
 from reconcile.sources import ClickHouseExposureSource, ExposureSource
+from resolve.graph_loader import load_graph_index
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_one
-from resolve.stage import load_graph_index
 from streaming.attribute import Candidate, last_touch
 from streaming.sink import insert_attributed
 

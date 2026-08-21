@@ -41,8 +41,8 @@ from producer.models import (
     ResolvedConversion,
 )
 from resolve import metrics as resolve_metrics
+from resolve.graph_loader import load_graph_index
 from resolve.resolver import resolve_one
-from resolve.stage import load_graph_index
 from streaming import metrics
 from streaming.attribute import (
     ALLOWED_LATENESS,

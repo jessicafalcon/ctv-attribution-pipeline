@@ -32,7 +32,7 @@ from reconcile.reconcile import (
     recover,
 )
 from reconcile.sources import IcebergExposureSource
-from resolve.stage import load_graph_index
+from resolve.graph_loader import load_graph_index
 
 
 def _day_keys(start: date, end: date) -> list[str]:

@@ -1088,7 +1088,9 @@ One entry per non-obvious choice. Newest last.
   table.** `expand_candidates` re-resolves an ambiguous placeholder with the
   engine's own `resolve_one` against `load_graph_index(broker)` — the same loader,
   the same graph, so `make reconcile-dagster` (Dagster asset passes the same
-  loader) stays byte-identical to `make run`'s pass. Cost: the reconcile job now
+  loader) stays byte-identical to `make run`'s pass. The loader lives in
+  `resolve/graph_loader.py` (renamed from `stage.py` at the coherence audit — a
+  file called "stage" for something that is no longer a stage). Cost: the reconcile job now
   needs the broker, which `make run` and the Dagster runner already have up.
   Rejected: a `device_graph` ClickHouse table landed by the engine — a new DDL
   table, a new insert, a new read, and a second copy of the graph to keep equal, in

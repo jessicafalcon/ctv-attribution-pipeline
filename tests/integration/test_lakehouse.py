@@ -26,7 +26,7 @@ from reconcile.reconcile import (
     reconciled_at_for,
 )
 from reconcile.sources import ClickHouseExposureSource, IcebergExposureSource
-from resolve.stage import load_graph_index
+from resolve.graph_loader import load_graph_index
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 
