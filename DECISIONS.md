@@ -2,7 +2,7 @@
 
 One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
 "Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
-Phase 16 sits directly below the fixes.
+Phase 17 sits directly below the fixes.
 
 ## Phase 0
 
@@ -1092,6 +1092,50 @@ Phase 16 sits directly below the fixes.
   the extra-refresh tests (leaves `bench.py` non-deterministic for every other caller);
   weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
   test to make it pass).
+
+## Phase 17
+
+- **`candidate_households` on the attributed row (spec D1) — the engine keeps what
+  it knew.** At deferral time the engine holds the shared IP's full owner set (the
+  fan-out `resolve_one` emitted, captured by `candidate_households_by_conversion`
+  BEFORE `one_row_per_conversion` collapses it to the placeholder). Phase 16 threw
+  that away and had reconciliation re-derive it from the device graph over the
+  broker. Now it is persisted as `candidate_households Array(String)` (ClickHouse,
+  additive `add column if not exists` — the `reason` pattern) and the deferred row
+  is self-describing: `expand_candidates` explodes the array, `load_graph_index`
+  is gone from `reconcile/` and `orchestration/`, and a reconcile pass needs no
+  broker (closes the BACKLOG broker-dependency row; its suggested fix — land
+  `device_graph` as a lake table — is superseded). The model validator pins the
+  contract: `candidate_count == 1` ⇒ empty; `> 1` ⇒ exactly `candidate_count`
+  sorted distinct households containing `household_id`. A reconciled credit keeps
+  the array (provenance: the pick was made among these). Rejected: a nullable
+  `household_id` for ambiguous rows (a nullable RMT key column is worse than the
+  documented min-candidate placeholder — the array is the truth, the placeholder
+  is the key); landing `device_graph` in the lake (a second copy of the graph to
+  keep equal, for a set the engine already had in hand).
+- **A pre-Phase-17 ambiguous row fails loud with the fix named, not with a bare
+  pydantic error.** On a volume created before the column, the migration reads an
+  old ambiguous row back as `[]`; `_read_candidates` raises `PrePhase17RowError`
+  ("this DB predates Phase 17; re-populate it (make run / make run-hot)") before
+  the model validator would — the same loud-failure standard as the `eval_meta`
+  guard. Rejected: expanding such a row to nothing and leaving it as its hot row
+  (a silent non-recovery that moves numbers).
+- **Tiny golden re-frozen — the second sanctioned exception, and now a rule.**
+  `fixtures/tiny/expected/attributed.jsonl`: every line gains the
+  `candidate_households` key (`[]` on 50 rows; the set on the 5 deferred shared-IP
+  rows — c-000014/25/41/42 `[h-0004, h-0005]`, c-000016 `[h-0000, h-0001,
+  h-0008]`); ZERO decision changes, every existing cell byte-identical, verified
+  by a keyed diff before the developer signed off (2026-08-21). The fixture commit
+  stands alone. **The rule, so the next phase does not re-derive it:**
+  `fixtures/tiny/expected/` is re-frozen ONLY for additive engine-output columns
+  where every existing cell is byte-identical; the approval artifact is the keyed
+  diff showing zero decision changes. Rejected: comparing the golden on the
+  fixture's keys only (option b) — that turns the gate into a subset comparison
+  that can never again catch a column silently disappearing, which is exactly
+  what the file exists to catch.
+- **First-hour stack check (spec D11) passed on the pinned versions — recorded
+  under ARCHITECTURE §8**, in the same commit as the code that builds on it, so
+  "verified before built" is true in the history.
 
 ## Phase 16
 

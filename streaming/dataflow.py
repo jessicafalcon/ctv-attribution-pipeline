@@ -48,6 +48,7 @@ from streaming.attribute import (
     ALLOWED_LATENESS,
     HOT_WINDOW,
     attribute_household_streaming,
+    candidate_households_by_conversion,
     dedup_streams,
     one_row_per_conversion,
 )
@@ -98,13 +99,16 @@ def run_attribution(
     )
     for e in exposures:
         events[e.household_id].append(("exp", e))
+    # The fan-out's candidate set, captured BEFORE the collapse to one placeholder
+    # row — persisted on the deferred row as candidate_households (Phase 17).
+    candidates = candidate_households_by_conversion(resolved)
     for r in one_row_per_conversion(resolved):
         events[r.household_id].append(("res", r))
 
     rows: list[AttributedConversion] = []
     for household_events in events.values():
         result = attribute_household_streaming(
-            household_events, HOT_WINDOW, allowed_lateness
+            household_events, HOT_WINDOW, allowed_lateness, candidates
         )
         metrics.observe_state(result.state)
         for cand in result.candidates:

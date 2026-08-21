@@ -31,6 +31,7 @@ _ATTRIBUTED_COLS = [
     "path",
     "processed_at",
     "reason",
+    "candidate_households",
 ]
 _EXPOSURE_COLS = [
     "exposure_id",
@@ -66,6 +67,7 @@ def insert_attributed(client: Client, rows: Sequence[AttributedConversion]) -> N
             r.path,
             r.processed_at,
             r.reason,
+            r.candidate_households,
         ]
         for r in rows
     ]

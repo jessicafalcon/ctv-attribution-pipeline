@@ -26,13 +26,12 @@ from reconcile.reconcile import (
     reconciled_at_for,
 )
 from reconcile.sources import ClickHouseExposureSource, IcebergExposureSource
-from resolve.graph_loader import load_graph_index
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 
 
 def _recovered_via(source, candidates, reconciled_at):
-    expanded = expand_candidates(candidates, load_graph_index(BROKER))
+    expanded = expand_candidates(candidates)
     exposures = source.read_for(expanded, LONG_WINDOW)
     return reconcile(expanded, exposures, LONG_WINDOW, reconciled_at)
 

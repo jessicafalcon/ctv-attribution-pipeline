@@ -20,8 +20,9 @@ Two kinds of candidate (Phase 16):
 - **state-miss** (`candidate_count == 1`): the household is certain; the causing
   exposure aged out of the 7d hot window. Re-run the leaf over 90d.
 - **ambiguous_ip** (`candidate_count > 1`): a shared-IP conversion the hot path
-  refused to guess. `expand_candidates` re-enumerates the candidate households
-  from the device graph (the same `resolve_one` the engine uses), the leaf scores
+  refused to guess. `expand_candidates` explodes the row's persisted
+  `candidate_households` (the full set the engine saw at deferral time — Phase
+  17; no device graph, no broker), the leaf scores
   each household, and `pick_household` applies the most-recent-exposure rule
   (ties: `exposure_id`, then `household_id`) — the ONE implementation of that
   tiebreak, moved here from the deleted hot-path reduce. Reconciliation owns it
@@ -32,7 +33,6 @@ data-derived `reconciled_at` (no wall clock) — so a replay/re-run converges.
 """
 
 import argparse
-import os
 from datetime import UTC, datetime, timedelta
 
 from clickhouse_connect.driver.client import Client
@@ -40,18 +40,14 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from producer.models import (
-    AttributedConversion,
-    Conversion,
-    Exposure,
-    ResolvedConversion,
-)
+from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
 from reconcile.sources import ClickHouseExposureSource, ExposureSource
-from resolve.graph_loader import load_graph_index
-from resolve.index import GraphIndex
-from resolve.resolver import resolve_one
-from streaming.attribute import Candidate, last_touch
+from streaming.attribute import (
+    Candidate,
+    candidate_households_by_conversion,
+    last_touch,
+)
 from streaming.sink import insert_attributed
 
 # The long window: exposures up to 90 days before a conversion are eligible
@@ -69,8 +65,16 @@ RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
 
 _CANDIDATE_COLS = (
     "conversion_id, event_time, ingest_time, device_id, ip, conversion_type, "
-    "revenue, order_id, household_id, resolution, ambiguous, candidate_count, reason"
+    "revenue, order_id, household_id, resolution, ambiguous, candidate_count, "
+    "exposure_id, assists, attributed, path, processed_at, reason, "
+    "candidate_households"
 )
+
+
+class PrePhase17RowError(ValueError):
+    """An ambiguous hot row with no persisted candidate set (written before the
+    Phase-17 column). Reconciliation cannot explode it; the DB must be
+    re-populated from the engine."""
 
 
 def reconciled_at_for(base: datetime) -> datetime:
@@ -98,22 +102,26 @@ def pick_household(candidates: list[Candidate]) -> Candidate | None:
 
 
 def expand_candidates(
-    candidates: list[ResolvedConversion], graph: GraphIndex
+    candidates: list[AttributedConversion],
 ) -> list[ResolvedConversion]:
     """One row per candidate HOUSEHOLD. A state-miss row passes through; an
-    ambiguous_ip placeholder is re-resolved against the device graph with the
-    engine's own `resolve_one`, so its candidate households are exactly the IP's
-    current owners (sorted, deterministic). A placeholder whose IP no longer
-    resolves expands to nothing and is left as its hot row."""
+    ambiguous_ip placeholder is exploded into one row per entry of its persisted
+    `candidate_households` — the exact set the engine saw at deferral time
+    (sorted, deterministic; the model validator guarantees it is non-empty and
+    contains the placeholder). No device graph, no broker (Phase 17). Batch
+    fan-out here is the point: the architecture's claim is no fan-out on the HOT
+    path; with the full 90-day picture it is cheap and correct."""
+    base_fields = set(ResolvedConversion.model_fields)
     out: list[ResolvedConversion] = []
     for conv in candidates:
+        base = conv.model_dump(include=base_fields)
         if conv.candidate_count > 1:
-            base = Conversion.model_validate(
-                conv.model_dump(include=set(Conversion.model_fields))
+            out.extend(
+                ResolvedConversion(**{**base, "household_id": h})
+                for h in conv.candidate_households
             )
-            out.extend(resolve_one(base, graph))
         else:
-            out.append(conv)
+            out.append(ResolvedConversion(**base))
     return out
 
 
@@ -134,15 +142,22 @@ def reconcile(
     groups: dict[str, list[ResolvedConversion]] = {}
     for conv in candidates:
         groups.setdefault(conv.conversion_id, []).append(conv)
+    # The exploded rows ARE the candidate set; the recovered row keeps it.
+    by_cid = candidate_households_by_conversion(candidates)
     recovered: list[AttributedConversion] = []
     for cid, rows in groups.items():
         if len(rows) == 1 and rows[0].candidate_count > 1:
             raise ValueError(
                 f"{cid}: ambiguous_ip candidate not expanded — call "
-                "expand_candidates(candidates, graph) first"
+                "expand_candidates(candidates) first"
             )
         scored = [
-            last_touch(exposures_by_household.get(r.household_id, []), r, window)
+            last_touch(
+                exposures_by_household.get(r.household_id, []),
+                r,
+                window,
+                by_cid.get(cid, []),
+            )
             for r in rows
         ]
         winner = pick_household(scored)
@@ -155,27 +170,36 @@ def reconcile(
     return recovered
 
 
-def _read_candidates(client: Client) -> list[ResolvedConversion]:
-    """Hot-unattributed rows only (attributed=0 AND path='hot') from FINAL,
-    reconstructed as ResolvedConversion — both `reason` values, state_miss and
-    ambiguous_ip. The `reason` column is the explicit contract; a NON-NULL value is
-    asserted to agree with `candidate_count` (a mismatch would mean a writer
-    bypassed the engine's `_attributed`). NULL is accepted: rows written before the
-    Phase-16 additive migration carry NULL until the next engine pass rewrites
-    them, and the candidate kind is still derivable from `candidate_count`. Never
-    reads the accuracy side file."""
+def _read_candidates(client: Client) -> list[AttributedConversion]:
+    """Hot-unattributed rows only (attributed=0 AND path='hot') from FINAL, as
+    the full hot row — both `reason` values, state_miss and ambiguous_ip, and the
+    `candidate_households` the ambiguous ones are exploded over. The `reason`
+    column is the explicit contract; a NON-NULL value is asserted to agree with
+    `candidate_count` (a mismatch would mean a writer bypassed the engine's
+    `_attributed`). NULL is accepted: rows written before the Phase-16 additive
+    migration carry NULL until the next engine pass rewrites them. An ambiguous
+    row whose `candidate_households` is empty was written before the Phase-17
+    column existed and can never be exploded: refused loud, naming the fix
+    (re-populate with `make run`) — the eval_meta-guard standard, not a bare
+    pydantic error. Never reads the accuracy side file."""
     rows = client.query(
         f"select {_CANDIDATE_COLS} from attributed_conversions final "
         "where attributed = 0 and path = 'hot' order by conversion_id"
     ).result_rows
     for r in rows:
         expected = "ambiguous_ip" if r[11] > 1 else "state_miss"
-        if r[12] is not None and r[12] != expected:
+        if r[17] is not None and r[17] != expected:
             raise ValueError(
-                f"{r[0]}: reason={r[12]!r} disagrees with candidate_count={r[11]}"
+                f"{r[0]}: reason={r[17]!r} disagrees with candidate_count={r[11]}"
+            )
+        if r[11] > 1 and not r[18]:
+            raise PrePhase17RowError(
+                f"{r[0]}: ambiguous (candidate_count={r[11]}) but "
+                "candidate_households is empty — this DB predates Phase 17; "
+                "re-populate it (make run / make run-hot) before reconciling"
             )
     return [
-        ResolvedConversion(
+        AttributedConversion(
             conversion_id=r[0],
             event_time=r[1],
             ingest_time=r[2],
@@ -188,6 +212,13 @@ def _read_candidates(client: Client) -> list[ResolvedConversion]:
             resolution=r[9],
             ambiguous=bool(r[10]),
             candidate_count=r[11],
+            exposure_id=r[12],
+            assists=list(r[13]),
+            attributed=bool(r[14]),
+            path=r[15],
+            processed_at=r[16],
+            reason=r[17],
+            candidate_households=list(r[18]),
         )
         for r in rows
     ]
@@ -230,20 +261,19 @@ def _restatement_abs_delta(client: Client) -> float:
 
 def recover(
     client: Client,
-    candidates: list[ResolvedConversion],
+    candidates: list[AttributedConversion],
     exposure_source: ExposureSource,
     window: timedelta,
     reconciled_at: datetime,
-    graph: GraphIndex,
 ) -> list[AttributedConversion]:
-    """Recover the given candidates: expand ambiguous ones to their candidate
-    households via `graph`, read every candidate household's exposures from the
+    """Recover the given candidates: explode ambiguous ones over their persisted
+    candidate households, read every candidate household's exposures from the
     source, run the matcher, insert the recovered rows. The recovery half of a
     pass, shared by `run` (all candidates, ClickHouse source) and the Dagster
     day-partitioned asset (one day's candidates, Iceberg source). `reconciled_at`
     is passed in (not recomputed) so every day of a partitioned run stamps the
     same version — identical to a single full pass."""
-    expanded = expand_candidates(candidates, graph)
+    expanded = expand_candidates(candidates)
     exposures = exposure_source.read_for(expanded, window)
     recovered = reconcile(expanded, exposures, window, reconciled_at)
     if recovered:
@@ -266,7 +296,6 @@ def finalize(client: Client) -> None:
 def run(
     client: Client | None = None,
     exposure_source: ExposureSource | None = None,
-    graph: GraphIndex | None = None,
 ) -> dict[str, int]:
     """One reconciliation pass: recover ALL hot misses (state-miss and
     ambiguous_ip) over the long window, then finalize (snapshots + rollup
@@ -274,21 +303,16 @@ def run(
 
     `exposure_source` selects where the candidate households' exposures are read
     from: the default ClickHouse source keeps `make run` byte-identical; the
-    Dagster asset passes an Iceberg/DuckDB source (Phase 12). `graph` defaults to
-    the compacted `device_graph` topic (the same loader the engine uses — one
-    graph, both paths; DECISIONS Phase 16). Everything else — candidates,
-    snapshots, rollup, insert — stays on ClickHouse."""
+    Dagster asset passes an Iceberg/DuckDB source (Phase 12). No broker: the
+    candidate households come from the rows themselves (Phase 17). Everything
+    else — candidates, snapshots, rollup, insert — stays on ClickHouse."""
     apply_ddl()
     client = client or connect()
     exposure_source = exposure_source or ClickHouseExposureSource(client)
-    if graph is None:
-        graph = load_graph_index(os.environ.get("KAFKA_BROKER", "127.0.0.1:19092"))
 
     reconciled_at = reconciled_at_for(_max_ingest(client))
     candidates = _read_candidates(client)
-    recovered = recover(
-        client, candidates, exposure_source, LONG_WINDOW, reconciled_at, graph
-    )
+    recovered = recover(client, candidates, exposure_source, LONG_WINDOW, reconciled_at)
     finalize(client)
 
     still_missing = len(candidates) - len(recovered)

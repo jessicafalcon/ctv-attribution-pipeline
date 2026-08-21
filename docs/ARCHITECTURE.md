@@ -539,6 +539,18 @@ handled.*
   identical rows). Both facts kept the projection off the golden DDL path
   (`clickhouse/ddl.sql`) — it is added only inside `make cost-levers` against the
   `bench_large` run, so gate-0 tiny golden stays byte-identical.
+- **Phase-17 first-hour stack check (spec D11) — all four supported by the pinned
+  versions, no workaround needed.** pyiceberg 0.11.1 + pyiceberg-core, duckdb 1.5.5,
+  verified on a scratch catalog before any lake-of-record code was written:
+  (1) a `PartitionSpec(day(event_time), bucket[8](household_id))` is accepted on
+  `create_table` and the bucket count round-trips as a table property
+  (`ctv.bucket_count`); (2) `table.append` WRITES the bucketed layout — 3 days × 8
+  buckets landed as 24 Parquet files under `event_time_day=…/household_bucket=…/`;
+  (3) `table.maintenance.expire_snapshots().older_than(ts).commit()` exists on this
+  version (3 snapshots → 1); (4) DuckDB `iceberg_scan` with an
+  `event_time >= … and household_id = …` predicate reported `Total Files Read: 1`
+  of 24 — it prunes on BOTH the day and the bucket transform, which is what makes
+  the 90-day reconcile join partition-local instead of a scan.
 
 ---
 
