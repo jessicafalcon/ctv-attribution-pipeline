@@ -8,14 +8,20 @@ no-op. The DB-side "only hot-unattributed rows are candidates" WHERE and the
 rollup/restatement live behavior are proven in tests/integration/test_reconcile.py.
 """
 
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from accuracy.score import score
+from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
-from producer.models import Exposure, Household, ResolvedConversion
+from producer.models import (
+    AttributedConversion,
+    Exposure,
+    Household,
+    ResolvedConversion,
+)
 from reconcile.reconcile import (
     LONG_WINDOW,
     RECONCILE_DELTA,
@@ -238,7 +244,7 @@ def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     truth = {t.conversion_id: t.truth_exposure_id for t in s.truth_links}
     exp_hh = {e.exposure_id: e.household_id for e in exps}
 
-    def _score(rows):
+    def _score(rows: Iterable[AttributedConversion]) -> AccuracyReport:
         credited = {
             r.conversion_id: (r.household_id, r.exposure_id)
             for r in rows
@@ -250,7 +256,7 @@ def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     assert hot_report.caused_wrong_household == 0  # never guessed hot
 
     candidates = [r for r in hot if not r.attributed]
-    by_hh: dict[str, list] = {}
+    by_hh: dict[str, list[Exposure]] = {}
     for e in exps:
         by_hh.setdefault(e.household_id, []).append(e)
     recovered = reconcile(

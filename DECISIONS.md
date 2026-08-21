@@ -1,6 +1,8 @@
 # DECISIONS.md — why-not-X log
 
-One entry per non-obvious choice. Newest last.
+One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
+"Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
+Phase 16 sits directly below the fixes.
 
 ## Phase 0
 
@@ -1166,7 +1168,7 @@ One entry per non-obvious choice. Newest last.
   meaning shifted from "a hot fan-out landed here" to "reconciliation credited it
   here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
   new field — agent contract pinned); one sentence in `agent/context.py` says it.
-  Trigger to re-validate the agent on this: BACKLOG 47 (`make agent-eval` re-run,
+  Trigger to re-validate the agent on this: BACKLOG 49 (`make agent-eval` re-run,
   API tokens, ask first).
 - **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
   match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so

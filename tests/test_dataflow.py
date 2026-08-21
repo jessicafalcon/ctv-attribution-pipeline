@@ -42,8 +42,9 @@ def test_ambiguous_deferred_counter_increments_by_tiny_shared_ip_set() -> None:
     resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
 
     def _sample(name: str) -> float:
-        # Public registry read (not the private `_value` API streaming/metrics.py
-        # avoids); counters are cumulative across the process, so compare deltas.
+        # This test reads through the public registry API; counters are cumulative
+        # across the process, so compare deltas. Older tests and scale_probe.py still
+        # use the private `_value` accessor — migration is a BACKLOG item.
         return REGISTRY.get_sample_value(name) or 0.0
 
     deferred0 = _sample("engine_conversions_ambiguous_deferred_total")

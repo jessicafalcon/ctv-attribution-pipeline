@@ -223,7 +223,7 @@ Every fault profile plus the no-fault baseline, run 5× (30 live invocations), s
 > `max|Δroas|` is no longer 0 — those two cells are blanked below rather than
 > shown stale. Verdicts,
 > `ip_resolved_fraction` and `ambig` are not affected by construction, but the
-> catalog has not been re-validated live (API tokens). Re-run: BACKLOG 47.
+> catalog has not been re-validated live (API tokens). Re-run: BACKLOG 49.
 
 ### Fault → top hypothesis → correct?
 
@@ -315,6 +315,10 @@ reconcile-dagster: 15 day-partition(s) recovered + finalize
 
 15 day-partitions cover all candidate days (13 before Phase 16; the 3 deferred
 shared-IP conversions add 2026-08-02 and 2026-08-09); the union reproduces the full
-recovery (recall 0.9733). Iceberg snapshot ids / commit times and Dagster run ids
+recovery (recall 0.9733). Provenance: the transcript above was captured live in
+Phase 12 (13 days) and its day list re-derived OFFLINE for Phase 16 from the
+long_delay candidate set (`orchestration.run._candidate_days` logic over the hot
+output), not re-captured from a live `make reconcile-dagster`; the 32-row recovery
+itself is live-pinned by `make test-int-lakehouse` / `test-int-long-delay`. Iceberg snapshot ids / commit times and Dagster run ids
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).

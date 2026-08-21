@@ -2,8 +2,11 @@
 RECONCILIATION. The hot path defers every shared-IP (ambiguous_ip) conversion; the
 reconcile pass — candidate households re-enumerated from the device graph, the one
 most-recent-exposure tiebreak — credits them. tiny and medium post-reconcile must
-equal their pre-Phase-16 hot numbers (52/35/35, 130/92/92); shared_ip_spike must
-reproduce the deleted reduce's pick (69/80, 11 wrong-household). No services:
+equal their pre-Phase-16 hot numbers (52/35/35, 130/92/92); long_delay must keep its
+post number (112/75/73 — 29 state-misses + 3 deferrals recovered, the 2 caused
+deferrals landing on the wrong shared-IP household exactly as the old hot reduce
+did); shared_ip_spike must reproduce the deleted reduce's pick (69/80, 11
+wrong-household). No services:
 generate → resolve → dedup → evicting engine → expand → reconcile over the same
 exposures, scored against truth (tests/pins.py).
 
@@ -12,12 +15,14 @@ Two drivers, on purpose: this file runs the EVICTING engine (`run_attribution`);
 (`attribute`). Both must land on the same pins — that is the Phase-5 parity claim
 carried through reconciliation, not a duplicate test."""
 
+from collections.abc import Iterable
+
 import pytest
 
 from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
-from producer.models import AttributedConversion
+from producer.models import AttributedConversion, Exposure
 from reconcile.reconcile import (
     LONG_WINDOW,
     expand_candidates,
@@ -54,7 +59,7 @@ def hot_and_post(
     truth = {t.conversion_id: t.truth_exposure_id for t in s.truth_links}
     exp_hh = {e.exposure_id: e.household_id for e in exps}
 
-    def _score(rows):
+    def _score(rows: Iterable[AttributedConversion]) -> AccuracyReport:
         credited = {
             r.conversion_id: (r.household_id, r.exposure_id)
             for r in rows
@@ -62,7 +67,7 @@ def hot_and_post(
         }
         return score(credited, truth, exp_hh, name)
 
-    by_hh: dict[str, list] = {}
+    by_hh: dict[str, list[Exposure]] = {}
     for e in exps:
         by_hh.setdefault(e.household_id, []).append(e)
     candidates = [r for r in hot if not r.attributed]

@@ -40,9 +40,10 @@ jobs:
       - run: make up
       # Alert-rule guard (offline w.r.t. the stack — needs only the digest-pinned
       # prometheus image, already pulled by `make up`): promtool check rules +
-      # test rules assert the four alerts still fire on the real captured metric
-      # values. This is what catches a metric rename or rule edit silently breaking
-      # the fixture — the guard that keeps Gate 2 honest.
+      # test rules assert the four alerts still fire on long_delay's real captured
+      # values and that on tiny only RestatementMagnitude fires (Phase-16 deferral
+      # landing). This is what catches a metric rename or rule edit silently
+      # breaking the fixture — the guard that keeps Gate 2 honest.
       - run: make test-alerts
       - run: make seed PROFILE=tiny
       - run: make run-hot

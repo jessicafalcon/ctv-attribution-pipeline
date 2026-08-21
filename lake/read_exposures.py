@@ -3,7 +3,7 @@
 DuckDB's `iceberg_scan` reads an Iceberg table directly from its current metadata
 file — the same table pyiceberg wrote — so the reconcile long-window matcher can
 source its candidate exposures from the lake instead of ClickHouse, feeding the
-UNCHANGED pure `attribute_household` leaf.
+UNCHANGED pure `last_touch` leaf (Phase 16 name; `attribute_household` until then).
 
 Two properties make this byte-identical to the ClickHouse-sourced read:
   * dedup-on-read — `select distinct` collapses the append-accumulated re-sends to

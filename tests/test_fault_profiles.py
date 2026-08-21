@@ -17,6 +17,7 @@ import pytest
 from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
+from producer.models import Exposure
 from producer.serialize import jsonl
 from reconcile.reconcile import (
     LONG_WINDOW,
@@ -214,7 +215,7 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
 #   conversions. shared_ip_spike has 25 and therefore DOES restate after `make run`
 #   (the deferral landing, not a late-arrival signal); real_lift and
 #   no_fault_baseline have none and do not restate. agent-eval is not re-run in
-#   Phase 16 (API tokens) — BACKLOG 47.
+#   Phase 16 (API tokens) — BACKLOG 49.
 # (late_burst is excluded: its misses are arrival lateness / eviction, not
 # event-time, so it genuinely restates.)
 
@@ -231,7 +232,7 @@ def test_in_window_scenarios_restate_only_through_the_deferral_channel(
     idx = GraphIndex.from_households(s.graph.households)
     exps, res, _ = dedup_streams(s.exposures, resolve_stream(s.conversions, idx))
     hot = attribute(exps, res, HOT_WINDOW)
-    by_hh: dict[str, list] = defaultdict(list)
+    by_hh: dict[str, list[Exposure]] = defaultdict(list)
     for e in exps:
         by_hh[e.household_id].append(e)
     at = reconciled_at_for(max(e.ingest_time for e in exps))
@@ -246,3 +247,14 @@ def test_in_window_scenarios_restate_only_through_the_deferral_channel(
     recovered = reconcile(expand_candidates(ambiguous, idx), by_hh, LONG_WINDOW, at)
     assert len(ambiguous) == deferred
     assert {r.conversion_id for r in recovered} == {r.conversion_id for r in ambiguous}
+
+
+def test_late_burst_single_deferral_is_a_revenue_free_site_visit(runs) -> None:
+    # The premise RESULTS relies on to keep late_burst's max|Δroas| cell (26.604)
+    # unblanked: its ONE ambiguous_ip deferral carries no revenue, so the reconcile
+    # pass crediting it cannot move any campaign's ROAS (ROAS = revenue / spend;
+    # generate.py guarantees site_visit ⇒ revenue 0). late_burst is excluded from
+    # the channel test above because its state-miss channel DOES recover (5 misses).
+    deferred = [r for r in runs["late_burst"].rows if r.reason == "ambiguous_ip"]
+    assert len(deferred) == 1
+    assert deferred[0].conversion_type == "site_visit" and deferred[0].revenue == 0.0
