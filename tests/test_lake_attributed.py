@@ -161,6 +161,23 @@ def test_day_filter_is_a_prunable_predicate() -> None:
     assert [r.conversion_id for r in read_current(days=["2026-08-02"])] == ["c-1"]
 
 
+def test_a_pre_phase_17_ambiguous_row_is_refused_before_the_model(tmp_path) -> None:
+    # An ambiguous row with no candidate set cannot come through the model (its
+    # validator refuses it), so write it straight to the lake with pyarrow — the
+    # shape an old lake would hold — and assert the read names the fix rather
+    # than raising a bare pydantic error (review gate).
+    import pyarrow as pa
+
+    from lake.land_attributed import _ARROW_SCHEMA, _to_arrow
+    from lake.read_attributed import PrePhase17RowError
+
+    good = _to_arrow([_row("c-1")]).to_pylist()[0]
+    stale = {**good, "conversion_id": "c-2", "candidate_count": 2, "ambiguous": True}
+    cat.ensure_attributed().append(pa.Table.from_pylist([stale], schema=_ARROW_SCHEMA))
+    with pytest.raises(PrePhase17RowError, match="predates Phase 17.*lake-reset"):
+        read_current()
+
+
 def test_both_raw_tables_share_the_bucket_layout_and_count() -> None:
     exp, att = cat.ensure_exposures(), cat.ensure_attributed()
     assert cat.bucket_count_of(exp) == cat.bucket_count_of(att) == cat.BUCKET_COUNT

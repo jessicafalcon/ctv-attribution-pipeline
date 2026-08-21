@@ -53,9 +53,9 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from lake.iceberg_catalog import bucket_of
+from lake.iceberg_catalog import bucket_of, configure
 from lake.land_attributed import land_attributed
-from lake.read_attributed import read_current
+from lake.read_attributed import PrePhase17RowError, read_current  # noqa: F401
 from lake.read_exposures import read_exposures_by_household
 from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
@@ -77,12 +77,6 @@ LONG_WINDOW = timedelta(days=90)
 # offset (rollup computes reported_at server-side as max(ingest_time) + offset).
 RECONCILE_DELTA_MS = 1000
 RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
-
-
-class PrePhase17RowError(ValueError):
-    """An ambiguous hot row with no persisted candidate set (written before the
-    Phase-17 column). Reconciliation cannot explode it; the DB must be
-    re-populated from the engine."""
 
 
 def reconciled_at_for(base: datetime) -> datetime:
@@ -178,17 +172,16 @@ def reconcile(
     return recovered
 
 
-def _check_candidate(cid: str, candidate_count: int, reason, households) -> None:
+def _check_candidate(
+    cid: str, candidate_count: int, reason: str | None, households: list[str]
+) -> None:
+    """The `reason` column must agree with `candidate_count` (a writer bypassing
+    the engine). The empty-candidate-set case is caught earlier, in
+    `lake.read_attributed._row`, before the model is built."""
     expected = "ambiguous_ip" if candidate_count > 1 else "state_miss"
     if reason is not None and reason != expected:
         raise ValueError(
             f"{cid}: reason={reason!r} disagrees with candidate_count={candidate_count}"
-        )
-    if candidate_count > 1 and not households:
-        raise PrePhase17RowError(
-            f"{cid}: ambiguous (candidate_count={candidate_count}) but "
-            "candidate_households is empty — this DB predates Phase 17; "
-            "re-populate it (make run / make run-hot) before reconciling"
         )
 
 
@@ -330,9 +323,13 @@ def main(argv: list[str] | None = None) -> None:
         help="dump this stage's terminal Prometheus registry to a textfile "
         "(promtool-fixture provenance; see make metrics-capture)",
     )
+    parser.add_argument(
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
+    )
     args = parser.parse_args(argv)
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
+    configure(args.profile)
     counts = run()
     print(
         f"reconcile: {counts['candidates']} candidates → "

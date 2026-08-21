@@ -24,12 +24,24 @@ from accuracy.run import load_truth
 from accuracy.score import score
 from agent.run_context import collect
 from clickhouse.client import connect, read_credited, read_exposure_households
+from lake.iceberg_catalog import configure
 from reconcile import reconcile
 from tests.pins import (
     SHARED_IP_HOT,
     SHARED_IP_POST,
     SHARED_IP_POST_WRONG_HOUSEHOLD,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _profile_lake():
+    """This module runs the reconcile pass over the STACK's lake (the test pins
+    post-reconcile numbers), so it binds the shared_ip_spike profile's lake like
+    `make run PROFILE=shared_ip_spike` would — not a tmp lake, which would hold no
+    candidates. It appends that profile's reconciled rows, exactly as the target's
+    `make run` would have."""
+    configure("shared_ip_spike")
+
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 PROFILE = "shared_ip_spike"

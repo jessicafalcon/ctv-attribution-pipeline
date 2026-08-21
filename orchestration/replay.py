@@ -19,14 +19,24 @@ import duckdb
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from lake.iceberg_catalog import ensure_attributed, ensure_exposures, metadata_path
+from lake.iceberg_catalog import (
+    catalog_exists,
+    configure,
+    ensure_attributed,
+    ensure_exposures,
+    metadata_path,
+)
 from orchestration.load import materialize_load
 
 SERVING_TABLES = ("exposures_landed", "attributed_conversions")
 
 
 def lake_days() -> set[str]:
-    """Every event_time day (YYYY-MM-DD) present in either raw table."""
+    """Every event_time day (YYYY-MM-DD) present in either raw table. Empty when
+    this root holds no catalog at all — checked BEFORE `ensure_*`, so asking
+    never creates an empty lake as a side effect (review gate)."""
+    if not catalog_exists():
+        return set()
     con = duckdb.connect()
     con.execute("load iceberg")
     con.execute("set timezone='UTC'")
@@ -40,9 +50,11 @@ def lake_days() -> set[str]:
     return days
 
 
-class EmptyLakeError(SystemExit):
+class EmptyLakeError(RuntimeError):
     """Refuse to TRUNCATE the serving tables when the lake holds nothing to
-    reload — that would be data loss with a green exit code (review gate)."""
+    reload — that would be data loss with a green exit code (review gate). A
+    normal exception (not SystemExit) so library callers can catch it; `main`
+    turns it into the exit code."""
 
 
 def replay(confirm: bool) -> dict[str, int]:
@@ -71,10 +83,16 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="replay the serving layer from the lake"
     )
-    parser.add_argument("--profile", default="tiny", help="informational (lake root)")
+    parser.add_argument(
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
+    )
     parser.add_argument("--confirm", action="store_true", help="skip the prompt")
     args = parser.parse_args(argv)
-    loaded = replay(args.confirm)
+    configure(args.profile)
+    try:
+        loaded = replay(args.confirm)
+    except EmptyLakeError as e:
+        sys.exit(str(e))
     print(
         f"replay-serving: {loaded['exposures']} exposures, {loaded['attributed']} "
         "attributed rows reloaded from the lake (no broker)"

@@ -1115,10 +1115,12 @@ Phase 17 sits directly below the fixes.
   keep equal, for a set the engine already had in hand).
 - **A pre-Phase-17 ambiguous row fails loud with the fix named, not with a bare
   pydantic error.** On a volume created before the column, the migration reads an
-  old ambiguous row back as `[]`; `_read_candidates` raises `PrePhase17RowError`
-  ("this DB predates Phase 17; re-populate it (make run / make run-hot)") before
-  the model validator would — the same loud-failure standard as the `eval_meta`
-  guard. Rejected: expanding such a row to nothing and leaving it as its hot row
+  old ambiguous row back as `[]`; `lake.read_attributed._row` raises
+  `PrePhase17RowError` ("this lake predates Phase 17; re-populate it") BEFORE it
+  builds the model, so the model validator never gets to throw a bare pydantic
+  error — the same loud-failure standard as the `eval_meta` guard. (Review gate:
+  the first cut put the check after model construction in the since-deleted
+  `_read_candidates`, where the validator fired first and made it unreachable.) Rejected: expanding such a row to nothing and leaving it as its hot row
   (a silent non-recovery that moves numbers).
 - **Tiny golden re-frozen — the second sanctioned exception, and now a rule.**
   `fixtures/tiny/expected/attributed.jsonl`: every line gains the

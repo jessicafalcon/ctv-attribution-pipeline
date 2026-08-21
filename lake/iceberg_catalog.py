@@ -23,6 +23,7 @@ back, never snapshot ids or commit times.
 """
 
 import os
+import re
 from pathlib import Path
 
 from pyiceberg.catalog import Catalog
@@ -41,10 +42,15 @@ from pyiceberg.types import (
     TimestamptzType,
 )
 
-# Lake root defaults to data/lake/ (gitignored); LAKE_ROOT overrides it so tests
-# point at an isolated tmp warehouse. Resolved per call, not at import, so the
-# override takes effect for a process that sets it after import.
-_DEFAULT_ROOT = "data/lake"
+# The lake root is data/lake/<profile> (gitignored), derived from the PROFILE the
+# entry point was given (`configure`). There is NO default root: an unset default
+# is what once produced a profile-mixed lake at data/lake/ that `make lake-reset`
+# refuses to touch (review gate). LAKE_ROOT is TEST-ONLY — pytest fixtures point
+# the code at a tmp warehouse; an entry point refuses it outside pytest. Resolved
+# per call, not at import, so a fixture set after import takes effect.
+_LAKES = Path("data/lake")
+_PROFILE_RE = re.compile(r"^[a-z0-9_]+$")
+_profile: str | None = None
 NAMESPACE = "raw"
 EXPOSURES_TABLE = "raw.exposures"
 ATTRIBUTED_TABLE = "raw.attributed_conversions"
@@ -56,8 +62,48 @@ BUCKET_COUNT = 8
 BUCKET_PROPERTY = "ctv.bucket_count"
 
 
+class LakeRootUnset(RuntimeError):
+    """No lake root: the entry point did not `configure(profile)` and no test
+    fixture set LAKE_ROOT. Never silently fall back to a shared directory."""
+
+
+def configure(profile: str) -> Path:
+    """Bind this process's lake to data/lake/<profile> (entry points call this
+    from `--profile`). Refuses a malformed profile (the same `[a-z0-9_]+` shape
+    `make lake-reset` enforces) and refuses a LAKE_ROOT override outside pytest —
+    LAKE_ROOT is for tmp-lake fixtures only."""
+    global _profile
+    if not _PROFILE_RE.match(profile):
+        raise LakeRootUnset(f"profile {profile!r} is not [a-z0-9_]+")
+    if os.environ.get("LAKE_ROOT") and not os.environ.get("PYTEST_CURRENT_TEST"):
+        raise LakeRootUnset(
+            "LAKE_ROOT is test-only (tmp fixtures); entry points bind the lake with "
+            "--profile — unset LAKE_ROOT"
+        )
+    _profile = profile
+    return _lake_root()
+
+
+def profile() -> str | None:
+    return _profile
+
+
 def _lake_root() -> Path:
-    return Path(os.environ.get("LAKE_ROOT", _DEFAULT_ROOT))
+    env = os.environ.get("LAKE_ROOT")
+    if env:
+        return Path(env)
+    if _profile:
+        return _LAKES / _profile
+    raise LakeRootUnset(
+        "no lake root: entry points pass --profile (lake.iceberg_catalog.configure); "
+        "tests set LAKE_ROOT to a tmp dir"
+    )
+
+
+def catalog_exists() -> bool:
+    """Whether this root holds a catalog already — a read that must not CREATE
+    an empty lake as a side effect (replay's refusal) checks this first."""
+    return (_lake_root() / "catalog.db").exists()
 
 
 # event_time / ingest_time land as TIMESTAMPTZ (a UTC instant), never a naive

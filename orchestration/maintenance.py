@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from dagster import OpExecutionContext, job, op
 
-from lake.iceberg_catalog import ensure_attributed, ensure_exposures
+from lake.iceberg_catalog import configure, ensure_attributed, ensure_exposures
 from lake.maintenance import maintain
 
 
@@ -41,10 +41,14 @@ def lake_maintenance() -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="lake hygiene (Dagster job)")
-    parser.add_argument("--profile", default="tiny", help="informational")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
+    )
+    args = parser.parse_args(argv)
+    configure(args.profile)
     result = lake_maintenance.execute_in_process()
-    assert result.success
+    if not result.success:
+        raise RuntimeError("lake_maintenance job failed")
     for name in ("maintain_exposures", "maintain_attributed"):
         print(f"lake-maintain {name}: {result.output_for_node(name)}")
 

@@ -32,8 +32,22 @@ def _connect() -> duckdb.DuckDBPyConnection:
     return con
 
 
+class PrePhase17RowError(ValueError):
+    """An ambiguous row with no persisted candidate set — written before the
+    Phase-17 column existed. Reconciliation cannot explode it; the DB must be
+    re-populated from the engine. Raised BEFORE model construction so the
+    failure names the fix instead of being a bare pydantic error (review gate)."""
+
+
 def _row(r: tuple) -> AttributedConversion:
     d = dict(zip(_COLS, r, strict=True))
+    if d["candidate_count"] > 1 and not d["candidate_households"]:
+        raise PrePhase17RowError(
+            f"{d['conversion_id']}: ambiguous (candidate_count={d['candidate_count']}) "
+            "but candidate_households is empty — this lake predates Phase 17; "
+            "re-populate it (make lake-reset + make run / make run-hot) before "
+            "reconciling"
+        )
     for k in ("event_time", "ingest_time", "processed_at"):
         d[k] = d[k].replace(tzinfo=None)
     d["assists"] = list(d["assists"])

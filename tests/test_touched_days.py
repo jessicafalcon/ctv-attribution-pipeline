@@ -97,7 +97,7 @@ def test_engine_driver_loads_exactly_the_touched_days(monkeypatch, capsys) -> No
         "materialize_load",
         lambda days: seen.append(set(days)) or {"exposures": 0, "attributed": 0},
     )
-    df.main([])
+    df.main(["--profile", "tiny"])
     assert seen == [{"2026-08-10", "2026-08-11", "2026-08-13"}]
     assert "3 day(s)" in capsys.readouterr().out
 

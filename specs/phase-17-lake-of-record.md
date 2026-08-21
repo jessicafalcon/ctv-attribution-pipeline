@@ -108,8 +108,15 @@ make test && make lint \
 4. **Lake hygiene is an asset, not a footnote.** A `lake_maintenance` Dagster job
    expires snapshots older than a configured age and rewrites small files per
    partition. `make down` still removes compose volumes only; a documented `make
-   lake-reset` (explicit confirmation, like `down`) clears `data/lake/`. Closes the
-   BACKLOG "`data/lake` accumulates unboundedly" row.
+   lake-reset` (explicit confirmation, like `down`) clears `data/lake/<profile>`.
+   *Amended at the review gate — the draft said "clears `data/lake/`" and "closes
+   the BACKLOG '`data/lake` accumulates unboundedly' row". Built and measured:
+   the reset is per profile (one lake per PROFILE), and snapshot expiry on
+   pyiceberg 0.11.1 is METADATA-ONLY — there is no `remove_orphan_files`, so
+   compaction + expiry bound the live file count but on-disk Parquet grows (24 →
+   32 in a scratch lake; 211 → 252 on long_delay). The BACKLOG row stays OPEN,
+   re-qualified: disk reclaim needs `remove_orphan_files`; only `lake-reset`
+   reclaims today; pinned so a pyiceberg bump fails loud (ARCHITECTURE §8).*
 5. **Replay is from the lake.** `make replay-serving` (new) truncates-and-reloads the
    ClickHouse serving tables from the lake with no Kafka involvement — genuinely
    broker-free, since reconciliation no longer reads the device graph (D1) — stamps

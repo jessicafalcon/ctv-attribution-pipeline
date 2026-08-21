@@ -29,9 +29,9 @@ MAKEFILE = REPO_ROOT / "Makefile"
 _ENV = {k: v for k, v in os.environ.items() if k not in {"SOURCE", "PROFILE"}}
 
 
-def _dry_run(target: str) -> list[str]:
+def _dry_run(target: str, *args: str) -> list[str]:
     out = subprocess.run(
-        ["make", "-n", target],
+        ["make", "-n", target, *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -136,7 +136,7 @@ def test_lake_reset_refuses_a_root_outside_data_lake_profile(
 ) -> None:
     res = _make_in_sandbox(tmp_path, *hostile)
     assert res.returncode != 0, res.stdout + res.stderr
-    assert "refusing to remove" in res.stdout
+    assert "refusing" in res.stdout
     assert (tmp_path / "data" / "lake" / "tiny").exists()  # nothing removed
     assert (tmp_path / "data" / "x").exists()
 
@@ -156,8 +156,54 @@ def test_lake_reset_ignores_a_command_line_lake_root_override(tmp_path: Path) ->
 
 def test_lake_reset_prompts_unless_confirmed_and_scopes_to_the_profile() -> None:
     recipe = "\n".join(_dry_run("lake-reset"))
-    # `$(CONFIRM)` expands to "" in a dry run: the guard shape is what survives
+    # `$(_CONFIRMED)` expands to "" in a dry run: the guard shape is what survives
     assert "rm -rf" in recipe and '!= "yes" ]' in recipe and "read ans" in recipe
-    # per-profile root: the rm targets data/lake/<PROFILE>, never data/lake itself
-    assert re.search(r'rm -rf "data/lake/tiny"', recipe), recipe
+    # per-profile root, rebuilt from the VALIDATED shell variable — never from a
+    # make-interpolated value; never data/lake itself
+    assert 'rm -rf "data/lake/$_LAKE_RESET_PROFILE"' in recipe, recipe
     assert 'rm -rf "data/lake"' not in recipe
+
+
+INJECTION = 'x" ; touch pwned ; echo "'
+
+
+def test_lake_reset_never_interpolates_the_profile_into_the_recipe() -> None:
+    # Security review round 2: a PROFILE carrying shell metacharacters used to run
+    # its payload BEFORE the refusal. The dry run must show the user text nowhere
+    # in the recipe (it reaches the shell as an environment variable), and the
+    # `case` guard must be the first command.
+    lines = [ln for ln in _dry_run("lake-reset", f"PROFILE={INJECTION}") if ln.strip()]
+    assert "touch pwned" not in "\n".join(lines)
+    assert lines[0].lstrip().startswith('case "$_LAKE_RESET_PROFILE"'), lines[0]
+
+
+def test_lake_reset_injection_runs_nothing_and_refuses(tmp_path: Path) -> None:
+    res = _make_in_sandbox(tmp_path, f"PROFILE={INJECTION}", "CONFIRM=yes")
+    assert res.returncode != 0
+    assert not (tmp_path / "pwned").exists()
+    assert "refusing" in res.stdout
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+def test_lake_reset_ignores_an_exported_confirm(tmp_path: Path) -> None:
+    # `$(origin CONFIRM)` must be the command line: an ambient CONFIRM=yes in the
+    # shell does not skip the prompt (stdin is closed → "aborted").
+    (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True)
+    res = subprocess.run(
+        [
+            "make",
+            "-f",
+            str(MAKEFILE),
+            "-C",
+            str(tmp_path),
+            "lake-reset",
+            "PROFILE=tiny",
+        ],
+        capture_output=True,
+        text=True,
+        env={**_ENV, "CONFIRM": "yes"},
+        stdin=subprocess.DEVNULL,
+    )
+    assert res.returncode != 0
+    assert "aborted" in res.stdout
+    assert (tmp_path / "data" / "lake" / "tiny").exists()

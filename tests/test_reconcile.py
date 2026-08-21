@@ -24,7 +24,6 @@ from producer.models import (
 from reconcile.reconcile import (
     LONG_WINDOW,
     RECONCILE_DELTA,
-    PrePhase17RowError,
     _check_candidate,
     expand_candidates,
     pick_household,
@@ -305,11 +304,6 @@ def test_check_candidate_accepts_null_reason_from_pre_migration_rows() -> None:
     # candidate kind is still derivable from candidate_count.
     _check_candidate("c-1", 1, None, [])
     _check_candidate("c-2", 3, None, ["H1", "H2", "H3"])
-
-
-def test_check_candidate_names_the_fix_for_a_pre_phase_17_ambiguous_row() -> None:
-    with pytest.raises(PrePhase17RowError, match="predates Phase 17.*make run"):
-        _check_candidate("c-7", 2, "ambiguous_ip", [])
 
 
 def test_check_candidate_refuses_a_reason_that_disagrees_with_candidate_count() -> None:

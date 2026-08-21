@@ -41,20 +41,28 @@ down:
 # profile means a clean lake too, since the lake outlives `make down` and the
 # serving tables are loaded from it (a hot-only proof would otherwise reload an
 # earlier reconcile pass's current rows).
-# Scope guard (security review): the rm target must be exactly data/lake/<profile>,
-# relative to the repo root — no empty PROFILE (would be data/lake/), no `..`, no
-# absolute path. LAKE_ROOT is `override`-protected below so a command-line
-# LAKE_ROOT= cannot retarget it (it would propagate into the test-int-* targets,
-# where CONFIRM=yes is already set).
+# Scope guard (security review, two rounds): the rm target must be exactly
+# data/lake/<profile> — no empty PROFILE (would be data/lake/), no `..`, no
+# absolute path, no shell metacharacters, no newline. The values reach the shell
+# as ENVIRONMENT VARIABLES (target-specific `export`), never make-interpolated
+# into the recipe text: a PROFILE of `x" ; touch pwned ; echo "` used to run its
+# payload before the refusal. `case` validates the value as data; the check is
+# the first command, so nothing runs before it. CONFIRM counts only when given on
+# the command line (`$(origin CONFIRM)`), never from an exported shell variable.
+lake-reset: export _LAKE_RESET_PROFILE = $(value PROFILE)
+lake-reset: export _LAKE_RESET_ROOT = $(value LAKE_ROOT)
+lake-reset: _CONFIRMED = $(if $(filter command line,$(origin CONFIRM)),$(filter yes,$(CONFIRM)),)
 lake-reset:
-	@printf '%s' "$(LAKE_ROOT)" | grep -qE '^data/lake/[a-z0-9_]+$$' \
-		|| { echo "lake-reset: refusing to remove '$(LAKE_ROOT)' (must be data/lake/<profile>)"; exit 1; }
-	@if [ "$(CONFIRM)" != "yes" ]; then \
-		printf 'lake-reset deletes %s (the lake of record for PROFILE=%s). Type yes to continue: ' "$(LAKE_ROOT)" "$(PROFILE)"; \
+	@case "$$_LAKE_RESET_PROFILE" in "" | *[!a-z0-9_]*) \
+		echo "lake-reset: refusing — PROFILE must be [a-z0-9_]+"; exit 1;; esac; \
+	case "$$_LAKE_RESET_ROOT" in 'data/lake/$$(PROFILE)') ;; *) \
+		echo "lake-reset: refusing — LAKE_ROOT is fixed to data/lake/<profile>"; exit 1;; esac
+	@if [ "$(_CONFIRMED)" != "yes" ]; then \
+		printf 'lake-reset deletes data/lake/%s (the lake of record for that profile). Type yes to continue: ' "$$_LAKE_RESET_PROFILE"; \
 		read ans; [ "$$ans" = "yes" ] || { echo "aborted"; exit 1; }; \
 	fi
-	rm -rf "$(LAKE_ROOT)"
-	@echo "lake-reset: removed $(LAKE_ROOT)"
+	rm -rf "data/lake/$$_LAKE_RESET_PROFILE"
+	@echo "lake-reset: removed data/lake/$$_LAKE_RESET_PROFILE"
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
@@ -68,21 +76,19 @@ resolve:
 
 # Phase 17: the lake is the record. One lake per PROFILE (profiles share
 # conversion_id space — the same isolation `make down` gives ClickHouse, without a
-# destructive step): engine and reconcile land under data/lake/<profile>/ and the
-# Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
+# destructive step): engine and reconcile land under data/lake/<profile>/ (bound by
+# each entry point's --profile) and the Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
 # its own PROFILE instead of inheriting the parent's exported value (the
 # test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
-# `override` + recursive `=`: not settable from the command line or the
-# environment (a `make … LAKE_ROOT=/x` would propagate into the test-int-* targets'
-# `lake-reset … CONFIRM=yes` — security review), yet still re-expanded per target,
-# so each clean-stack test-int-* target's `target: PROFILE = p` pins the lake for
-# its pytest line too (which runs in the parent make; seen live: the test
-# otherwise landed into data/lake/tiny while run-hot populated
-# data/lake/long_delay). `:=` would freeze PROFILE at parse time and undo that.
-# Offline tests point the Python code at a tmp root via the LAKE_ROOT env var
-# (lake/iceberg_catalog.py), which this assignment does not reach.
+# Make-internal only (lake-reset's target). NOT exported: every Python entry point
+# takes `--profile` and binds its own lake (lake.iceberg_catalog.configure), and
+# LAKE_ROOT in the environment is test-only (tmp fixtures) — an entry point refuses
+# it outside pytest. `override` + recursive `=`: not settable from the command line
+# or the environment (a `make … LAKE_ROOT=/x` would propagate into the test-int-*
+# targets' `lake-reset … CONFIRM=yes`), still re-expanded per target so each
+# clean-stack target's `target: PROFILE = p` applies. The rm in lake-reset does not
+# even use it — it rebuilds data/lake/<profile> from the validated profile.
 override LAKE_ROOT = data/lake/$(PROFILE)
-export LAKE_ROOT
 
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
 # hot join) → lake → Dagster load → ClickHouse, then the reconciliation pass
@@ -90,8 +96,8 @@ export LAKE_ROOT
 # reload → rollup refresh + pre/post report snapshots). Run after `make up &&
 # make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
 run:
-	uv run python -m streaming.dataflow
-	uv run python -m reconcile.reconcile
+	uv run python -m streaming.dataflow --profile "$(PROFILE)"
+	uv run python -m reconcile.reconcile --profile "$(PROFILE)"
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
@@ -100,7 +106,7 @@ run:
 # reconciliation pass would over-credit their long-tail organics and shift those
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
-	uv run python -m streaming.dataflow
+	uv run python -m streaming.dataflow --profile "$(PROFILE)"
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
@@ -177,8 +183,8 @@ cost-levers:
 # The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
 metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
-	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
-	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
+	uv run python -m streaming.dataflow --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/engine.prom
+	uv run python -m reconcile.reconcile --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Attribution accuracy (household grain) vs the truth side file, for the given

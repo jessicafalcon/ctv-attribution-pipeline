@@ -78,19 +78,25 @@ def _write_path(monkeypatch, tmp_root: str) -> tuple[list[str], list[object]]:
 
 
 @pytest.fixture
-def _tz(monkeypatch):
-    yield monkeypatch  # TZ is set through it below; undone at teardown, then tzset
+def _tz():
+    """A MonkeyPatch whose undo runs BEFORE tzset: the pytest `monkeypatch`
+    fixture finalizes after its dependents, so a `tzset()` in a dependent
+    fixture would run while TZ is still the last zone and leak it into the rest
+    of the session (review gate). Own the order here."""
+    mp = pytest.MonkeyPatch()
+    yield mp
+    mp.undo()
     time.tzset()
 
 
 def test_reconcile_write_path_is_byte_identical_across_machine_timezones(
-    tmp_path, _tz, monkeypatch
+    tmp_path, _tz
 ) -> None:
     outputs = {}
     for zone in ("UTC", "America/Denver", "Asia/Kolkata"):
-        monkeypatch.setenv("TZ", zone)
+        _tz.setenv("TZ", zone)
         time.tzset()
-        serialized, datetimes = _write_path(monkeypatch, str(tmp_path / zone))
+        serialized, datetimes = _write_path(_tz, str(tmp_path / zone))
         assert datetimes, "the path must hand datetimes to the client"
         assert all(
             d.tzinfo is not None and d.utcoffset() == timedelta(0) for d in datetimes

@@ -14,6 +14,7 @@ from dagster import DagsterInstance, materialize
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
+from lake.iceberg_catalog import configure
 from orchestration.assets import (
     attributed_iceberg,
     exposures_iceberg,
@@ -26,12 +27,15 @@ from reconcile.reconcile import candidate_days
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Orchestrated reconciliation")
-    parser.add_argument("--profile", default="long_delay", help="informational")
+    parser.add_argument(
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
+    )
     parser.add_argument(
         "--partition", default=None, help="materialize only this day (YYYY-MM-DD)"
     )
     args = parser.parse_args(argv)
 
+    configure(args.profile)
     apply_ddl()
     connect()  # fail early if the serving layer is down
     instance = DagsterInstance.ephemeral()

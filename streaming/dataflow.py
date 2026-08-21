@@ -207,13 +207,19 @@ def main(argv: list[str] | None = None) -> None:
         help="dump this stage's terminal Prometheus registry to a textfile "
         "(promtool-fixture provenance; see make metrics-capture)",
     )
+    parser.add_argument(
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
+    )
     args = parser.parse_args(argv)
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
     # Imported here, not at module top: the offline oracle suites import this
     # module and must not pay for (or depend on) the Dagster stack.
+    from lake.iceberg_catalog import configure
     from orchestration.load import materialize_load
+
+    configure(args.profile)
 
     run = run_engine(broker)
     days = land_run(run)
