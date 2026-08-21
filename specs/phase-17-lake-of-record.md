@@ -1,4 +1,4 @@
-# Phase 17 — Lake of record
+# Phase 17 — Lake of record (PROPOSED)
 
 Contract for the `phase-17-lake-of-record` branch. Source: post-plan extension — **not**
 in the original `docs/PHASES.md` plan. Origin: the Phase-15 architecture review

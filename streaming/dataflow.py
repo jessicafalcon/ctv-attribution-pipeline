@@ -8,7 +8,7 @@ Teaching notes:
   event-time watermark (`max(event_time) − allowed_lateness`) reaches its
   `event_time`, and exposures are evicted past `event_time + hot_window`. This is
   windowing **on the batch drain** — the engine stays batch (no continuous Kafka
-  follow; that is a Phase-17+ framework decision — ARCHITECTURE §8, DECISIONS
+  follow; that is a Phase-18+ framework decision — ARCHITECTURE §8, DECISIONS
   Phase 5/16).
 - **Why no stream framework.** Until Phase 16 this module wrapped the same pass
   in a Bytewax dataflow fed from a bounded `TestingSource`; the framework only

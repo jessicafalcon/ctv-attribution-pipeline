@@ -132,8 +132,12 @@ def test_read_current_tiebreak_on_equal_processed_at_is_path() -> None:
     )
     land_attributed([rec])
     land_attributed([hot])
-    (current,) = read_current()
-    assert current.path == "reconciled"
+    # The mutant (no `path` tiebreak) is NONDETERMINISTIC — DuckDB's scan order
+    # varies run to run, so a single read may pass by luck. Read N times and
+    # require every read to agree and be the reconciled row (review gate; a
+    # fixed seed is moot here — nothing in our code is random).
+    picks = {read_current()[0].path for _ in range(20)}
+    assert picks == {"reconciled"}, picks
 
 
 def test_day_filter_is_a_prunable_predicate() -> None:
@@ -159,6 +163,14 @@ def test_day_filter_is_a_prunable_predicate() -> None:
     (line,) = [ln for ln in plan.splitlines() if "Total Files Read" in ln]
     assert "Total Files Read: 1" in line, line
     assert [r.conversion_id for r in read_current(days=["2026-08-02"])] == ["c-1"]
+    # … and read_current's OWN query prunes too (not just the helper): explain the
+    # exact SQL + params it issues.
+    from lake.read_attributed import current_query
+
+    sql, params = current_query(["2026-08-02"])
+    plan = con.execute("explain analyze " + sql, params).fetchall()[0][1]
+    (line,) = [ln for ln in plan.splitlines() if "Total Files Read" in ln]
+    assert "Total Files Read: 1" in line, line
 
 
 def test_a_pre_phase_17_ambiguous_row_is_refused_before_the_model(tmp_path) -> None:
@@ -204,3 +216,17 @@ def test_a_lake_under_another_layout_is_refused_not_respecced() -> None:
     )
     with pytest.raises(cat.LakeLayoutError, match="make lake-reset"):
         cat.ensure_exposures()
+
+
+def test_a_lake_with_another_bucket_count_is_refused(monkeypatch) -> None:
+    # Same layout, different recorded N: the bucket-count branch of the guard.
+    catalog = cat.connect_catalog()
+    catalog.create_namespace_if_not_exists(cat.NAMESPACE)
+    catalog.create_table(
+        cat.ATTRIBUTED_TABLE,
+        schema=cat.ATTRIBUTED_SCHEMA,
+        partition_spec=cat._ATTRIBUTED_SPEC,
+        properties={cat.BUCKET_PROPERTY: "4"},
+    )
+    with pytest.raises(cat.LakeLayoutError, match="ctv.bucket_count='4'"):
+        cat.ensure_attributed()

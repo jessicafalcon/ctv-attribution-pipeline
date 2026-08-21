@@ -51,7 +51,8 @@ def _profile_tokens(line: str) -> set[str]:
 def _isolated_live_targets() -> list[str]:
     """The clean-stack targets, discovered from the Makefile — a new one is
     covered by construction, not by remembering to list it here."""
-    targets = re.findall(r"^(test-int-[a-z-]+):", MAKEFILE.read_text(), re.M)
+    # `:` then end/tab/newline — not the `target: PROFILE = p` pin lines
+    targets = re.findall(r"^(test-int-[a-z-]+):\s*$", MAKEFILE.read_text(), re.M)
     assert targets, "no test-int-* targets found"
     return targets
 

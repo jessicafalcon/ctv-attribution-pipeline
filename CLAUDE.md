@@ -318,7 +318,7 @@ AI sits at the edge; the pipeline is deterministic.
   anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit,
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
-- Prometheus metric names prefixed by stage: producer_, resolve_, engine_,
+- Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
   reconcile_, agent_.
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
@@ -387,7 +387,7 @@ standard way over the clever way.
   developer has approved the review verdicts (see review gate above).
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
-- CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
+- CI (GitHub Actions) runs `make lint`, `make test`, and (on PRs and pushes to main)
   `make up && make test-alerts && make lake-reset CONFIRM=yes && make seed
   PROFILE=tiny && make run-hot && make test-int && make test-int-long-delay &&
   make bench` (hot-path oracles on tiny; reconciliation proven on its own

@@ -1232,6 +1232,43 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Review gate, round 2 (security + code + coherence + functionality, second
+  pass).** (1) `--profile` OWNS the lake root: every entry point binds
+  `data/lake/<profile>` through `lake.iceberg_catalog.configure`; there is no
+  default root (an unset default produced a profile-mixed lake at `data/lake/`
+  that `lake-reset` refuses to touch — the default was the bug), `LAKE_ROOT` is
+  test-only (tmp fixtures; an entry point refuses it outside pytest), and
+  `lake_days()` checks `catalog_exists()` before any `ensure_*` so asking never
+  creates an empty lake. `tests/integration/test_context.py` binds the
+  shared_ip_spike lake (it reconciles the STACK's lake to pin post numbers — a
+  tmp lake would hold no candidates; reported as a deviation from "tmp fixture").
+  (2) `make lake-reset` validates PROFILE as DATA in the shell (`case`, via a
+  target-specific `export`, never make-interpolated into the recipe): a PROFILE
+  of `x" ; touch pwned ; echo "` used to run its payload before the refusal — a
+  real hole, closed and pinned (dry-run: the `case` is the first command and the
+  text appears nowhere; sandbox: nothing runs). Residual, stated: an
+  environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
+  `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
+  single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
+  (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
+  exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
+  `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model
+  is built — the first cut checked after construction, where the validator fired
+  first and made the guard unreachable (pinned with a pyarrow-written stale
+  row). (5) `orchestration/` was four near-identical headless runners with an
+  "informational" `--profile` each — the junk-drawer symptom the audit named —
+  and is now one CLI, `orchestration/run.py` (`load | reconcile | replay |
+  maintain`, `--profile` required, one `_materialize` helper); behaviour
+  unchanged, the DONE command is the proof. (6) "Clean stack = two commands"
+  CONFIRMS the lake-as-record decision rather than weakening it: the lake is
+  durable state that outlives compose volumes — that is the point; folding it
+  into `make down` would make the record as ephemeral as a volume. The README
+  says so in one sentence (Phase 19 makes it the first-screen honesty line). (7)
+  The continuous-follow framework label is "Phase 18+" everywhere (was a mix of
+  17+/18+): Phase 18's spec does not decide it either; the label means "after
+  18". (8) Phase 18 gets its own gate for the loader-owned dirty set and a
+  corrected DONE command — both on the BACKLOG amendment row, so they are in the
+  spec before the branch opens.
 - **Review-gate minors, batched.** `read_current` breaks an equal-`processed_at`
   tie by `path` (total order, never file order); the tz test uses `monkeypatch`,
   not `os.environ`; Dagster control flow raises instead of `assert` (stripped

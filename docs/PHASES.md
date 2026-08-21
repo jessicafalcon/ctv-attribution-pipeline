@@ -316,7 +316,7 @@ passes against the once-re-frozen tiny golden and re-pinned `tests/pins.py` (tin
 and medium equal the pre-Phase-16 hot numbers; shared_ip_spike post-reconcile 69/80
 == the old hot reduce). Spec: `specs/phase-16-simplify-core.md`.
 
-## Phase 17 — Lake of record
+## Phase 17 — Lake of record (PROPOSED)
 
 **Goal.** Flip the arrow: the Iceberg lake becomes the system of record and
 ClickHouse a replayable serving projection, with bucket-aligned reconciliation.

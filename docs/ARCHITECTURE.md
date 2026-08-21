@@ -420,7 +420,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 
 | Capability | Where the project delivers it |
 |---|---|
-| Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 17+; SCALING.md Flink mapping) |
+| Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 18+; SCALING.md Flink mapping) |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; the Iceberg lake is the system of record (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(household_id)`), ClickHouse a derived projection loaded by Dagster per touched day, reconciliation a bucket-aligned DuckDB-over-Iceberg join, replay from the lake with no Kafka (Phase 17). Object store / REST catalog / Spark-Trino compute are the SCALING port |
 | OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
@@ -487,7 +487,7 @@ handled.*
   `conversion_id` is present when `one_row_per_conversion` collapses it
   (DECISIONS Phase 3 (b)). Windowing (watermarks, allowed lateness, eviction)
   landed in Phase 5 **on the batch drain**; continuous Kafka follow and the
-  framework to run it on (Bytewax proper vs Flink) are a Phase-17+ decision — the
+  framework to run it on (Bytewax proper vs Flink) are a Phase-18+ decision — the
   two resolve BACKLOG rows re-defer on exactly that trigger.
 - **The seeded duplicate is timestamp-identical to its original, so batch dedup
   is a full seen-set, not TTL'd.** The duplicate injector re-appends the *same

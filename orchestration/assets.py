@@ -5,7 +5,7 @@ A Dagster software-defined asset = a data product Dagster tracks with lineage an
 partitions, so "load day D into ClickHouse" and "reconcile day D" become named,
 independently re-runnable, backfillable units instead of one opaque `make run`
 subprocess. Determinism is preserved by construction: the assets call the SAME
-pure functions `make run` calls (`lake.load_serving`, `reconcile.recover`,
+pure functions `make run` calls (`lake.load_serving`, `reconcile.recover_day`,
 `reconcile.finalize`). Dagster run ids / wall-clock are non-deterministic and are
 NOT asserted on (DECISIONS Phase 12).
 

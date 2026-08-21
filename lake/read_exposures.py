@@ -30,6 +30,7 @@ from datetime import datetime
 import duckdb
 
 from lake.iceberg_catalog import ensure_exposures, metadata_path
+from lake.read_attributed import day_ranges_predicate
 from producer.models import Exposure
 
 _SELECT_COLS = (
@@ -44,7 +45,6 @@ def read_exposures_for_days(days: list[str]) -> list[Exposure]:
     as above, ordered by the exposures_landed sort key for a stable insert."""
     if not days:
         return []
-    from lake.read_attributed import day_ranges_predicate
 
     con = duckdb.connect()
     con.execute("load iceberg")

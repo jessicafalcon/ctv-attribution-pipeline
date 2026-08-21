@@ -312,7 +312,11 @@ test-int-agent:
 # serving rows == the direct-write oracle's rows; reconcile equivalence
 # (ClickHouse-read exposures == the bucket-aligned lake pass, byte-identical); the
 # Dagster-orchestrated pass reproduces the recovery; and an ACCUMULATED lake (≥3
-# appends) loads and reconciles byte-identically. No API tokens.
+# appends) loads and reconciles byte-identically. No API tokens. Afterwards the
+# stack's ClickHouse holds the tmp lake's reconciled rows while
+# data/lake/long_delay holds hot rows only — divergent by design; run
+# `make lake-reset PROFILE=long_delay CONFIRM=yes && make run PROFILE=long_delay`
+# before a `make replay-serving PROFILE=long_delay`.
 test-int-lakehouse: PROFILE = long_delay
 test-int-lakehouse:
 	$(MAKE) down

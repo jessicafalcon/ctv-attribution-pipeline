@@ -20,7 +20,7 @@ partition counts but not the structure.
   resolves conversions in-process against the compacted device graph, and runs an
   arrival-ordered, watermark-gated, evicting pass (ARCHITECTURE §8). No stream
   framework: the Bytewax wrapper was removed in Phase 16 because it only regrouped
-  lists; the framework for continuous follow (Bytewax proper vs Flink) is a Phase-17+
+  lists; the framework for continuous follow (Bytewax proper vs Flink) is a Phase-18+
   choice and the mapping table below is the port target. Windowing, watermarks,
   allowed-lateness, dedup, and eviction are all real, but on the drain.
 - **Ambiguous shared-IP conversions are deferred, not guessed** (Phase 16): the hot
@@ -153,7 +153,7 @@ tables, and never changed on a populated lake — a new N means a new lake.
   engine is a plain-Python batch attributor (Phase 16); at 500k/sec the mature choice
   is Flink: a battle-tested RocksDB state backend, incremental checkpointing,
   exactly-once, and operational tooling (Bytewax proper is the Python-first
-  alternative for the 50k tier — the Phase-17+ decision). The construct mapping is 1:1
+  alternative for the 50k tier — the Phase-18+ decision). The construct mapping is 1:1
   (below), so this is a port, not a redesign.
 - **ClickHouse becomes a cluster.** ReplicatedReplacingMergeTree, sharded by a
   household hash (keeps a conversion's corrections on one shard) or by `campaign_id`
@@ -236,5 +236,5 @@ sized to the real duplicate-injector / upstream re-send delay. This is also wher
 seeded fixture stops being a faithful proxy: the fixture's duplicate is
 **timestamp-identical** to its original (same `event_time` and `ingest_time`), so a
 real deployment with genuinely-later re-send timestamps is needed to exercise TTL
-sizing. Continuous follow and its framework are a Phase-17+ decision; the two resolve
+sizing. Continuous follow and its framework are a Phase-18+ decision; the two resolve
 BACKLOG rows re-defer on the same trigger.

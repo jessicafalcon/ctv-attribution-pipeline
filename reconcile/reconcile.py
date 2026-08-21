@@ -2,11 +2,11 @@
 
 The hot engine keeps only a 7-day window, so a conversion whose causing exposure
 is more than 7 days earlier in event-time is emitted unattributed (its exposure
-was evicted before the conversion released). That exposure still lives in
-`exposures_landed` (landed regardless of hot eviction), so a periodic batch job
-recovers the conversion by re-running the SAME last-touch decision over the long
-(90-day) window — closing the long-window tail without keeping 90 days of engine
-state.
+was evicted before the conversion released). That exposure still lives in the
+lake's `raw.exposures` (landed regardless of hot eviction; `exposures_landed` is
+the ClickHouse copy loaded from it), so a periodic batch job recovers the
+conversion by re-running the SAME last-touch decision over the long (90-day)
+window — closing the long-window tail without keeping 90 days of engine state.
 
 Reuses `streaming.attribute.last_touch` (the exact leaf the hot engine uses) at
 a 90d window, so hot and reconciled decisions cannot diverge. It only rewrites

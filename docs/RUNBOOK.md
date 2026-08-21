@@ -227,8 +227,8 @@ content is offset-invariant.
 
 **Would catch it next time.** [`tests/test_tz_invariance.py`](../tests/test_tz_invariance.py)
 runs the reconcile write path (candidates shaped exactly as the naive-UTC
-read-back → `reconcile` → land → lake read → loader values) once under
-`TZ=UTC` and once under a non-UTC zone (`time.tzset()`), and asserts the
+read-back → `reconcile` → land → lake read → loader values) under `TZ=UTC` and
+under two non-UTC zones (`America/Denver`, `Asia/Kolkata`; `time.tzset()`), and asserts the
 serialized rows are byte-identical and every datetime handed to the client is
 tz-aware UTC. **No alert covers a recurrence**: a uniform shift keeps every
 campaign-grain number and every alert rule exactly where it was.
@@ -263,7 +263,7 @@ exercised here:
 
 - **Continuous unbounded Kafka follow** — the engine does not run as a daemon
   tailing the topics; the move to continuous follow, and the framework to run it on
-  (Bytewax proper vs Flink), is a Phase-17+ decision.
+  (Bytewax proper vs Flink), is a Phase-18+ decision.
 - **Spill-to-disk / checkpointed state** — the whole topic is held in memory on a
   single partition; there is no RocksDB-style state backend.
 - **TTL'd dedup** — dedup is a full in-memory seen-set, not a windowed/TTL'd one.

@@ -65,6 +65,14 @@ def _row(cid: str, event: datetime, hh: str = "h-1", **over) -> AttributedConver
     return AttributedConversion(**{**base, **over})
 
 
+def test_materialize_load_of_no_days_touches_nothing(monkeypatch) -> None:
+    # The empty set short-circuits before any Dagster instance exists.
+    import orchestration.run as run
+
+    monkeypatch.setattr(run, "_materialize", lambda *a, **k: pytest.fail("ran"))
+    assert run.materialize_load(set()) == {"exposures": 0, "attributed": 0}
+
+
 def test_land_returns_the_event_time_days_it_wrote() -> None:
     assert land([_exp("e-1", T), _exp("e-2", T + timedelta(days=2))]) == {
         "2026-08-10",

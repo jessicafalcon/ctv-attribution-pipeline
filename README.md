@@ -4,7 +4,10 @@
 
 *This README is the living design doc: it describes `main` as of its last edit.
 Dated facts live in `docs/RESULTS.md` and the per-phase history
-(`docs/PHASES.md`, `DECISIONS.md`).*
+(`docs/PHASES.md`, `DECISIONS.md`). Two state stores: the Iceberg lake under
+`data/lake/<profile>/` is the record and outlives `make down`; ClickHouse is
+derived from it — so "clean state" is `make down && make lake-reset`, two
+commands, on purpose.*
 
 The ad is seen on a TV; the conversion happens on a phone. This pipeline joins those
 two separately-keyed event streams across a household/device graph, inside a time
@@ -313,7 +316,7 @@ not speculative code.
   (the Bytewax wrapper was removed in Phase 16 — it only regrouped lists). Windowing,
   watermarks, and eviction are all real, but on the drain. Moving to an unbounded
   continuous follow — and choosing the framework for it, Bytewax proper vs Flink — is
-  a Phase-17+ decision, and it is the trigger for the next two items.
+  a Phase-18+ decision, and it is the trigger for the next two items.
 - **TTL'd dedup state.** Batch dedup is a full seen-set, correct because the whole
   stream is in memory. Under continuous follow an unbounded seen-set is a memory leak;
   it becomes TTL'd state keyed on `event_time + max_resend_delay`. The seeded
