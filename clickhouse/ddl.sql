@@ -23,10 +23,19 @@ create table if not exists attributed_conversions
     assists         Array(String),
     attributed      UInt8,
     path            String,
-    processed_at    DateTime64(3, 'UTC')
+    processed_at    DateTime64(3, 'UTC'),
+    reason          Nullable(String)
 )
 engine = ReplacingMergeTree(processed_at)
 order by conversion_id;
+
+-- Phase 16 additive migration for volumes created before `reason` existed
+-- (idempotent: no-op on a fresh table, which already has the column above).
+-- reason: why a row is unattributed — 'ambiguous_ip' (shared-IP conversion the
+-- hot path refuses to guess) or 'state_miss' (no in-window exposure); NULL when
+-- attributed. An explicit contract for reconciliation / the agent / later
+-- phases instead of re-deriving it from attributed=0 and candidate_count.
+alter table attributed_conversions add column if not exists reason Nullable(String);
 
 -- Raw exposures, for Phase-6 reconciliation lookups and the Phase-7 naive
 -- benchmark. ReplacingMergeTree (not plain MergeTree) so re-landing on a replay

@@ -69,7 +69,7 @@ RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
 
 _CANDIDATE_COLS = (
     "conversion_id, event_time, ingest_time, device_id, ip, conversion_type, "
-    "revenue, order_id, household_id, resolution, ambiguous, candidate_count"
+    "revenue, order_id, household_id, resolution, ambiguous, candidate_count, reason"
 )
 
 
@@ -157,12 +157,20 @@ def reconcile(
 
 def _read_candidates(client: Client) -> list[ResolvedConversion]:
     """Hot-unattributed rows only (attributed=0 AND path='hot') from FINAL,
-    reconstructed as ResolvedConversion — both state-misses and ambiguous_ip
-    placeholders (`candidate_count > 1`). Never reads the accuracy side file."""
+    reconstructed as ResolvedConversion — both `reason` values, state_miss and
+    ambiguous_ip. The `reason` column is the explicit contract; it is asserted to
+    agree with `candidate_count` (a mismatch would mean a writer bypassed the
+    engine's `_attributed`). Never reads the accuracy side file."""
     rows = client.query(
         f"select {_CANDIDATE_COLS} from attributed_conversions final "
         "where attributed = 0 and path = 'hot' order by conversion_id"
     ).result_rows
+    for r in rows:
+        expected = "ambiguous_ip" if r[11] > 1 else "state_miss"
+        if r[12] != expected:
+            raise ValueError(
+                f"{r[0]}: reason={r[12]!r} disagrees with candidate_count={r[11]}"
+            )
     return [
         ResolvedConversion(
             conversion_id=r[0],

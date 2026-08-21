@@ -56,6 +56,13 @@ def test_attributed_counts_pinned() -> None:
     ambiguous = [r for r in rows if r.ambiguous]
     assert len(ambiguous) == 5
     assert all(not r.attributed and r.candidate_count > 1 for r in ambiguous)
+    from collections import Counter
+
+    assert Counter(r.reason for r in rows) == {
+        None: 47,
+        "ambiguous_ip": 5,
+        "state_miss": 3,
+    }
 
 
 def test_every_attributed_exposure_is_real_and_not_self_assisted() -> None:

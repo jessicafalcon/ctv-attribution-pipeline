@@ -7,7 +7,7 @@ extra would pull extra dependencies for one POST per topic (see DECISIONS.md).
 Every subject is set to compatibility NONE before its schema is posted. The
 registry's global default is BACKWARD; under it, re-registering a *changed*
 model during dev (add/rename a field) is rejected with 409 and fails the seed
-or the resolve stage. This is single-writer dev infra with no schema-evolution
+or the engine. This is single-writer dev infra with no schema-evolution
 story yet, so per-subject NONE lets a model change re-register freely. Tighten
 per subject when schema evolution becomes a v1+ concern (ARCHITECTURE out-of-
 scope). Verified against Redpanda: PUT /config/<subject> works before the

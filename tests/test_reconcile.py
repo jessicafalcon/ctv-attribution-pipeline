@@ -215,6 +215,7 @@ def test_ambiguous_conversion_is_credited_to_the_most_recent_household():
     (row,) = reconcile(expanded, exposures, LONG_WINDOW, at)
     assert (row.household_id, row.exposure_id, row.path) == ("H2", "e-2", "reconciled")
     assert row.processed_at == at and row.ambiguous and row.candidate_count == 2
+    assert row.reason is None  # credited → the deferral reason is cleared
     # No candidate household has an exposure → not recovered (idempotent no-op).
     assert reconcile(expanded, {}, LONG_WINDOW, at) == []
 

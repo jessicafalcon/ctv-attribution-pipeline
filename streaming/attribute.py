@@ -287,6 +287,10 @@ def _attributed(
     *,
     attributed: bool,
 ) -> AttributedConversion:
+    if attributed:
+        reason = None
+    else:
+        reason = "ambiguous_ip" if conv.candidate_count > 1 else "state_miss"
     return AttributedConversion(
         # ResolvedConversion fields only: a reconciliation candidate may arrive as
         # a hot AttributedConversion row (a subclass) — its old decision columns
@@ -297,4 +301,5 @@ def _attributed(
         attributed=attributed,
         path="hot",
         processed_at=conv.ingest_time,  # event-derived RMT version (DECISIONS Phase 3)
+        reason=reason,
     )

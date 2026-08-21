@@ -68,6 +68,7 @@ def test_last_touch_credits_latest_exposure_rest_assist() -> None:
     ]
     (c,) = attribute_household(exps, [_res("c-1", "h", T)], HOT_WINDOW)
     assert c.row.attributed and c.row.exposure_id == "e-3"
+    assert c.row.reason is None
     assert c.row.assists == ["e-1", "e-2"]
     assert c.last_touch_time == T - H
 
@@ -93,7 +94,7 @@ def test_window_boundaries_inclusive_lower_and_conversion() -> None:
 
 def test_unattributed_when_no_eligible_exposure() -> None:
     (c,) = attribute_household([], [_res("c-1", "h", T)], HOT_WINDOW)
-    assert c.row.attributed is False
+    assert c.row.attributed is False and c.row.reason == "state_miss"
     assert c.row.exposure_id is None and c.row.assists == []
     assert c.last_touch_time is None
 
@@ -133,7 +134,8 @@ def test_ambiguous_conversion_is_deferred_not_guessed() -> None:
     (row,) = attribute(exps, fanout)
     assert row.attributed is False and row.exposure_id is None
     assert row.household_id == "h-a"  # placeholder: lowest household_id
-    assert row.ambiguous and row.candidate_count == 2  # reason: ambiguous_ip
+    assert row.ambiguous and row.candidate_count == 2
+    assert row.reason == "ambiguous_ip"
     assert row.path == "hot" and row.processed_at == T
 
 

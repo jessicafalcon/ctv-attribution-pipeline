@@ -50,11 +50,11 @@ class Conversion(StrictModel):
 
 
 class ResolvedConversion(Conversion):
-    """A conversion mapped to a household. Topic: conversions_resolved, keyed
-    by household_id. resolution=device is a device-graph hit; resolution=ip is
-    the IP fallback. ambiguous/candidate_count flag shared-IP fan-out (one
-    record per candidate household). Carries every Conversion field so the
-    engine can attribute without re-reading conversions."""
+    """A conversion mapped to a household — the in-process resolve step's
+    output (no topic since Phase 16). resolution=device is a device-graph hit;
+    resolution=ip is the IP fallback. ambiguous/candidate_count flag shared-IP
+    fan-out (one record per candidate household). Carries every Conversion
+    field so the engine can attribute without re-reading conversions."""
 
     household_id: str
     resolution: Literal["device", "ip"]
@@ -69,13 +69,17 @@ class AttributedConversion(ResolvedConversion):
     unattributed); `assists` are the other in-window exposures in the household;
     `path` is `hot` for the streaming engine, `reconciled` for the Phase-6
     long-window job; `processed_at` is the RMT version, set to the conversion's
-    `ingest_time` (event-derived, deterministic — DECISIONS Phase 3)."""
+    `ingest_time` (event-derived, deterministic — DECISIONS Phase 3). `reason`
+    says WHY a row is unattributed (Phase 16): `ambiguous_ip` — a shared-IP
+    conversion the hot path refuses to guess (candidate_count > 1); `state_miss`
+    — no in-window exposure in a certain household. Null when attributed."""
 
     exposure_id: str | None
     assists: list[str]
     attributed: bool
     path: Literal["hot", "reconciled"]
     processed_at: datetime
+    reason: Literal["ambiguous_ip", "state_miss"] | None = None
 
 
 class Device(StrictModel):
