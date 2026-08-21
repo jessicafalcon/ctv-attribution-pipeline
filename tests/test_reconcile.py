@@ -19,6 +19,7 @@ from producer.models import Exposure, Household, ResolvedConversion
 from reconcile.reconcile import (
     LONG_WINDOW,
     RECONCILE_DELTA,
+    _read_candidates,
     expand_candidates,
     pick_household,
     reconcile,
@@ -158,7 +159,7 @@ def _shared_ip_graph() -> GraphIndex:
     )
 
 
-def test_pick_household_keeps_most_recent_last_touch_then_exposure_then_hh():
+def test_pick_household_keeps_most_recent_last_touch_then_exposure_then_hh() -> None:
     conv = _ambiguous("c-9", "H1", day=10, ip="100.64.0.1")
     older = last_touch([_exposure("e-a", "H1", day=5)], conv, LONG_WINDOW)
     newer = last_touch(
@@ -176,7 +177,7 @@ def test_pick_household_keeps_most_recent_last_touch_then_exposure_then_hh():
     assert pick_household([missed]) is None
 
 
-def test_expand_candidates_re_enumerates_owners_from_the_graph():
+def test_expand_candidates_re_enumerates_owners_from_the_graph() -> None:
     graph = _shared_ip_graph()
     placeholder = _ambiguous("c-1", "H1", day=10, ip="100.64.0.1")  # lowest hh
     plain = _candidate("c-2", "H3", day=10)
@@ -193,7 +194,7 @@ def test_expand_candidates_re_enumerates_owners_from_the_graph():
     )
 
 
-def test_reconcile_refuses_an_unexpanded_ambiguous_candidate():
+def test_reconcile_refuses_an_unexpanded_ambiguous_candidate() -> None:
     with pytest.raises(ValueError, match="not expanded"):
         reconcile(
             [_ambiguous("c-1", "H1", day=10, ip="100.64.0.1")],
@@ -203,7 +204,7 @@ def test_reconcile_refuses_an_unexpanded_ambiguous_candidate():
         )
 
 
-def test_ambiguous_conversion_is_credited_to_the_most_recent_household():
+def test_ambiguous_conversion_is_credited_to_the_most_recent_household() -> None:
     graph = _shared_ip_graph()
     at = reconciled_at_for(T0 + timedelta(days=30))
     expanded = expand_candidates(
@@ -221,12 +222,14 @@ def test_ambiguous_conversion_is_credited_to_the_most_recent_household():
     assert reconcile(expanded, {}, LONG_WINDOW, at) == []
 
 
-def test_shared_ip_spike_post_reconcile_is_at_least_as_correct_as_the_old_hot_guess():
+def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     """The spec's central constraint on the fault profile: hot wrong-household is
     0 by construction; after the reconcile pass the shared-IP conversions are
-    credited to the correct household at least as often as the old hot reduce
-    managed (69/80). Offline: generate → resolve → dedup → hot oracle → expand →
-    reconcile over the same exposures, scored against truth."""
+    credited to the correct household exactly as often as the old hot reduce
+    managed (69/80). Offline: generate → resolve → dedup → hot ORACLE (`attribute`,
+    non-evicting) → expand → reconcile over the same exposures, scored against
+    truth. tests/test_post_reconcile_pins.py asserts the same pins through the
+    EVICTING engine (`run_attribution`) — two drivers, one answer, on purpose."""
     p = load_profile("shared_ip_spike")
     s = generate(p, p.seed)
     graph = GraphIndex.from_households(s.graph.households)
@@ -299,12 +302,10 @@ def _db_row(cid: str, candidate_count: int, reason):
     )  # fmt: skip
 
 
-def test_read_candidates_accepts_null_reason_from_pre_migration_rows():
+def test_read_candidates_accepts_null_reason_from_pre_migration_rows() -> None:
     # Rows written before the Phase-16 additive migration carry NULL reason; the
     # candidate kind is still derivable from candidate_count (a replay input, not a
     # hypothetical — ReplacingMergeTree keeps them until the next engine pass).
-    from reconcile.reconcile import _read_candidates
-
     rows = _read_candidates(
         _StubClient([_db_row("c-1", 1, None), _db_row("c-2", 3, None)])
     )
@@ -314,8 +315,6 @@ def test_read_candidates_accepts_null_reason_from_pre_migration_rows():
     ]
 
 
-def test_read_candidates_refuses_a_reason_that_disagrees_with_candidate_count():
-    from reconcile.reconcile import _read_candidates
-
+def test_read_candidates_refuses_a_reason_that_disagrees_with_candidate_count() -> None:
     with pytest.raises(ValueError, match="disagrees with candidate_count=3"):
         _read_candidates(_StubClient([_db_row("c-9", 3, "state_miss")]))

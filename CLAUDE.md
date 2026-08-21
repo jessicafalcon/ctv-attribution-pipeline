@@ -396,7 +396,7 @@ never auto-fixed, ignored, or committed around.
 ## Current status
 
 All phases **0–15 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
-Phases 12–15 are post-plan extensions (not in the original PHASES.md 0–11).
+Phases 12–16 are post-plan extensions (not in the original PHASES.md 0–11).
 Phase 16 (simplify the core) is on branch `phase-16-simplify-core`, in review.
 Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
 `BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is

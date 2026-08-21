@@ -155,7 +155,11 @@ One entry per non-obvious choice. Newest last.
   (ignoring group offsets), so residual/duplicate rows collapse to the same
   bytes and the distinct set equals the golden fixture regardless of history.
 - **Ambiguous shared-IP reconciliation (engine, conversion_id-keyed
-  reduction).** An ambiguous shared-IP conversion fans out in the resolve
+  reduction).** (Superseded by Phase 16: the hot reduce is deleted — an ambiguous
+  conversion is emitted unattributed, `reason='ambiguous_ip'`, and the
+  most-recent-exposure rule below now lives in `reconcile.pick_household`;
+  DECISIONS Phase 16 is authoritative. Kept as the record of why the rule exists.)
+  An ambiguous shared-IP conversion fans out in the resolve
   stage to one `ResolvedConversion` per candidate household, each keyed by
   `household_id` (Phase 2). The engine's join is also keyed by `household_id`,
   so it CANNOT compare exposure recency across candidates partition-locally.
@@ -212,6 +216,9 @@ One entry per non-obvious choice. Newest last.
     resend duplicates). This holds because the batch drain sees all candidate
     rows for a `conversion_id` together; continuous mode does not, without
     windowing (Phase 5). Pairs with the existing continuous-mode BACKLOG rows.
+    (Superseded in mechanism by Phase 16: the one-row-per-key guarantee now
+    comes from `one_row_per_conversion` collapsing the fan-out BEFORE the join;
+    the invariant and its batch-drain dependency are unchanged.)
 
 - **`exposures_landed` is ReplacingMergeTree, not plain MergeTree
   (replay-idempotency).** A plain MergeTree never dedups, so re-running the
@@ -453,6 +460,11 @@ One entry per non-obvious choice. Newest last.
   conversion_id), so reconciliation does NOT re-fan-out (ARCHITECTURE §3.3 reads
   "by household"). Rejected a standalone reconcile matcher (a second implementation
   of last-touch that could drift from the leaf's tie-breaks).
+  (Superseded in part by Phase 16: the shared leaf is now `last_touch` — the
+  household-local, ambiguity-blind half of the old `attribute_household` — and
+  ambiguous candidates ARE re-expanded from the device graph (`expand_candidates`)
+  and settled by `pick_household`; the "one implementation" invariant still holds,
+  the "does NOT re-fan-out" clause does not. DECISIONS Phase 16 is authoritative.)
 
 - **Candidates are hot-*unattributed* rows only: `attributed = 0 AND path =
   'hot'`.** Reconciliation must never re-open a hot-*attributed* row — over a 90d
@@ -1179,6 +1191,7 @@ One entry per non-obvious choice. Newest last.
   possible after `make run` — FINAL collapses the hot rows under the reconciled
   versions — so the target stops at the hot path and `test_context.py` calls
   `reconcile.run()` between its two assertions. `test-int-agent` keeps `make run`.
+
 ## Phase 15
 
 - **The runbook is a retrospective incident log by choice, not a forward playbook.**
@@ -1391,7 +1404,8 @@ One entry per non-obvious choice. Newest last.
     long_delay DB) — a guard that greenlights its own failure. A marker is unambiguous
     across the shared id space.
   - **Why a marker table, not a field in the sink:** the live stages
-    (`resolve.stage`/`streaming.dataflow`/`reconcile.reconcile`) do not take `--profile`
+    (`streaming.dataflow`/`reconcile.reconcile`; `resolve.stage` too, until Phase 16
+    folded it into the engine) do not take `--profile`
     — the engine reads from topics and never knows the profile name. Threading it in
     would touch the byte-identical path; a standalone `write_marker.py` step in the
     populate targets keeps the engine untouched.

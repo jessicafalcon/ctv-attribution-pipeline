@@ -18,7 +18,9 @@ ATTRIBUTED = Counter(
 )
 UNATTRIBUTED = Counter(
     "engine_conversions_unattributed_total",
-    "Conversions with no in-window exposure (reconciliation retries later).",
+    "Conversions emitted unattributed: no in-window exposure (state_miss) OR a "
+    "shared-IP conversion the hot path refuses to guess (ambiguous_ip, Phase 16 — "
+    "counted separately below). Reconciliation retries both.",
 )
 ASSISTS = Counter(
     "engine_assists_recorded_total",

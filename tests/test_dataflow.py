@@ -6,11 +6,11 @@ them). No ClickHouse."""
 
 from pathlib import Path
 
+from prometheus_client import REGISTRY
 from pydantic import BaseModel
 
 from producer.models import Exposure, ResolvedConversion
 from producer.serialize import canonical_bytes
-from streaming import metrics
 from streaming.attribute import attribute
 from streaming.dataflow import run_attribution
 
@@ -40,10 +40,15 @@ def test_ambiguous_deferred_counter_increments_by_tiny_shared_ip_set() -> None:
     # shared-IP conversions, exactly — and they are a subset of unattributed.
     exposures = _read("exposures.jsonl", Exposure)
     resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
-    metrics.AMBIGUOUS_DEFERRED._value.set(0)
-    metrics.UNATTRIBUTED._value.set(0)
+
+    def _sample(name: str) -> float:
+        # Public registry read (not the private `_value` API streaming/metrics.py
+        # avoids); counters are cumulative across the process, so compare deltas.
+        return REGISTRY.get_sample_value(name) or 0.0
+
+    deferred0 = _sample("engine_conversions_ambiguous_deferred_total")
+    unattributed0 = _sample("engine_conversions_unattributed_total")
     run_attribution(exposures, resolved)
-    assert metrics.AMBIGUOUS_DEFERRED._value.get() == 5
-    assert metrics.UNATTRIBUTED._value.get() == 8  # 5 deferred + 3 state-misses
-    metrics.AMBIGUOUS_DEFERRED._value.set(0)
-    metrics.UNATTRIBUTED._value.set(0)
+    assert _sample("engine_conversions_ambiguous_deferred_total") - deferred0 == 5
+    # 5 deferred + 3 state-misses
+    assert _sample("engine_conversions_unattributed_total") - unattributed0 == 8

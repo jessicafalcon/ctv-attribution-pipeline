@@ -215,10 +215,13 @@ Every fault profile plus the no-fault baseline, run 5× (30 live invocations), s
 > **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** The three
 > tables below were captured by `make agent-eval` (30 live invocations) before
 > Phase 16 deferred shared-IP conversions to reconciliation. Since then the
-> context a fault profile presents has moved in one place: profiles with
-> ambiguous conversions (`shared_ip_spike`: 25, `co_view_bug`: 1) now restate
-> after `make run` (the deferral landing), so their `max|Δroas|` is no longer
-> 0 — those two cells are blanked below rather than shown stale. Verdicts,
+> context a fault profile presents has moved in one place: three profiles carry
+> ambiguous conversions (`shared_ip_spike` 25, `late_burst` 1, `co_view_bug` 1)
+> that are now credited by the reconcile pass (the deferral landing).
+> `late_burst`'s one is a revenue-0 `site_visit`, so it cannot move any
+> campaign's ROAS and its 26.604 cell stands; the other two restate, so their
+> `max|Δroas|` is no longer 0 — those two cells are blanked below rather than
+> shown stale. Verdicts,
 > `ip_resolved_fraction` and `ambig` are not affected by construction, but the
 > catalog has not been re-validated live (API tokens). Re-run: BACKLOG 47.
 
@@ -303,14 +306,15 @@ Backfill over the candidate date range (`make reconcile-dagster PROFILE=long_del
 
 ```
 reconciled_conversions[2026-08-01] materialized
+reconciled_conversions[2026-08-02] materialized
+reconciled_conversions[2026-08-09] materialized
 reconciled_conversions[2026-08-19] materialized
-reconciled_conversions[2026-08-20] materialized
-reconciled_conversions[2026-08-21] materialized
-... (2026-08-22 … 2026-08-27, 2026-08-29 … 2026-08-31)
-reconcile-dagster: 13 day-partition(s) recovered + finalize
+... (2026-08-20 … 2026-08-27, 2026-08-29 … 2026-08-31)
+reconcile-dagster: 15 day-partition(s) recovered + finalize
 ```
 
-13 day-partitions cover all hot-miss candidate days; the union reproduces the full
+15 day-partitions cover all candidate days (13 before Phase 16; the 3 deferred
+shared-IP conversions add 2026-08-02 and 2026-08-09); the union reproduces the full
 recovery (recall 0.9733). Iceberg snapshot ids / commit times and Dagster run ids
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).

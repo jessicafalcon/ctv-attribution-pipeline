@@ -46,7 +46,8 @@ When invoked:
   never silent retry.
 - **Dependency allowlist.** Imports outside confluent-kafka,
   clickhouse-connect, pydantic, prometheus-client, anthropic, fastapi,
-  uvicorn, pyiceberg, pyarrow, duckdb, dagster, dagster-webserver, pytest,
+  uvicorn, pyiceberg (+ pyiceberg-core), pyarrow, duckdb, dagster,
+  dagster-webserver, pytest,
   ruff, pre-commit (and stdlib) are findings — new packages need explicit
   user approval first. Keep in lockstep with CLAUDE.md → Conventions.
 - **Fixtures are read-only.** After Phase 1, any diff touching

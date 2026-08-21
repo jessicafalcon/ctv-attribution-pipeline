@@ -12,6 +12,7 @@ Two assertions:
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -64,8 +65,6 @@ def test_engine_final_matches_expected_fixture() -> None:
     assert got == _expected_decisions()
     # The Phase-16 reason column round-trips: 47 credited (null), 3 state-misses,
     # 5 shared-IP deferrals — read back live, not only written.
-    from collections import Counter
-
     assert Counter(d[5] for d in got.values()) == {
         None: 47,
         "state_miss": 3,

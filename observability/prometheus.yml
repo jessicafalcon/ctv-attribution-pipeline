@@ -24,5 +24,6 @@ scrape_configs:
     static_configs:
       - targets: ["redpanda:9644"]
 
-  # Pipeline stages (producer_, resolve_, engine_, reconcile_, agent_)
-  # are added as they gain /metrics endpoints in later phases.
+  # Pipeline stages (producer_, engine_ — which also emits the in-process
+  # resolve_ series since Phase 16 — reconcile_, agent_) are added as they gain
+  # /metrics endpoints in later phases.

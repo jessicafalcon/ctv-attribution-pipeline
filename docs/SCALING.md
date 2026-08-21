@@ -64,9 +64,9 @@ scale-curve`, Phase 14):
 
 | exposures in window | structural state | bytes/exposure (measured) | `engine_join_state_current` (per-household) |
 |---|---|---|---|
-| 1,000 | 0.6 MB | 573 B | 38 |
-| 10,000 | 5.7 MB | 572 B | 50 |
-| 100,000 | 57.1 MB | 571 B | 40 |
+| 1,000 | 0.6 MB | 573 B | 54 |
+| 10,000 | 5.7 MB | 572 B | 43 |
+| 100,000 | 57.1 MB | 571 B | 41 |
 
 Occupancy (entries in window) scales linearly with the event count, and the per-exposure cost is flat across the curve — exactly the `exposure_rate × window × per-exposure-bytes` shape. `engine_join_state_current` is the Phase-7 per-household occupancy gauge (one household's retained count, shown beside the whole-engine total); it does not feed the extrapolation. A `tracemalloc` allocation peak is printed by `make scale-curve` as an independent cross-check but is allocation-nondeterministic, so it is deliberately not committed here.
 

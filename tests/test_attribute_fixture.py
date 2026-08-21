@@ -4,6 +4,7 @@ case or credit an ambiguous conversion hot. Re-frozen once in Phase 16 (the one
 sanctioned exception, DECISIONS Phase 16); read-only otherwise (mirrors
 tests/test_resolve_fixture.py)."""
 
+from collections import Counter
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -56,8 +57,6 @@ def test_attributed_counts_pinned() -> None:
     ambiguous = [r for r in rows if r.ambiguous]
     assert len(ambiguous) == 5
     assert all(not r.attributed and r.candidate_count > 1 for r in ambiguous)
-    from collections import Counter
-
     assert Counter(r.reason for r in rows) == {
         None: 47,
         "ambiguous_ip": 5,

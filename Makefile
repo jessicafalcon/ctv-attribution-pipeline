@@ -252,8 +252,10 @@ test-int-lakehouse:
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
 # validates syntax; `test rules` asserts each alert fires on long_delay's captured
-# numbers and stays silent on tiny's (observability/rules/tests/alerts_test.yml,
-# generated from make metrics-capture). Needs only the image, not the compose stack.
+# numbers and that on tiny's only RestatementMagnitude fires (the Phase-16 deferral
+# landing restates ROAS) while the other three stay silent
+# (observability/rules/tests/alerts_test.yml, generated from make metrics-capture).
+# Needs only the image, not the compose stack.
 test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
