@@ -16,6 +16,7 @@ inserts; async inserts are a SCALING lever, not built.
 """
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from itertools import batched
 
 from clickhouse_connect.driver.client import Client
@@ -32,11 +33,21 @@ ATTRIBUTED_COLS = list(AttributedConversion.model_fields)
 EXPOSURE_COLS = list(Exposure.model_fields)
 
 
+def _utc(dt: datetime) -> datetime:
+    """clickhouse-connect is asymmetric (ARCHITECTURE §8, Phase 17): it reads a
+    DateTime64(3,'UTC') column back as a NAIVE UTC wall-clock, but writes a naive
+    datetime as LOCAL wall-clock (→ a +6h shift on a MDT laptop, none in CI). The
+    lake readers hand back naive UTC by contract (DECISIONS Phase 12), so every
+    datetime is made tz-aware UTC here before it is inserted — the loader must
+    move rows, never change them."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
 def _attributed_values(r: AttributedConversion) -> list:
     return [
         r.conversion_id,
-        r.event_time,
-        r.ingest_time,
+        _utc(r.event_time),
+        _utc(r.ingest_time),
         r.device_id,
         r.ip,
         r.conversion_type,
@@ -50,7 +61,7 @@ def _attributed_values(r: AttributedConversion) -> list:
         r.assists,
         int(r.attributed),
         r.path,
-        r.processed_at,
+        _utc(r.processed_at),
         r.reason,
         r.candidate_households,
     ]
@@ -59,8 +70,8 @@ def _attributed_values(r: AttributedConversion) -> list:
 def _exposure_values(r: Exposure) -> list:
     return [
         r.exposure_id,
-        r.event_time,
-        r.ingest_time,
+        _utc(r.event_time),
+        _utc(r.ingest_time),
         r.campaign_id,
         r.household_id,
         r.ip,

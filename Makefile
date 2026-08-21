@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -30,9 +30,24 @@ setup:
 up:
 	docker compose up -d --wait
 
-# The ONLY sanctioned destructive path: removes containers AND volumes.
+# The first sanctioned destructive path: removes containers AND volumes. Does
+# NOT touch data/lake/ (the lake is the record; see lake-reset).
 down:
 	docker compose down -v
+
+# The second sanctioned destructive path (Phase 17, spec D9): delete this
+# PROFILE's lake under $(LAKE_ROOT). Prompts unless CONFIRM=yes is passed
+# explicitly. The clean-stack test-int-* targets pass it: a "clean stack" for a
+# profile means a clean lake too, since the lake outlives `make down` and the
+# serving tables are loaded from it (a hot-only proof would otherwise reload an
+# earlier reconcile pass's current rows).
+lake-reset:
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		printf 'lake-reset deletes %s (the lake of record for PROFILE=%s). Type yes to continue: ' "$(LAKE_ROOT)" "$(PROFILE)"; \
+		read ans; [ "$$ans" = "yes" ] || { echo "aborted"; exit 1; }; \
+	fi
+	rm -rf "$(LAKE_ROOT)"
+	@echo "lake-reset: removed $(LAKE_ROOT)"
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
@@ -47,8 +62,11 @@ resolve:
 # Phase 17: the lake is the record. One lake per PROFILE (profiles share
 # conversion_id space — the same isolation `make down` gives ClickHouse, without a
 # destructive step): engine and reconcile land under data/lake/<profile>/ and the
-# Dagster load reads it back. Override to point anywhere (tests use a tmp root).
-LAKE_ROOT ?= data/lake/$(PROFILE)
+# Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
+# its own PROFILE instead of inheriting the parent's exported value (the
+# test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
+# Override on the command line (make run LAKE_ROOT=...); tests use a tmp root.
+LAKE_ROOT = data/lake/$(PROFILE)
 export LAKE_ROOT
 
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
@@ -78,6 +96,22 @@ run-hot:
 # single day. Run after make run-hot.
 reconcile-dagster:
 	uv run python -m orchestration.run --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
+
+# Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
+# the rows of exposures_landed + attributed_conversions (TRUNCATE — destructive,
+# so CONFIRM=yes or the prompt), reloads every day the lake holds (hot AND
+# reconciled current rows), stamps eval_meta; `make eval` then reproduces the
+# pins. The backfill story: Kafka retention is hours, the lake is forever.
+replay-serving:
+	uv run python -m orchestration.replay --profile "$(PROFILE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
+	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
+
+# Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
+# than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7) and rewrite each day partition
+# that has accumulated more than one file per bucket into one file per bucket.
+# Not part of make run. Row content is unchanged (asserted offline).
+lake-maintain:
+	uv run python -m orchestration.maintenance --profile "$(PROFILE)"
 
 # Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
 # controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.
@@ -199,6 +233,7 @@ test-int:
 # proof is a hot-engine proof by design.
 test-int-medium:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=medium CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=medium
 	$(MAKE) run-hot PROFILE=medium
@@ -210,6 +245,7 @@ test-int-medium:
 # delta + restatement against ClickHouse FINAL.
 test-int-long-delay:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
@@ -224,6 +260,7 @@ test-int-long-delay:
 # populated context (report_snapshots exists once that pass has run).
 test-int-shared-ip:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run-hot PROFILE=shared_ip_spike
@@ -236,6 +273,7 @@ test-int-shared-ip:
 # with a mocked client (tests/test_loop.py); this proves the DB boundary live.
 test-int-agent:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run PROFILE=shared_ip_spike
@@ -251,6 +289,7 @@ test-int-agent:
 # reconciles byte-identically. No API tokens.
 test-int-lakehouse:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run-hot PROFILE=long_delay

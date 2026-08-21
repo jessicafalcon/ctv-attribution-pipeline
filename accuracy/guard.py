@@ -29,7 +29,7 @@ def assert_profile_marker(marker: str | None, profile: str) -> None:
     if marker is None:
         raise ProfileMismatchError(
             f"eval: no eval_meta profile marker in ClickHouse — run "
-            f"`make run PROFILE={profile}` (or run-hot / lake-land) first so the "
+            f"`make run PROFILE={profile}` (or run-hot / replay-serving) first so the "
             f"DB holds a profile to score against."
         )
     if marker != profile:

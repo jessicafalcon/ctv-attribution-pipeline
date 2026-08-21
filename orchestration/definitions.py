@@ -14,6 +14,7 @@ from orchestration.assets import (
     reconciled_conversions,
     reconciled_report,
 )
+from orchestration.maintenance import lake_maintenance
 
 defs = Definitions(
     assets=[
@@ -23,5 +24,6 @@ defs = Definitions(
         clickhouse_attributed_conversions,
         reconciled_conversions,
         reconciled_report,
-    ]
+    ],
+    jobs=[lake_maintenance],
 )

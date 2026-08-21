@@ -86,6 +86,24 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         markers = {
             t for ln in lines if "write_marker" in ln for t in _profile_tokens(ln)
         }
+        resets = {
+            t
+            for ln in lines
+            if re.search(r"\bmake lake-reset\b", ln) and "CONFIRM=yes" in ln
+            for t in _profile_tokens(ln)
+        }
         assert len(seeds) == 1, f"{target}: seed profiles {seeds}"
         assert populates == seeds, f"{target}: populate {populates} != seed {seeds}"
         assert markers == seeds, f"{target}: eval_meta marker {markers} != seed {seeds}"
+        # Phase 17: a clean stack is a clean lake — the target resets ITS profile's
+        # lake (explicit CONFIRM=yes), else run-hot would reload an older pass.
+        assert resets == seeds, f"{target}: lake-reset {resets} != seed {seeds}"
+
+
+def test_lake_reset_prompts_unless_confirmed_and_scopes_to_the_profile() -> None:
+    recipe = "\n".join(_dry_run("lake-reset"))
+    # `$(CONFIRM)` expands to "" in a dry run: the guard shape is what survives
+    assert "rm -rf" in recipe and '!= "yes" ]' in recipe and "read ans" in recipe
+    # per-profile root: the rm targets data/lake/<PROFILE>, never data/lake itself
+    assert re.search(r'rm -rf "data/lake/tiny"', recipe), recipe
+    assert 'rm -rf "data/lake"' not in recipe

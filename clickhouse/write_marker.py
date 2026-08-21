@@ -1,8 +1,8 @@
 """Write the eval-guard profile marker (BACKLOG 43).
 
-`make run`/`run-hot`/`lake-land` call this after the engine populates the serving
-tables, recording which profile the DB now holds in the single-row `eval_meta`
-table. `make eval` reads it back and refuses to score a mismatched profile
+`make run`/`run-hot`/`replay-serving` call this after the serving tables are
+loaded from the lake, recording which profile the DB now holds in the single-row
+`eval_meta` table. `make eval` reads it back and refuses to score a mismatched profile
 against these rows (see `accuracy/guard.py`). A separate process step, never the
 engine sink — the engine path stays byte-identical.
 """
