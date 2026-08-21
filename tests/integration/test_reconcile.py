@@ -24,6 +24,7 @@ from accuracy.score import score
 from clickhouse.client import connect, read_exposure_households
 from queries import restatement
 from reconcile import reconcile
+from tests.pins import LONG_DELAY_HOT, LONG_DELAY_POST
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 
@@ -84,9 +85,12 @@ def _score(credited: dict[str, tuple[str, str]]):
 # misses; reconciliation recovers the 29 caused (all to the correct household) and
 # leaves the 3 organics (no in-90d exposure) unmatched.
 _RECONCILED = 29
-_HOT_CREDITED, _HOT_CORRECT = 83, 44  # recall 44/75
-_POST_CREDITED, _POST_CORRECT = 112, 73  # recall 73/75
-_TRUTH_LINKS = 75
+_HOT_CREDITED, _HOT_CORRECT = LONG_DELAY_HOT.credited, LONG_DELAY_HOT.correct  # 44/75
+_POST_CREDITED, _POST_CORRECT = (
+    LONG_DELAY_POST.credited,
+    LONG_DELAY_POST.correct,
+)  # 73/75
+_TRUTH_LINKS = LONG_DELAY_HOT.truth
 
 
 def test_recovery_lifts_recall_and_writes_reconciled_rows() -> None:
@@ -110,6 +114,8 @@ def test_recovery_lifts_recall_and_writes_reconciled_rows() -> None:
         _POST_CORRECT,
         _TRUTH_LINKS,
     )
+    assert hot.recall == LONG_DELAY_HOT.recall  # 0.587 (44/75) — the docs pin
+    assert post.recall == LONG_DELAY_POST.recall  # 0.973 (73/75) — the docs pin
     assert post.recall > hot.recall
     assert post.caused_missed == 0  # every recoverable caused miss was recovered
 

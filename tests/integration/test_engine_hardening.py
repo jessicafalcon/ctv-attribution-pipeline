@@ -28,6 +28,7 @@ from clickhouse.client import (
 )
 from streaming import metrics
 from streaming.dataflow import run_engine
+from tests.pins import MEDIUM_HOT
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 
@@ -69,9 +70,13 @@ def test_medium_live_matches_oracle_evicts_and_dedups() -> None:
         read_exposure_households(client),
         "medium",
     )
-    assert rep.recall == 1.0 and rep.caused_wrong_household == 0
-    assert rep.precision == 92 / 130
-    assert (rep.credited, rep.truth_links, rep.household_correct) == (130, 92, 92)
+    assert rep.recall == MEDIUM_HOT.recall and rep.caused_wrong_household == 0
+    assert rep.precision == MEDIUM_HOT.precision
+    assert (rep.credited, rep.truth_links, rep.household_correct) == (
+        MEDIUM_HOT.credited,
+        MEDIUM_HOT.truth,
+        MEDIUM_HOT.correct,
+    )
 
     # Clause 2: eviction ran — state built up and came back down.
     assert metrics.EXPOSURES_EVICTED._value.get() > 0

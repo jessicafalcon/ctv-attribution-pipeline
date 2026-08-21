@@ -21,6 +21,7 @@ from producer.seed import main as seed_main
 from queries.report import run as run_report
 from resolve.stage import run_batch as resolve_batch
 from streaming.dataflow import run_engine
+from tests.pins import TINY_HOT
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 REGISTRY = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
@@ -75,11 +76,13 @@ def test_eval_reproduces_pinned_accuracy() -> None:
     report = score(
         read_credited(client), _load_truth(), read_exposure_households(client)
     )
-    assert report.credited == 52
-    assert report.truth_links == 35
-    assert report.household_correct == 35
-    assert report.precision == pytest.approx(35 / 52)
-    assert report.recall == pytest.approx(1.0)
+    assert (report.credited, report.truth_links, report.household_correct) == (
+        TINY_HOT.credited,
+        TINY_HOT.truth,
+        TINY_HOT.correct,
+    )
+    assert report.precision == pytest.approx(TINY_HOT.precision)
+    assert report.recall == pytest.approx(TINY_HOT.recall)
     assert report.organic_credited == 17
     assert report.exact_exposure_correct == 3
 
