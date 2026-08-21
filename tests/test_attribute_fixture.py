@@ -1,7 +1,8 @@
 """Attributing the frozen tiny fixture reproduces the golden expected file byte
 for byte, with the attribution counts pinned so a regen cannot silently drop a
-case or change the ambiguous-reduction outcome. Read-only ground truth after
-Phase 3 (mirrors tests/test_resolve_fixture.py)."""
+case or credit an ambiguous conversion hot. Re-frozen once in Phase 16 (the one
+sanctioned exception, DECISIONS Phase 16); read-only otherwise (mirrors
+tests/test_resolve_fixture.py)."""
 
 from pathlib import Path
 
@@ -45,13 +46,16 @@ def test_attribute_is_deterministic() -> None:
 def test_attributed_counts_pinned() -> None:
     rows = _attributed()
     # Exactly one row per distinct conversion_id (fan-out + resend duplicates
-    # collapsed by the conversion_id-keyed reduction).
+    # collapsed by one_row_per_conversion).
     assert len(rows) == 55
     assert len({r.conversion_id for r in rows}) == 55
-    assert sum(r.attributed for r in rows) == 52
-    assert sum(not r.attributed for r in rows) == 3
-    # The 5 ambiguous shared-IP conversions each resolve to exactly one winner.
-    assert sum(r.ambiguous for r in rows) == 5
+    # 47 hot-attributed; 8 unattributed = 3 state-misses + the 5 shared-IP
+    # conversions deferred to reconciliation (ambiguous_ip, Phase 16).
+    assert sum(r.attributed for r in rows) == 47
+    assert sum(not r.attributed for r in rows) == 8
+    ambiguous = [r for r in rows if r.ambiguous]
+    assert len(ambiguous) == 5
+    assert all(not r.attributed and r.candidate_count > 1 for r in ambiguous)
 
 
 def test_every_attributed_exposure_is_real_and_not_self_assisted() -> None:

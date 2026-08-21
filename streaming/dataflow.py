@@ -5,8 +5,9 @@ Teaching notes:
   pairs; a *stateful* operator keeps state per key. `fold_final` accumulates all
   values for a key and emits once the input is exhausted — exactly right for a
   bounded batch. We key by `household_id` to bucket each household's interleaved
-  exposures and conversions together (the join), then re-key by `conversion_id`
-  to collapse a shared-IP fan-out to one winner (the reduction).
+  exposures and conversions together (the join). A shared-IP fan-out is
+  collapsed to one placeholder row BEFORE the join (`one_row_per_conversion`)
+  and emitted unattributed (ambiguous_ip) — no second keyed stage (Phase 16).
 - **Batch drain, with event-time windowing (Phase 5).** We drain both Kafka
   topics start→end once (EOF-driven) and feed a bounded source, so the engine
   processes the finite seeded stream and exits (Bytewax's Kafka *source* follows
@@ -18,8 +19,9 @@ Teaching notes:
   no phase owns it — ARCHITECTURE §8, DECISIONS Phase 5).
 
 The decisions live in streaming/attribute.py (dedup, watermark/release, eviction,
-reduction); this module only does the keyed grouping, metrics, and I/O, calling
-the SAME leaf functions the offline replay calls, so the two paths cannot diverge.
+the ambiguous_ip rule); this module only does the keyed grouping, metrics, and
+I/O, calling the SAME leaf functions the offline replay calls, so the two paths
+cannot diverge.
 """
 
 import argparse
@@ -43,7 +45,7 @@ from streaming.attribute import (
     HOT_WINDOW,
     attribute_household_streaming,
     dedup_streams,
-    reduce_conversion,
+    one_row_per_conversion,
 )
 from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
 
@@ -89,22 +91,13 @@ def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]):
 
 
 def _emit_and_observe(result) -> list:
-    """Record the household's join-state metrics (peak, evictions) and hand the
-    candidate rows downstream to the conversion_id-keyed reduction."""
+    """Record the household's join-state metrics (peak, evictions), count each
+    final row, and emit it — one row per conversion_id by construction."""
     metrics.observe_state(result.state)
-    return result.candidates
-
-
-def _collect(acc: list, candidate: object) -> list:
-    acc.append(candidate)
-    return acc
-
-
-def _reduce_and_observe(kv: tuple[str, list]):
-    _cid, candidates = kv
-    row = reduce_conversion(candidates)
-    metrics.observe(row, len(candidates))
-    return row
+    rows = [c.row for c in result.candidates]
+    for row in rows:
+        metrics.observe(row)
+    return rows
 
 
 def _count_exposure(exposure: Exposure) -> Exposure:
@@ -129,7 +122,9 @@ def build_flow(
     flow = Dataflow("attribution-engine")
 
     exp_stream = op.input("exposures", flow, TestingSource(exposures, _BATCH))
-    res_stream = op.input("resolved", flow, TestingSource(resolved, _BATCH))
+    res_stream = op.input(
+        "resolved", flow, TestingSource(one_row_per_conversion(resolved), _BATCH)
+    )
 
     # Join: tag, merge, key by household_id, collect each household's interleaved
     # events; the pure streaming stage re-sorts to arrival order and releases.
@@ -141,13 +136,8 @@ def build_flow(
     results = op.map(
         "attribute_household", grouped, partial(_attribute_group, allowed_lateness)
     )
-    candidates = op.flat_map("emit_candidates", results, _emit_and_observe)
-
-    # Reduction: re-key by conversion_id, collapse fan-out/duplicates to one row.
-    cand_keyed = op.key_on("key_conversion", candidates, lambda c: c.row.conversion_id)
-    collected = op.fold_final("group_conversion", cand_keyed, list, _collect)
-    winners = op.map("reduce_conversion", collected, _reduce_and_observe)
-    op.output("sink_attributed", winners, attributed_sink)
+    rows = op.flat_map("emit_rows", results, _emit_and_observe)
+    op.output("sink_attributed", rows, attributed_sink)
 
     # Land raw exposures for reconciliation + the naive benchmark.
     landed = op.map("count_exposures", exp_stream, _count_exposure)

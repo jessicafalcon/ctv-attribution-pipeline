@@ -38,7 +38,14 @@ def hot():
     exps, res, _ = dedup_streams(s.exposures, resolved)
     rows = {r.conversion_id: r for r in attribute(exps, res, HOT_WINDOW)}
     truth = {t.conversion_id: t.truth_exposure_id for t in s.truth_links}
-    return {"profile": p, "stream": s, "exps": exps, "rows": rows, "truth": truth}
+    return {
+        "profile": p,
+        "stream": s,
+        "exps": exps,
+        "rows": rows,
+        "truth": truth,
+        "index": idx,
+    }
 
 
 def test_arrival_lateness_within_allowed_lateness(hot) -> None:
@@ -67,9 +74,13 @@ def test_both_paths_populated_with_pinned_split(hot) -> None:
     # whose causal delay exceeds 7d — the rest are hot-attributed to a *different*
     # same-household exposure, so they never miss. That gap is why "recall rises
     # by exactly the recovered count" is scoped to caused, correctly-resolved.)
+    # Phase 16: 2 caused shared-IP conversions are deferred (ambiguous_ip) instead
+    # of guessed hot, so the hot baseline is 44 and the candidate set 31 (29
+    # state-misses + 2 ambiguous).
     assert len(caused) == 75
-    assert len(hot_attr) == 46  # ~61% hot baseline
-    assert len(hot_miss) == 29  # ~39% reconciliation candidates
+    assert len(hot_attr) == 44
+    assert len(hot_miss) == 31
+    assert sum(rows[c].candidate_count > 1 for c in hot_miss) == 2
 
 
 def test_every_caused_miss_is_recoverable_to_its_truth_household(hot) -> None:
@@ -83,11 +94,17 @@ def test_every_caused_miss_is_recoverable_to_its_truth_household(hot) -> None:
             continue
         # The attributed row carries the conversion's event_time.
         within_long = row.event_time - exp_time[causal_exp] <= LONG_WINDOW
-        same_household = exp_hh[causal_exp] == row.household_id
-        recoverable += within_long and same_household
-    # All 29 caused misses recover to the truth household within 90d, so the
-    # hot→reconciled recall lift is clean (no permanently-lost caused conversion).
-    assert recoverable == 29
+        # An ambiguous_ip placeholder's household is NOT the pick — reconciliation
+        # re-enumerates the IP's owners, so the truth household must be among them.
+        households = (
+            hot["index"].owners_of[row.ip]
+            if row.candidate_count > 1
+            else [row.household_id]
+        )
+        recoverable += within_long and exp_hh[causal_exp] in households
+    # All 31 caused misses (29 state-misses + 2 ambiguous) have their truth
+    # household reachable within 90d — none is permanently lost.
+    assert recoverable == 31
 
 
 def test_deterministic(hot) -> None:

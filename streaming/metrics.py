@@ -24,10 +24,11 @@ ASSISTS = Counter(
     "engine_assists_recorded_total",
     "Assist exposures recorded across all attributed conversions.",
 )
-AMBIGUOUS_REDUCED = Counter(
-    "engine_ambiguous_reductions_total",
-    "Conversions collapsed from more than one candidate row (shared-IP fan-out "
-    "or resend duplicate) by the conversion_id-keyed reduction.",
+AMBIGUOUS_DEFERRED = Counter(
+    "engine_conversions_ambiguous_deferred_total",
+    "Shared-IP conversions (candidate_count > 1) emitted unattributed by the hot "
+    "path (reason ambiguous_ip) and left to reconciliation, which holds every "
+    "exposure and can pick the household (Phase 16). A subset of unattributed.",
 )
 EXPOSURES_LANDED = Counter(
     "engine_exposures_landed_total",
@@ -70,16 +71,16 @@ WATERMARK_LAG = Gauge(
 )
 
 
-def observe(row: AttributedConversion, candidate_count: int) -> None:
-    """One final attributed record and how many candidate rows it collapsed."""
+def observe(row: AttributedConversion) -> None:
+    """One final attributed record (exactly one per conversion_id)."""
     PROCESSED.inc()
     if row.attributed:
         ATTRIBUTED.inc()
         ASSISTS.inc(len(row.assists))
     else:
         UNATTRIBUTED.inc()
-    if candidate_count > 1:
-        AMBIGUOUS_REDUCED.inc()
+        if row.candidate_count > 1:
+            AMBIGUOUS_DEFERRED.inc()
 
 
 _join_state_peak = 0  # high-water across households; the gauge only climbs

@@ -93,15 +93,19 @@ def test_profile_is_reproducible(name: str) -> None:
     assert jsonl(a.truth_links) == jsonl(b.truth_links)
 
 
-def test_shared_ip_spike_misattributes_to_wrong_household(runs) -> None:
-    # BACKLOG 20 (load-bearing): a caused conversion whose wrong-household
-    # shared-IP candidate has a more-recent in-window exposure is misattributed —
-    # observed, not assumed. The entire recall gap is wrong-household (0 misses).
+def test_shared_ip_spike_defers_ambiguous_hot_no_wrong_household(runs) -> None:
+    # Phase 16: the hot path never guesses a shared-IP household, so the 11 caused
+    # wrong-household misattributions the old reduce made (BACKLOG 20) are gone
+    # hot — at the price of 19 caused conversions deferred (ambiguous_ip) to
+    # reconciliation, where the cross-household pick is proven
+    # (tests/test_reconcile.py, live: make test-int-shared-ip).
     r = runs["shared_ip_spike"].score()
-    assert r.caused_wrong_household == 11
-    assert r.caused_missed == 0
-    assert (r.truth_links, r.household_correct) == (80, 69)
+    assert r.caused_wrong_household == 0
+    assert r.caused_missed == 19  # every one an ambiguous_ip deferral, not a loss
+    assert (r.truth_links, r.household_correct) == (80, 61)
     assert r.recall < 1.0
+    deferred = [c for c in runs["shared_ip_spike"].rows if not c.attributed]
+    assert sum(c.candidate_count > 1 for c in deferred) >= 19
 
 
 def test_real_lift_is_a_clean_lift_no_shared_ip_fault(runs) -> None:
@@ -131,7 +135,9 @@ def test_late_burst_pushes_conversions_past_the_hot_window(runs) -> None:
     # conversions so late that their exposure is evicted before release → hot-miss.
     run = runs["late_burst"]
     r = run.score()
-    assert r.caused_missed == 5  # state-misses (recovered later by reconciliation)
+    # 5 state-misses + 1 ambiguous_ip deferral (all recovered by reconciliation)
+    assert r.caused_missed == 6
+    assert sum(1 for c in run.rows if not c.attributed and c.candidate_count > 1) == 1
     assert r.caused_wrong_household == 0
     peak_lateness = max(
         (c.ingest_time - c.event_time).total_seconds() for c in run.stream.conversions
