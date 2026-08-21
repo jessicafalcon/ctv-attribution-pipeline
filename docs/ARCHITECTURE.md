@@ -251,8 +251,12 @@ Alerts fire a webhook to the agent, which is the second-stage triage.
 
 ### 3.5 Out of scope for v1
 
-Co-viewing inside the engine, Parquet/Iceberg landing, multi-touch attribution
-models, schema evolution beyond v1. Listed in README "Next steps".
+Co-viewing inside the engine, multi-touch attribution models, schema evolution
+beyond v1. Listed in README "Next steps".
+
+(Iceberg landing was originally out of scope here; Phase 12 added it — a local
+Iceberg exposure lake with a DuckDB-over-Iceberg reconcile source and Dagster
+orchestration. See §5 and DECISIONS Phase 12.)
 
 ## 4. The agent: attribution-integrity guardian
 
@@ -337,7 +341,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 | Capability | Where the project delivers it |
 |---|---|
 | Streaming at scale | Two-stream Redpanda ingestion, resolve stage, stateful Bytewax engine |
-| Deep compute / lakehouse | Windowed stateful joins, reconciliation path; Iceberg landing as next step |
+| Deep compute / lakehouse | Windowed stateful joins, reconciliation path; local Iceberg exposure lake + DuckDB-over-Iceberg reconcile source + Dagster day-partitioned orchestration (Phase 12). Object store / REST catalog / Spark-Trino compute are the SCALING port |
 | OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
 | On-call / incident readiness | Prometheus, Grafana, Alertmanager rules, runbook-style SCALING.md |

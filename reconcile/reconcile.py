@@ -21,7 +21,6 @@ data-derived `reconciled_at` (no wall clock) — so a replay/re-run converges.
 """
 
 import argparse
-from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from clickhouse_connect.driver.client import Client
@@ -31,6 +30,7 @@ from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
 from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
+from reconcile.sources import ClickHouseExposureSource, ExposureSource
 from streaming.attribute import attribute_household
 from streaming.sink import insert_attributed
 
@@ -50,10 +50,6 @@ RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
 _CANDIDATE_COLS = (
     "conversion_id, event_time, ingest_time, device_id, ip, conversion_type, "
     "revenue, order_id, household_id, resolution, ambiguous, candidate_count"
-)
-_EXPOSURE_COLS = (
-    "exposure_id, event_time, ingest_time, campaign_id, household_id, ip, "
-    "app_id, program_genre, spend"
 )
 
 
@@ -116,39 +112,6 @@ def _read_candidates(client: Client) -> list[ResolvedConversion]:
     ]
 
 
-def _read_exposures_for(
-    client: Client, household_ids: set[str]
-) -> dict[str, list[Exposure]]:
-    """Bulk-load the candidate households' exposures from FINAL in ONE query and
-    group in memory (not an N+1 per-candidate read; the leaf window-filters). The
-    long-window filter is left to `attribute_household`, so all of a household's
-    exposures are loaded — fine at profile scale; a per-household window predicate
-    is the scaling move (SCALING)."""
-    if not household_ids:
-        return {}
-    rows = client.query(
-        f"select {_EXPOSURE_COLS} from exposures_landed final "
-        "where household_id in {hhs:Array(String)} order by exposure_id",
-        parameters={"hhs": sorted(household_ids)},
-    ).result_rows
-    by_household: dict[str, list[Exposure]] = defaultdict(list)
-    for r in rows:
-        by_household[r[4]].append(
-            Exposure(
-                exposure_id=r[0],
-                event_time=r[1],
-                ingest_time=r[2],
-                campaign_id=r[3],
-                household_id=r[4],
-                ip=r[5],
-                app_id=r[6],
-                program_genre=r[7],
-                spend=r[8],
-            )
-        )
-    return by_household
-
-
 def _max_ingest(client: Client) -> datetime:
     """max(ingest_time) over the fixed serving state — the union of both landed
     tables. Fixed input set (independent of which rows get recovered), so
@@ -184,30 +147,57 @@ def _restatement_abs_delta(client: Client) -> float:
     return float(rows[0][0])
 
 
-def run(client: Client | None = None) -> dict[str, int]:
-    """One reconciliation pass: snapshot the pre-reconciliation report, recover
-    the hot misses over the long window, then refresh the rollup and snapshot the
-    post-reconciliation report. Returns counts for logging/tests."""
-    apply_ddl()
-    client = client or connect()
-
-    base = _max_ingest(client)
-    reconciled_at = reconciled_at_for(base)
-
-    candidates = _read_candidates(client)
-    exposures = _read_exposures_for(client, {c.household_id for c in candidates})
-    recovered = reconcile(candidates, exposures, LONG_WINDOW, reconciled_at)
+def recover(
+    client: Client,
+    candidates: list[ResolvedConversion],
+    exposure_source: ExposureSource,
+    window: timedelta,
+    reconciled_at: datetime,
+) -> list[AttributedConversion]:
+    """Recover the given candidates: read their households' exposures from the
+    source, run the matcher, insert the recovered rows. The recovery half of a
+    pass, shared by `run` (all candidates, ClickHouse source) and the Dagster
+    day-partitioned asset (one day's candidates, Iceberg source). `reconciled_at`
+    is passed in (not recomputed) so every day of a partitioned run stamps the
+    same version — identical to a single full pass."""
+    exposures = exposure_source.read_for(candidates, window)
+    recovered = reconcile(candidates, exposures, window, reconciled_at)
     if recovered:
         insert_attributed(client, recovered)
+    return recovered
 
-    # Snapshots (reported_at computed server-side as max(ingest_time) + offset, so
-    # both are order-independent AND identical no matter which process writes them):
-    # the PRE report as of the hot pass (offset 0; path='hot' only — invariant under
-    # reconciliation), and the POST report (offset RECONCILE_DELTA_MS, both paths).
-    # Refresh the rollup once, at the current (post) version.
+
+def finalize(client: Client) -> None:
+    """Global finalize, run once per reconciliation (not per day): snapshot the
+    pre/post reports and refresh the rollup. reported_at is computed server-side
+    as max(ingest_time) + offset, so both snapshots are order-independent and
+    identical no matter which process writes them — the PRE report as of the hot
+    pass (offset 0; path='hot' only, invariant under reconciliation) and the POST
+    report (offset RECONCILE_DELTA_MS, both paths)."""
     rollup.write_report_snapshot(client, 0, hot_only=True)
     rollup.write_report_snapshot(client, RECONCILE_DELTA_MS, hot_only=False)
     rollup.refresh_campaign_hourly(client, RECONCILE_DELTA_MS)
+
+
+def run(
+    client: Client | None = None,
+    exposure_source: ExposureSource | None = None,
+) -> dict[str, int]:
+    """One reconciliation pass: recover ALL hot misses over the long window, then
+    finalize (snapshots + rollup refresh). Returns counts for logging/tests.
+
+    `exposure_source` selects where the candidate households' exposures are read
+    from: the default ClickHouse source keeps `make run` byte-identical; the
+    Dagster asset passes an Iceberg/DuckDB source (Phase 12). Everything else —
+    candidates, snapshots, rollup, insert — stays on ClickHouse."""
+    apply_ddl()
+    client = client or connect()
+    exposure_source = exposure_source or ClickHouseExposureSource(client)
+
+    reconciled_at = reconciled_at_for(_max_ingest(client))
+    candidates = _read_candidates(client)
+    recovered = recover(client, candidates, exposure_source, LONG_WINDOW, reconciled_at)
+    finalize(client)
 
     still_missing = len(candidates) - len(recovered)
     metrics.CANDIDATES.inc(len(candidates))

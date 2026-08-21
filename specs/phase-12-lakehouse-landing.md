@@ -32,15 +32,19 @@ deterministic ClickHouse copy.
 
 ```
 make down && make up && make seed PROFILE=long_delay && make lake-land && \
-make reconcile-dagster PROFILE=long_delay && make eval && make test && make lint
+make reconcile-dagster PROFILE=long_delay && make eval PROFILE=long_delay && make test && make lint
 ```
 
 - `make lake-land` appends the seeded exposures to the Iceberg `raw.exposures` table
   (Gate 1: table exists, row count == exposures produced, day-partitioned).
 - `make reconcile-dagster` materializes the day-partitioned reconciliation asset,
   reading exposures from Iceberg via DuckDB (Gate 2).
-- `make eval` reproduces long_delay recall **0.973**, unchanged from the
-  ClickHouse-sourced reconcile — the swap of exposure source is output-invariant.
+- `make eval PROFILE=long_delay` reproduces long_delay recall **0.973**, unchanged
+  from the ClickHouse-sourced reconcile — the swap of exposure source is
+  output-invariant. (`PROFILE=long_delay` is REQUIRED: `make eval` defaults to tiny —
+  bare `make eval` here scores tiny's truth against a long_delay DB, a meaningless
+  ~0.17. DECISIONS Phase 12; the CLAUDE.md prose/demo have the same latent bug, fixed
+  in a separate PR.)
 - `make test` + `make lint` green; gate-0 tiny golden byte-identical.
 
 ## Done-when
@@ -83,7 +87,10 @@ make reconcile-dagster PROFILE=long_delay && make eval && make test && make lint
 ## Scope (files)
 
 - `lake/iceberg_catalog.py` (catalog + `EXPOSURE_SCHEMA` + day `PartitionSpec`),
-  `lake/land_exposures.py` (idempotent append), wire into the seed/run path.
+  `lake/land_exposures.py` (append, idempotent-on-read). Dual-write from the deduped
+  `exposures` list in `streaming/dataflow.py` `run_engine` (gated `--lake-land`) —
+  the SAME list that feeds the ClickHouse sink, NOT the "insert_exposures call site"
+  (a per-batch Bytewax sink). Parity by construction (DECISIONS Phase 12).
 - `orchestration/assets.py` (`exposures_iceberg`, `reconciled_conversions`,
   daily partitions, job, schedule), `orchestration/definitions.py`.
 - `reconcile/` — factor the exposure read behind a source interface so ClickHouse
@@ -96,17 +103,25 @@ make reconcile-dagster PROFILE=long_delay && make eval && make test && make lint
 
 ## Approvals required before the branch opens
 
-- **Dependency asks (ALL new — allowlist change):** `pyiceberg[sql]`, `pyarrow`,
+- **Dependency asks (ALL new — allowlist change):** `pyiceberg`, `pyarrow`,
   `dagster`, `dagster-webserver`, `duckdb`. CLAUDE.md requires asking before ANY new
-  package; this is five at once — needs explicit sign-off.
+  package; this is five at once — needs explicit sign-off. (Reality: pyiceberg 0.11.1
+  has no `[sql]` extra — SqlCatalog deps are base — and writes need the `pyiceberg-core`
+  extra, a sub-extra of the approved pyiceberg; DECISIONS Phase 12.)
 - **ARCHITECTURE §3.5 reversal:** Iceberg landing is currently listed out of scope.
   Reversing a spec statement is a STOP-and-report event (CLAUDE.md workflow) —
   confirm the scope change before building.
 
 ## Review & stack risk
 
-- **security-reviewer TRIGGERED** — adds a Dagster webserver service (compose
-  exposure) and new deps; run it before commit.
+- **security-reviewer TRIGGERED** — run before commit. Charter (corrected — the UI
+  is local `dagster dev`, NOT a compose service, so "compose service exposure" does
+  not apply): (1) the five-package supply surface (`pyiceberg` + `pyiceberg-core`,
+  `pyarrow`, `duckdb`, `dagster`, `dagster-webserver`) — the real new risk; (2)
+  confirm `make dagster-ui` binds loopback only (127.0.0.1, never 0.0.0.0/published);
+  (3) DAGSTER_HOME / instance-storage hygiene — the headless `make reconcile-dagster`
+  uses an ephemeral instance (nothing persists), and `dagster dev`'s DAGSTER_HOME
+  sits under gitignored `data/` and carries no secrets.
 - **code-reviewer** determinism focus: truth-isolation still holds (lake carries no
   truth links), Iceberg carve-out correct, RMT sink untouched.
 - **functionality-tester** after code-reviewer.

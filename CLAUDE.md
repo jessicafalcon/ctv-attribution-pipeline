@@ -56,7 +56,12 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `resolve/` — conversion → household stage. Loads the graph from the
   compacted topic; emits to `conversions_resolved`.
 - `streaming/` — Bytewax dataflow: join, hot window, dedup, lateness.
-- `reconcile/` — periodic long-window matcher, rollup refresh, snapshot writer.
+- `reconcile/` — periodic long-window matcher, rollup refresh, snapshot writer;
+  `sources.py` = the ClickHouse / Iceberg exposure-source interface (Phase 12).
+- `lake/` — local Iceberg exposure lake (Phase 12): catalog + schema, dedup-safe
+  landing, DuckDB read. Data under gitignored `data/lake/`.
+- `orchestration/` — Dagster day-partitioned reconciliation assets + headless
+  runner (Phase 12).
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
@@ -87,6 +92,19 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make run-hot` — resolve stage + engine only, no reconciliation; backs the
   hot-path oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
   reconciliation pass would over-credit long-tail organics and shift the pins
+- `make lake-land` — resolve stage + engine, dual-writing the SAME deduped exposures
+  into the Iceberg lake (`raw.exposures`, day-partitioned) alongside ClickHouse. The
+  SOLE landing site (`--lake-land` flag; `make run`/CI never land, so the engine path
+  stays byte-identical). Run after `make up && make seed` (Phase 12)
+- `make reconcile-dagster PROFILE=<p>` — orchestrated reconciliation: materialize the
+  day-partitioned `reconciled_conversions` Dagster asset (exposures sourced from
+  Iceberg via DuckDB) over the candidate days + finalize, headless (ephemeral
+  instance, no webserver). `PARTITION=<YYYY-MM-DD>` materializes one day. Output is
+  byte-identical to `make run`'s reconcile pass. Run after `make lake-land` (Phase 12)
+- `make dagster-ui` — optional dev-only Dagster asset-graph UI + backfill controls,
+  bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
+  for `make reconcile-dagster`. A containerized/published webserver is a deployment
+  lever, not built (Phase 12)
 - `make eval` — attribution precision/recall vs truth for the last profile
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
 - `make restate` — restatement: each campaign's metric as reported
@@ -142,6 +160,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   run) → the Phase-9 live read-only proof: the SELECT-only `agent_ro` user cannot write
   (INSERT/ALTER/DROP/CREATE → ACCESS_DENIED) and the whole collector+probe read path
   runs under it (SN2). No LLM call, no API tokens; isolated for the same reason
+- `make test-int-lakehouse` — clean long_delay-only stack (make down && up && seed
+  long_delay && lake-land long_delay) → the Phase-12 live lakehouse proof: reconcile
+  output is byte-identical whether exposures are sourced from ClickHouse or
+  Iceberg-via-DuckDB, and the Dagster-orchestrated pass writes the same reconciled
+  rows. No API tokens; isolated for the same shared-conversion_id reason
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
@@ -178,6 +201,11 @@ AI sits at the edge; the pipeline is deterministic.
 - The agent is read-only (DB-enforced SELECT-only user), off the critical
   path, and outputs are pydantic-validated. Pipeline output with the agent
   disabled is byte-identical.
+- The Iceberg lake's metadata (snapshot ids, commit times) and Dagster run
+  ids/wall-clock are non-deterministic and carved out of the byte-identical
+  guarantee, exactly like the agent — every asserted check reads row content
+  back, never metadata; landing is off by default (`--lake-land`), so `make
+  run`/CI stay byte-identical (Phase 12; DECISIONS Phase 12).
 - The pipeline NEVER reads truth links.
 - Every write to attributed_conversions is idempotent (ReplacingMergeTree
   keyed conversion_id, version processed_at). Rollups are refreshed on
@@ -220,7 +248,9 @@ AI sits at the edge; the pipeline is deterministic.
 - Python 3.12. Type hints everywhere. No JVM anywhere.
 - Dependencies: ask before adding ANY new package. Current allowlist:
   bytewax, confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
-  anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit.
+  anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit,
+  pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
+  dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_,
   reconcile_, agent_.
 - Fault scenarios are producer profiles under producer/profiles/, not
@@ -612,6 +642,50 @@ never auto-fixed, ignored, or committed around.
   functionality-tester + coherence-auditor; security-reviewer NOT triggered — no
   CI/.env/compose/CH-user/agent change; a projection/index DDL is not a user/exposure
   change). Merged: PENDING. Spec: `specs/phase-13-query-cost-levers.md`.
+- Phase 12 (2026-08-20): built on `phase-12-lakehouse-landing` — lakehouse landing +
+  orchestrated reconciliation (post-plan extension; reverses ARCHITECTURE §3.5's
+  Iceberg out-of-scope, adds 5 packages — BOTH approved before the branch opened).
+  New `lake/`: a local Iceberg exposure lake (SqlCatalog on sqlite + `file://`
+  warehouse under gitignored `data/lake/`; `raw.exposures`, timestamptz-UTC columns,
+  day-partition on event_time). Landing rides `run_engine` behind `--lake-land` (the
+  SOLE landing site — `make run`/CI never land, engine byte-identical), dual-writing
+  the SAME deduped exposures list that feeds ClickHouse → parity by construction.
+  `reconcile/sources.py` factors the exposure read behind an `ExposureSource` interface:
+  ClickHouse impl (Phase-6 query, unchanged → `make run` byte-identical) + Iceberg impl
+  (DuckDB `iceberg_scan`, `distinct`-on-exposure_id reproduces the FINAL collapse, day-
+  partition prune, `SET TimeZone='UTC'` + drop tzinfo → naive-UTC matching
+  clickhouse-connect). `orchestration/`: Dagster day-partitioned `reconciled_conversions`
+  (Iceberg-sourced `recover()`, global stable `reconciled_at`) + `reconciled_report`
+  (`finalize()`); headless `make reconcile-dagster` (ephemeral instance, backfill over
+  candidate days). Two live traps caught + fixed: the DuckDB local-tz render (the §8
+  gotcha, canary-caught) and `DailyPartitionsDefinition`'s wall-clock validation
+  rejecting the sim's future-dated days (→ `StaticPartitionsDefinition`, determinism).
+  UI is local `dagster dev` (loopback), NOT a compose service (spec self-contradiction
+  resolved toward file-scope + minimal-but-scalable; DECISIONS Phase 12). Green: live
+  clean long_delay stack — `make lake-land` (Gate 1: 360 rows, day-partitioned) →
+  `make reconcile-dagster` (Gate 2: 13 day-partitions + finalize) → `make eval` recall
+  0.9733 (unchanged) → `make test-int-lakehouse` 2 passed (source-equivalence byte-
+  identical + Dagster parity); gate-0 tiny golden byte-identical (`make test-int` 11);
+  228 offline + lint; `make check-runbook` OK (BACKLOG 37 trigger fired, cited tz
+  symbols untouched, re-deferred). Spec-vs-reality surfaced not repaired: hook wording
+  (dataflow list, not insert_exposures site), `pyiceberg[sql]`→no extra + pyiceberg-core,
+  Dagster UI compose-vs-dev contradiction, StaticPartitions determinism — all in DECISIONS
+  + spec corrected. Review gate: PASSED. code-reviewer 2 (② load-only extension fix,
+  ④ type hint) + coherence-auditor 1 BLOCKER (PHASES.md:230 bare make eval → PROFILE=
+  long_delay) + 1 drift (stale _read_exposures_for docstring) + notes (SCALING port
+  pointer, determinism carve-out sentence) → all fixed in-branch; security-reviewer
+  PASS then re-PASS 0-findings after the CI-edit re-trigger; functionality-tester WORKS
+  (4/4). 3 findings BACKLOG'd (N-append/count-grain tests; lake accumulation/compaction;
+  test-int-lakehouse-in-CI weighed holistically w/ row 33). Merged: PENDING (developer;
+  not pushed). Spec: `specs/phase-12-lakehouse-landing.md`.
+- Phase 12 follow-on (NOT in the lakehouse PR): `fix/eval-demo-profile` — the pre-existing
+  bare-`make eval` bug in CLAUDE.md's eval prose (":108" "for the last profile") + the
+  long_delay canonical demo (":176"), shipped since Phase 6 (eval defaults to tiny; no
+  last-profile mechanism). Own tiny PR off main after Phase 12 merges: :176 → `make eval
+  PROFILE=long_delay`, prose → "for the given PROFILE (default tiny)". The durable
+  fail-loud guard (error on truth-profile/DB mismatch) is a BACKLOG row (next accuracy/
+  touch). Carved out of Phase 12 per the "phase reveals an earlier-phase change → own fix
+  PR" rule.
 - No API keys in repo.
 
 (Update this section at the end of every working day.)

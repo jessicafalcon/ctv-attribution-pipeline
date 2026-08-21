@@ -16,6 +16,11 @@ jobs:
       # --locked: fail on a stale lock instead of silently re-resolving to
       # versions whose hashes nobody reviewed (security-review finding).
       - run: uv sync --locked
+      # DuckDB iceberg extension is fetched once here (network allowed at setup),
+      # so `make test`'s offline unit suite only LOADs it — never fetches. The one
+      # Phase-12 dependency not hash-pinned in uv.lock (signed, duckdb-version-tied;
+      # DECISIONS Phase 12).
+      - run: uv run python -m lake.install_extension
       - run: make lint
       - run: make test
 

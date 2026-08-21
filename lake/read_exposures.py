@@ -1,0 +1,96 @@
+"""Read exposures back from the Iceberg lake via DuckDB (Phase 12).
+
+DuckDB's `iceberg_scan` reads an Iceberg table directly from its current metadata
+file — the same table pyiceberg wrote — so the reconcile long-window matcher can
+source its candidate exposures from the lake instead of ClickHouse, feeding the
+UNCHANGED pure `attribute_household` leaf.
+
+Two properties make this byte-identical to the ClickHouse-sourced read:
+  * dedup-on-read — `select distinct` collapses the append-accumulated re-sends to
+    one row per exposure (rows are byte-identical replays), reproducing the
+    exposures_landed ReplacingMergeTree FINAL collapse (invariant: exposure_id is
+    unique — DECISIONS Phase 12).
+  * naive-UTC-ms round-trip — clickhouse-connect hands the DateTime64(3,'UTC')
+    column back as a NAIVE datetime holding the UTC wall-clock (tzinfo=None). We
+    match that exactly: `SET TimeZone='UTC'` renders the timestamptz at the correct
+    UTC wall-clock (the §8 defense — a default local session would shift it), then
+    we drop tzinfo so the matcher compares like-with-like and the recovered rows
+    are identical to the ClickHouse-sourced pass.
+
+The optional `min_event_time` lower bound prunes whole day-partitions: it is set
+to (earliest candidate event_time − long window), so every pruned exposure is
+older than every candidate's window and the leaf would discard it anyway — the
+prune is output-invariant, not a filter that could drop a real match.
+"""
+
+from collections import defaultdict
+from datetime import datetime
+
+import duckdb
+
+from lake.iceberg_catalog import ensure_table
+from producer.models import Exposure
+
+_SELECT_COLS = (
+    "exposure_id, event_time, ingest_time, campaign_id, household_id, "
+    "ip, app_id, program_genre, spend"
+)
+
+
+def _metadata_path() -> str:
+    """Local filesystem path to the table's current metadata JSON (strip the
+    file:// scheme pyiceberg stores)."""
+    loc = ensure_table().metadata_location
+    return loc[len("file://") :] if loc.startswith("file://") else loc
+
+
+def read_exposures_by_household(
+    household_ids: set[str], min_event_time: datetime | None = None
+) -> dict[str, list[Exposure]]:
+    """Bulk-load the given households' exposures from the lake in one scan,
+    deduped on exposure_id, grouped by household — the DuckDB/Iceberg counterpart
+    of reconcile.sources.ClickHouseExposureSource.read_for. `min_event_time`
+    (optional) day-partition
+    prunes exposures provably outside every candidate's window."""
+    if not household_ids:
+        return {}
+    con = duckdb.connect()
+    # LOAD only — never install. The extension is installed once at setup
+    # (`make setup` / CI run `python -m lake.install_extension`, network allowed
+    # there); loading here reaches no network, so the offline unit suite stays
+    # offline and fails loud if setup was skipped (DECISIONS Phase 12).
+    con.execute("load iceberg")
+    # Force UTC rendering: DuckDB returns a TIMESTAMPTZ in the session timezone, so
+    # a default (local) session would hand back the same instant with a local-tz
+    # tzinfo — the ARCHITECTURE §8 gotcha (clickhouse-connect had the mirror bug).
+    # Pinning UTC makes the datetime tz-aware UTC, matching DateTime64(3,'UTC').
+    con.execute("set timezone='UTC'")
+    predicates = ["household_id = any(?)"]
+    params: list[object] = [sorted(household_ids)]
+    if min_event_time is not None:
+        predicates.append("event_time >= ?")
+        params.append(min_event_time)
+    where = " and ".join(predicates)
+    rows = con.execute(
+        f"select distinct {_SELECT_COLS} "
+        f"from iceberg_scan(?) where {where} order by exposure_id",
+        [_metadata_path(), *params],
+    ).fetchall()
+    by_household: dict[str, list[Exposure]] = defaultdict(list)
+    for r in rows:
+        by_household[r[4]].append(
+            Exposure(
+                exposure_id=r[0],
+                # Drop tzinfo → naive UTC, matching clickhouse-connect (the UTC
+                # wall-clock is already correct via SET TimeZone='UTC').
+                event_time=r[1].replace(tzinfo=None),
+                ingest_time=r[2].replace(tzinfo=None),
+                campaign_id=r[3],
+                household_id=r[4],
+                ip=r[5],
+                app_id=r[6],
+                program_genre=r[7],
+                spend=r[8],
+            )
+        )
+    return by_household

@@ -156,9 +156,15 @@ def build_flow(
     return flow
 
 
-def run_engine(broker: str) -> dict[str, int]:
+def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
     """Drain the two topics, apply the DDL, run the engine to completion.
-    Returns row counts for logging/tests."""
+    Returns row counts for logging/tests.
+
+    `lake_land` (make lake-land only; off for make run/CI) dual-writes the SAME
+    deduped exposure list this run feeds to ClickHouse into the Iceberg lake, so
+    the two copies share one input set by construction (DECISIONS Phase 12). Off by
+    default keeps the engine path byte-identical and the lake stack out of every
+    other run."""
     apply_ddl()
     exposures_raw = [
         Exposure.model_validate_json(v)
@@ -199,6 +205,13 @@ def run_engine(broker: str) -> dict[str, int]:
             _allowed_lateness(),
         )
     )
+    # Dual-write the exact same deduped list into the Iceberg lake (make lake-land
+    # only). This is the sole landing site — make run/CI never pass lake_land — so
+    # there is no double-land; a re-run is harmless anyway (dedup-on-read).
+    if lake_land:
+        from lake.land_exposures import land
+
+        land(exposures)
     return {
         "exposures": len(exposures),
         "resolved": len(resolved),
@@ -215,15 +228,22 @@ def main(argv: list[str] | None = None) -> None:
         help="dump this stage's terminal Prometheus registry to a textfile "
         "(promtool-fixture provenance; see make metrics-capture)",
     )
+    parser.add_argument(
+        "--lake-land",
+        action="store_true",
+        help="also append the deduped exposures to the Iceberg lake "
+        "(make lake-land; Phase 12). Off for make run/CI.",
+    )
     args = parser.parse_args(argv)
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
-    counts = run_engine(broker)
+    counts = run_engine(broker, lake_land=args.lake_land)
     print(
         f"engine: {counts['exposures']} exposures, {counts['resolved']} resolved "
         f"({counts['suppressed']} re-sends deduped) "
         f"→ attributed_conversions + exposures_landed"
+        + (" + raw.exposures (lake)" if args.lake_land else "")
     )
     if args.metrics_out:
         write_to_textfile(args.metrics_out, REGISTRY)

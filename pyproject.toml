@@ -8,9 +8,14 @@ dependencies = [
     "bytewax>=0.21.1",
     "clickhouse-connect>=1.7.1",
     "confluent-kafka>=2.15.0",
+    "dagster>=1.13.18",
+    "dagster-webserver>=1.13.18",
+    "duckdb>=1.5.5",
     "fastapi>=0.141.1",
     "prometheus-client>=0.21",
+    "pyarrow>=25.0.1",
     "pydantic>=2.13.4",
+    "pyiceberg[pyiceberg-core,sql]>=0.11.1",
     "uvicorn>=0.52.4",
 ]
 
