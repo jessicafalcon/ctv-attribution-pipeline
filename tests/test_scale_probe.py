@@ -74,7 +74,7 @@ def test_bytes_per_exposure_is_flat_across_tiers() -> None:
 
 
 def test_measure_tier_reports_the_phase7_gauge_and_no_eviction() -> None:
-    # measure_tier drains the REAL engine (build_flow + run_main) and reads the
+    # measure_tier drains the REAL engine (run_attribution) and reads the
     # Phase-7 engine_join_state_current gauge; it raises if eviction fired (which
     # would break the retained-state == input assumption). Occupancy < window span,
     # so eviction must not fire.

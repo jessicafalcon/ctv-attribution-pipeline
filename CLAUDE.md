@@ -248,7 +248,7 @@ AI sits at the edge; the pipeline is deterministic.
 
 - Python 3.12. Type hints everywhere. No JVM anywhere.
 - Dependencies: ask before adding ANY new package. Current allowlist:
-  bytewax, confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
+  confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
   anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit,
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).

@@ -1,44 +1,45 @@
-"""Live attribution engine (Bytewax) — the real pipeline component.
+"""Live attribution engine — a deterministic batch attributor (Phase 16).
 
 Teaching notes:
-- **Stateful keyed operators.** Bytewax processes a stream of `(key, value)`
-  pairs; a *stateful* operator keeps state per key. `fold_final` accumulates all
-  values for a key and emits once the input is exhausted — exactly right for a
-  bounded batch. We key by `household_id` to bucket each household's interleaved
-  exposures and conversions together (the join). A shared-IP fan-out is
-  collapsed to one placeholder row BEFORE the join (`one_row_per_conversion`)
-  and emitted unattributed (ambiguous_ip) — no second keyed stage (Phase 16).
-- **Batch drain, with event-time windowing (Phase 5).** We drain both Kafka
-  topics start→end once (EOF-driven) and feed a bounded source, so the engine
-  processes the finite seeded stream and exits (Bytewax's Kafka *source* follows
-  forever). Within each household bucket the pure core runs an arrival-ordered,
-  watermark-gated pass: a conversion is released once the event-time watermark
-  (`max(event_time) − allowed_lateness`) reaches its `event_time`, and exposures
-  are evicted past `event_time + hot_window`. This is windowing **on the batch
-  drain** — the engine stays batch (no continuous Kafka follow; that is deferred,
-  no phase owns it — ARCHITECTURE §8, DECISIONS Phase 5).
+- **Batch drain, with event-time windowing (Phase 5).** We drain both event
+  topics start→end once (EOF-driven) and process the finite seeded stream
+  in-process, then exit. Within each household bucket the pure core runs an
+  arrival-ordered, watermark-gated pass: a conversion is released once the
+  event-time watermark (`max(event_time) − allowed_lateness`) reaches its
+  `event_time`, and exposures are evicted past `event_time + hot_window`. This is
+  windowing **on the batch drain** — the engine stays batch (no continuous Kafka
+  follow; that is a Phase-17+ framework decision — ARCHITECTURE §8, DECISIONS
+  Phase 5/16).
+- **Why no stream framework.** Until Phase 16 this module wrapped the same pass
+  in a Bytewax dataflow fed from a bounded `TestingSource`; the framework only
+  regrouped lists, so it was removed rather than made real. Continuous follow on
+  a real framework (Bytewax proper vs Flink) is chosen later with fresh eyes
+  (SCALING.md keeps the Flink mapping as the port target).
 
 The decisions live in streaming/attribute.py (dedup, watermark/release, eviction,
-the ambiguous_ip rule); this module only does the keyed grouping, metrics, and
-I/O, calling the SAME leaf functions the offline replay calls, so the two paths
-cannot diverge.
+the ambiguous_ip rule); this module only does the household grouping, metrics,
+and I/O, calling the SAME leaf functions the offline replay calls, so the two
+paths cannot diverge.
 """
 
 import argparse
 import os
+from collections import defaultdict
 from datetime import timedelta
-from functools import partial
+from itertools import batched
 
-import bytewax.operators as op
-from bytewax.dataflow import Dataflow
-from bytewax.outputs import Sink
-from bytewax.testing import TestingSource, run_main
 from confluent_kafka import Consumer
 from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
+from clickhouse.client import connect
 from common.kafka import drain
-from producer.models import Conversion, Exposure, ResolvedConversion
+from producer.models import (
+    AttributedConversion,
+    Conversion,
+    Exposure,
+    ResolvedConversion,
+)
 from resolve import metrics as resolve_metrics
 from resolve.resolver import resolve_one
 from resolve.stage import load_graph_index
@@ -50,11 +51,11 @@ from streaming.attribute import (
     dedup_streams,
     one_row_per_conversion,
 )
-from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
+from streaming.sink import insert_attributed, insert_exposures
 
 EXPOSURES_TOPIC = "exposures"
 CONVERSIONS_TOPIC = "conversions"
-_BATCH = 256  # items per source poll → fewer, larger ClickHouse inserts
+_BATCH = 256  # rows per ClickHouse insert → fewer, larger parts
 
 
 def _allowed_lateness() -> timedelta:
@@ -81,72 +82,35 @@ def _drain_topic(broker: str, topic: str, group: str) -> list[bytes]:
         consumer.close()
 
 
-def _accumulate(acc: list, tagged: tuple[str, object]) -> list:
-    """Collect one household's interleaved (kind, model) events; the streaming
-    stage re-sorts them into arrival order before the watermark-gated pass."""
-    acc.append(tagged)
-    return acc
-
-
-def _attribute_group(allowed_lateness: timedelta, kv: tuple[str, list]):
-    _hid, events = kv
-    return attribute_household_streaming(events, HOT_WINDOW, allowed_lateness)
-
-
-def _emit_and_observe(result) -> list:
-    """Record the household's join-state metrics (peak, evictions), count each
-    final row, and emit it — one row per conversion_id by construction."""
-    metrics.observe_state(result.state)
-    rows = [c.row for c in result.candidates]
-    for row in rows:
-        metrics.observe(row)
-    return rows
-
-
-def _count_exposure(exposure: Exposure) -> Exposure:
-    metrics.EXPOSURES_LANDED.inc()
-    return exposure
-
-
-def build_flow(
+def run_attribution(
     exposures: list[Exposure],
     resolved: list[ResolvedConversion],
-    attributed_sink: Sink,
-    exposures_sink: Sink,
     allowed_lateness: timedelta = ALLOWED_LATENESS,
-) -> Dataflow:
-    """Wire the engine. Sinks are injected so the same operator graph runs
-    against ClickHouse live and against a capturing sink in an offline test —
-    proving the Bytewax path matches the pure core without needing services.
-
-    Bytewax carries the keyed state (one bucket of interleaved events per
-    household); the watermark-gated release lives in the pure core
-    (`attribute_household_streaming`), so live and replay cannot diverge."""
-    flow = Dataflow("attribution-engine")
-
-    exp_stream = op.input("exposures", flow, TestingSource(exposures, _BATCH))
-    res_stream = op.input(
-        "resolved", flow, TestingSource(one_row_per_conversion(resolved), _BATCH)
+) -> list[AttributedConversion]:
+    """The engine over in-memory (already deduped) streams: one row per
+    conversion (`one_row_per_conversion`), bucket each household's interleaved
+    exposures + conversions, run the watermark-gated evicting pass per
+    household, record the join-state and per-row metrics, return the rows sorted
+    by `conversion_id`. Pure apart from the metrics; the same function serves the
+    live run and every offline oracle test."""
+    events: dict[str, list[tuple[str, Exposure | ResolvedConversion]]] = defaultdict(
+        list
     )
+    for e in exposures:
+        events[e.household_id].append(("exp", e))
+    for r in one_row_per_conversion(resolved):
+        events[r.household_id].append(("res", r))
 
-    # Join: tag, merge, key by household_id, collect each household's interleaved
-    # events; the pure streaming stage re-sorts to arrival order and releases.
-    exp_tagged = op.map("tag_exp", exp_stream, lambda e: ("exp", e))
-    res_tagged = op.map("tag_res", res_stream, lambda r: ("res", r))
-    merged = op.merge("merge_household", exp_tagged, res_tagged)
-    keyed = op.key_on("key_household", merged, lambda t: t[1].household_id)
-    grouped = op.fold_final("group_household", keyed, list, _accumulate)
-    results = op.map(
-        "attribute_household", grouped, partial(_attribute_group, allowed_lateness)
-    )
-    rows = op.flat_map("emit_rows", results, _emit_and_observe)
-    op.output("sink_attributed", rows, attributed_sink)
-
-    # Land raw exposures for reconciliation + the naive benchmark.
-    landed = op.map("count_exposures", exp_stream, _count_exposure)
-    op.output("land_exposures", landed, exposures_sink)
-
-    return flow
+    rows: list[AttributedConversion] = []
+    for household_events in events.values():
+        result = attribute_household_streaming(
+            household_events, HOT_WINDOW, allowed_lateness
+        )
+        metrics.observe_state(result.state)
+        for cand in result.candidates:
+            metrics.observe(cand.row)
+            rows.append(cand.row)
+    return sorted(rows, key=lambda r: r.conversion_id)
 
 
 def resolve_conversions(
@@ -211,15 +175,18 @@ def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
         default=0.0,
     )
     metrics.observe_watermark_lag(peak_lateness)
-    run_main(
-        build_flow(
-            exposures,
-            resolved,
-            ClickHouseSink(insert_attributed),
-            ClickHouseSink(insert_exposures),
-            _allowed_lateness(),
-        )
-    )
+    rows = run_attribution(exposures, resolved, _allowed_lateness())
+    # Synchronous, chunked inserts; idempotency lives in the table engines
+    # (DECISIONS Phase 3). Async inserts are a SCALING lever, not built.
+    client = connect()
+    try:
+        for chunk in batched(rows, _BATCH):
+            insert_attributed(client, chunk)
+        for chunk in batched(exposures, _BATCH):
+            insert_exposures(client, chunk)
+        metrics.EXPOSURES_LANDED.inc(len(exposures))
+    finally:
+        client.close()
     # Dual-write the exact same deduped list into the Iceberg lake (make lake-land
     # only). This is the sole landing site — make run/CI never pass lake_land — so
     # there is no double-land; a re-run is harmless anyway (dedup-on-read).

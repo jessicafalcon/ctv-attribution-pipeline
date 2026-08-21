@@ -1,17 +1,17 @@
-"""The Bytewax operator graph, run offline with capturing sinks, produces the
-same attributed rows as the pure core — proving the live path and the golden
-replay cannot diverge (they share the leaf functions; this pins the wiring
-around them). No ClickHouse: sinks capture to lists."""
+"""The engine driver (`run_attribution`: household grouping + the evicting
+watermark-gated pass), run offline, produces the same attributed rows as the
+non-evicting pure oracle on tiny — proving the live path and the golden replay
+cannot diverge (they share the leaf functions; this pins the wiring around
+them). No ClickHouse."""
 
 from pathlib import Path
 
-from bytewax.testing import TestingSink, run_main
 from pydantic import BaseModel
 
 from producer.models import Exposure, ResolvedConversion
 from producer.serialize import canonical_bytes
 from streaming.attribute import attribute
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "tiny"
 
@@ -23,21 +23,11 @@ def _read[M: BaseModel](name: str, model: type[M]) -> list[M]:
     ]
 
 
-def test_dataflow_matches_pure_core() -> None:
+def test_engine_driver_matches_pure_core() -> None:
     exposures = _read("exposures.jsonl", Exposure)
     resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
 
-    attributed: list = []
-    landed: list = []
-    run_main(
-        build_flow(exposures, resolved, TestingSink(attributed), TestingSink(landed))
-    )
-
-    # Same 55 winners as the pure core, compared canonically (Bytewax emits per
-    # key in an unspecified order; sort both by conversion_id).
-    got = sorted(attributed, key=lambda r: r.conversion_id)
+    got = run_attribution(exposures, resolved)
     expected = attribute(exposures, resolved)
     assert [canonical_bytes(r) for r in got] == [canonical_bytes(r) for r in expected]
-
-    # Every drained exposure is offered to the landing sink (RMT dedups on read).
-    assert len(landed) == len(exposures)
+    assert len(got) == 55  # one row per distinct conversion_id

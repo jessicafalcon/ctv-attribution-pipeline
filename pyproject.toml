@@ -5,7 +5,6 @@ description = "Streaming CTV attribution pipeline with an AI measurement-integri
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.125.0",
-    "bytewax>=0.21.1",
     "clickhouse-connect>=1.7.1",
     "confluent-kafka>=2.15.0",
     "dagster>=1.13.18",

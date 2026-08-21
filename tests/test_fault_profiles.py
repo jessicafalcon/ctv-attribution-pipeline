@@ -1,5 +1,5 @@
 """Phase 8 Done-when 1: the five fault profiles run REPRODUCIBLY and each carries
-its ONE isolated fault, proven OFFLINE through the evicting engine (build_flow) —
+its ONE isolated fault, proven OFFLINE through the evicting engine (run_attribution) —
 no services. Numbers are pinned like the medium-parity counts: re-tuning a profile
 JSON means updating the matching assertion in the SAME change, never silently.
 
@@ -13,7 +13,6 @@ no-fault; Phase 10 scores it as a false-positive control).
 from collections import defaultdict
 
 import pytest
-from bytewax.testing import TestingSink, run_main
 
 from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
@@ -24,7 +23,7 @@ from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, HOT_WINDOW, attribute, dedup_streams
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
 
 FAULT_PROFILES = [
     "shared_ip_spike",
@@ -38,12 +37,7 @@ FAULT_PROFILES = [
 def _engine(exps, res):
     metrics.EXPOSURES_EVICTED._value.set(0)
     metrics.reset_join_state_peak()
-    attributed, landed = [], []
-    flow = build_flow(
-        exps, res, TestingSink(attributed), TestingSink(landed), ALLOWED_LATENESS
-    )
-    run_main(flow)
-    return sorted(attributed, key=lambda r: r.conversion_id)
+    return run_attribution(exps, res, ALLOWED_LATENESS)
 
 
 class FaultRun:

@@ -15,7 +15,6 @@ medium.json means updating these assertions in the same change, never silently.
 from datetime import timedelta
 
 import pytest
-from bytewax.testing import TestingSink, run_main
 
 from accuracy.score import score
 from producer.config import load_profile
@@ -25,7 +24,7 @@ from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, attribute, dedup_streams
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
 from tests.pins import MEDIUM_HOT
 
 
@@ -57,14 +56,7 @@ def _score(rows, stream, exps):
 def _run_engine(exps, res):
     metrics.EXPOSURES_EVICTED._value.set(0)
     metrics.reset_join_state_peak()
-    attributed: list = []
-    landed: list = []
-    run_main(
-        build_flow(
-            exps, res, TestingSink(attributed), TestingSink(landed), ALLOWED_LATENESS
-        )
-    )
-    return sorted(attributed, key=lambda r: r.conversion_id)
+    return run_attribution(exps, res, ALLOWED_LATENESS)
 
 
 def test_allowed_lateness_covers_medium_late_max(medium) -> None:

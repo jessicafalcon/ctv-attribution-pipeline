@@ -1,19 +1,15 @@
-"""ClickHouse sink for the Bytewax engine: a DynamicSink whose partitions
-insert batches synchronously; async inserts are a SCALING lever, not built
-(SCALING.md 50k/500k tiers). One ClickHouse client per worker partition, built
-from env via clickhouse.client.connect.
+"""ClickHouse row inserts for the engine and the reconciliation job — synchronous;
+async inserts are a SCALING lever, not built (SCALING.md 50k/500k tiers).
 
-`insert_attributed` and `insert_exposures` are the row builders — they map a
-pydantic model to the DDL column order. Inserts are idempotent by table design:
-attributed_conversions replaces on conversion_id/processed_at, exposures_landed
-collapses on (campaign_id, event_time, exposure_id) (DECISIONS Phase 3)."""
+`insert_attributed` and `insert_exposures` map a pydantic model to the DDL
+column order. Inserts are idempotent by table design: attributed_conversions
+replaces on conversion_id/processed_at, exposures_landed collapses on
+(campaign_id, event_time, exposure_id) (DECISIONS Phase 3)."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
-from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from clickhouse_connect.driver.client import Client
 
-from clickhouse.client import connect
 from producer.models import AttributedConversion, Exposure
 
 _ATTRIBUTED_COLS = [
@@ -90,29 +86,3 @@ def insert_exposures(client: Client, rows: Sequence[Exposure]) -> None:
         for r in rows
     ]
     client.insert("exposures_landed", data, column_names=_EXPOSURE_COLS)
-
-
-class _Partition(StatelessSinkPartition):
-    def __init__(self, insert: Callable[[Client, Sequence], None]):
-        self._client = connect()
-        self._insert = insert
-
-    def write_batch(self, items: list) -> None:
-        if items:
-            self._insert(self._client, items)
-
-    def close(self) -> None:
-        self._client.close()
-
-
-class ClickHouseSink(DynamicSink):
-    """Insert each item batch via `insert`. Stateless: idempotency lives in the
-    table engine, so retries/replays converge (idempotency contract)."""
-
-    def __init__(self, insert: Callable[[Client, Sequence], None]):
-        self._insert = insert
-
-    def build(
-        self, step_id: str, worker_index: int, worker_count: int
-    ) -> StatelessSinkPartition:
-        return _Partition(self._insert)
