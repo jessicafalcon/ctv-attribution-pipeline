@@ -310,9 +310,16 @@ not speculative code.
   producer's multiplier would couple reporting to generation parameters. Co-viewing
   stays a producer-realism knob; the `co_view_bug` fault is scored as a labeled
   capability boundary the agent correctly abstains on (DECISIONS Phase 10).
-- **Iceberg/Parquet landing, multi-touch models, schema evolution beyond v1, co-view
-  inside the engine** — out of scope for v1 (ARCHITECTURE §3.5). Multi-touch is
-  intentionally a *query* over the recorded assists, not a re-run.
+- **Iceberg landing + orchestrated reconciliation** — originally cut, **added in
+  Phase 12**: a local Iceberg exposure lake (`raw.exposures`, day-partitioned) with a
+  DuckDB-over-Iceberg reconcile source proven byte-identical to the ClickHouse-sourced
+  pass, and a Dagster day-partitioned `reconciled_conversions` asset (headless
+  `make reconcile-dagster`; local `dagster dev` UI). Object store / REST catalog /
+  Spark-Trino compute / a containerized Dagster webserver stay the SCALING port. See
+  RESULTS.md and ARCHITECTURE §5.
+- **Multi-touch models, schema evolution beyond v1, co-view inside the engine** — out
+  of scope for v1 (ARCHITECTURE §3.5). Multi-touch is intentionally a *query* over the
+  recorded assists, not a re-run.
 
 ---
 

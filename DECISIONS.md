@@ -1142,3 +1142,79 @@ One entry per non-obvious choice. Newest last.
   `exposures_landed` cross **several** 8192-row granules through the live stack. Counts are
   verified above the granule floor before any lever is measured (a sub-granule table is one
   granule and every lever is a no-op).
+
+## Phase 12
+
+- **ARCHITECTURE §3.5 reversed (approved).** Iceberg landing was listed out of scope
+  for v1; Phase 12 adds it. A committed-spec reversal is a STOP-and-report event
+  (CLAUDE.md workflow) — the developer approved the reversal and the five-package
+  allowlist add (`pyiceberg`, `pyarrow`, `duckdb`, `dagster`, `dagster-webserver`)
+  before the branch opened.
+- **Iceberg metadata is non-deterministic → carved out of the byte-identical
+  guarantee, exactly like the agent.** An Iceberg append stamps a fresh `snapshot_id`
+  + commit timestamp per run, so table *metadata* is not byte-identical across runs
+  even though the *rows* are. Every asserted check reads row content back from the
+  lake; none assert on snapshot ids, commit times, manifest paths, or Dagster run
+  ids/wall-clock. The tiny golden gate keeps reading the deterministic ClickHouse copy.
+- **Dual-write parity-by-construction; spec hook-wording corrected.** The lake is
+  landed from the SAME in-memory deduped `exposures` list that feeds the ClickHouse
+  sink, at `streaming/dataflow.py` `run_engine` (the list at the `build_flow` call) —
+  NOT the spec's literal "`insert_exposures` call site," which is a per-batch Bytewax
+  sink, not a scalar call. Landing one level up gives lake == ClickHouse input set by
+  construction (and inherits the `ENGINE_DEDUP=off` case). Surfaced, not silently
+  repaired; developer approved. The spec's file-scope wording is corrected to match.
+- **Landing is gated `--lake-land`, the SOLE landing site; off for make run/CI.** So
+  the engine path stays byte-identical, the lake stack stays out of every non-lake
+  run (bounded blast radius, the spec pinned decision), and there is no double-land.
+  A re-land is harmless anyway (dedup-on-read).
+- **Idempotency is on READ, not write (append accumulates).** An Iceberg append only
+  accumulates rows — unlike the ClickHouse ReplacingMergeTree, which collapses re-sends
+  on its sort key at FINAL. The DuckDB read does `select distinct` to collapse the
+  re-sends, chosen over replace-on-write so append semantics stay honest. The spec's
+  "idempotent append" is really idempotent-*on-read*.
+- **Invariant the dedup rests on: `exposure_id` is unique per exposure.** The
+  deterministic producer maps one `exposure_id` to exactly one
+  `(campaign_id, event_time, …)` row, so a distinct-on-`exposure_id` lake read equals
+  ClickHouse's FINAL collapse on the full `(campaign_id, event_time, exposure_id)` sort
+  key. Recorded so a future producer change that made `exposure_id` non-unique would be
+  flagged, not silently diverge the two dedup paths.
+- **Lake read returns NAIVE UTC, matching clickhouse-connect.** clickhouse-connect hands
+  DateTime64(3,'UTC') back as a naive datetime holding the UTC wall-clock (tzinfo=None);
+  the matcher compares candidate (ClickHouse) vs exposure (lake) event_times, so they
+  must be the same representation. The DuckDB read does `SET TimeZone='UTC'` (renders the
+  timestamptz at the correct UTC wall-clock — the §8 defense; a default local session
+  would shift it) then drops tzinfo. Found by the live run (aware-vs-naive TypeError in
+  the matcher); the fidelity canary was corrected from aware to the naive-UTC contract.
+- **Land as TIMESTAMPTZ, ms-truncated.** Columns land as Iceberg `timestamptz` (a UTC
+  instant), never naive; event/ingest times are UTC-normalized and truncated to
+  millisecond so the stored value is bit-for-bit the DateTime64(3) ClickHouse holds
+  (producer times are already tz-aware UTC + ms-granular, so the truncation is a
+  defensive no-op on real data).
+- **Day partitions are a STATIC set, not `DailyPartitionsDefinition`.** The idiomatic
+  daily-partitions construct validates keys against the real wall clock and rejects any
+  day not yet elapsed — but the deterministic producer emits conversion days in the
+  wall-clock future (long_delay trails ~33 days past a 2026-08-01 sim_start, past
+  "today"), so a `DailyPartitionsDefinition` run would accept a *different* partition set
+  depending on when it ran: a determinism violation. Found live (`DagsterUnknownPartitionError`
+  after today's date). A fixed `StaticPartitionsDefinition` of day keys is reproducible
+  on any re-run and still day-granular + backfillable.
+- **Dagster UI is local `dagster dev`, not a compose webserver.** The spec contradicted
+  itself (file-scope said "optional dev server," the Review section said "compose
+  service"); resolved toward the file-scope + the headless DONE, per the minimal-but-
+  scalable rule — a containerized/published Dagster webserver is speculative deployment
+  infra, a SCALING/deployment lever, not built (same posture as async inserts and the
+  Flink port). `make dagster-ui` binds loopback (127.0.0.1) with `DAGSTER_HOME` under
+  gitignored `data/`; the headless `make reconcile-dagster` uses an ephemeral instance
+  (nothing persists). The spec's Review-section wording is corrected.
+- **`pyiceberg[sql]` reality: no `[sql]` extra in 0.11.1; writes need `pyiceberg-core`.**
+  The spec named `pyiceberg[sql]`, but pyiceberg 0.11.1 has no `sql` extra (SqlCatalog's
+  deps are base) and the Rust write engine ships as the `pyiceberg-core` extra. Added
+  the extra (a sub-extra of the approved pyiceberg, not a new top-level package). Another
+  spec-vs-reality precision fix, same class as the earlier phases' `.json`/projection
+  corrections.
+- **Only the reconcile *source* swaps; everything else stays ClickHouse.** DuckDB is the
+  one lake compute engine (Spark/Trino are the SCALING port, not built); `exposures_landed`
+  is KEPT as the serving/benchmark copy (dual-write, not replaced). The pass is factored
+  into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
+  `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
+  in the same order, so `make run` is byte-identical.

@@ -240,3 +240,57 @@ The discriminator each scenario turns on, captured once per profile from ClickHo
 ### Honesty boundary
 
 These are small-profile results reported as measured. `co_view_bug`'s abstention is a **labeled capability boundary**, not a gap papered over: the co-view *adjusted* factor is a DECISIONS won't-do (BACKLOG 26 — the honest per-genre expected baseline does not exist in serving data, and sourcing it from the producer's multiplier would couple reporting to generation parameters). The agent correctly declines to diagnose from noise. Verdict/hypothesis stability across reps is a measurement, never a gated assertion (the AI edge is carved out of the byte-identical guarantee, CLAUDE.md).
+
+## Lakehouse landing + orchestrated reconciliation (Phase 12)
+
+The reconciliation long-window matcher can source its candidate exposures from a
+local **Iceberg** lake (via **DuckDB** `iceberg_scan`) instead of ClickHouse, and
+runs as a **Dagster** day-partitioned asset — without changing the pipeline's
+output. Measured on a clean `long_delay` stack (`make test-int-lakehouse` +
+`make lake-land && make reconcile-dagster PROFILE=long_delay && make eval`).
+
+### Byte-identical source swap (Done-when #2)
+
+The recovered rows are identical whether the matcher's exposures come from
+ClickHouse `exposures_landed FINAL` or from Iceberg-via-DuckDB:
+
+| check | result |
+|---|---|
+| lake `raw.exposures` rows after `make lake-land` | 360 (== exposures produced), day-partitioned on `event_time` |
+| ClickHouse-sourced vs Iceberg-sourced recovered rows | **byte-identical** (same set, same order, same `processed_at`, same last-touch exposure_id + assists) |
+| `make eval` recall (long_delay) | **0.9733** — unchanged from the ClickHouse-sourced reconcile |
+| `path='reconciled'` rows written | 29 (== the Phase-6 recovery pin: 32 candidates → 29 recovered) |
+
+Parity holds because the lake read (a) dedups on `exposure_id` (reproducing the
+ReplacingMergeTree FINAL collapse — `exposure_id` is unique) and (b) returns naive
+UTC to the millisecond, matching what clickhouse-connect returns (`SET
+TimeZone='UTC'` then drop tzinfo).
+
+### Orchestration — day-partitioned backfill (Done-when #3)
+
+`reconciled_conversions` is a Dagster day-partitioned asset (static day keys —
+wall-clock-independent for determinism); `reconciled_report` is the global
+finalize. Headless via `make reconcile-dagster` (ephemeral instance, no webserver).
+
+Single partition (`make reconcile-dagster PROFILE=long_delay PARTITION=2026-08-01`):
+
+```
+reconciled_conversions[2026-08-01] materialized
+reconcile-dagster: 1 day-partition(s) recovered + finalize
+```
+
+Backfill over the candidate date range (`make reconcile-dagster PROFILE=long_delay`):
+
+```
+reconciled_conversions[2026-08-01] materialized
+reconciled_conversions[2026-08-19] materialized
+reconciled_conversions[2026-08-20] materialized
+reconciled_conversions[2026-08-21] materialized
+... (2026-08-22 … 2026-08-27, 2026-08-29 … 2026-08-31)
+reconcile-dagster: 13 day-partition(s) recovered + finalize
+```
+
+13 day-partitions cover all hot-miss candidate days; the union reproduces the full
+recovery (recall 0.9733). Iceberg snapshot ids / commit times and Dagster run ids
+are non-deterministic and are never asserted on — only row content is (DECISIONS
+Phase 12).
