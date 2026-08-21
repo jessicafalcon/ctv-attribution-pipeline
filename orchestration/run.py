@@ -9,6 +9,7 @@ only orchestrates (DECISIONS Phase 12).
 
 import argparse
 
+from clickhouse_connect.driver.client import Client
 from dagster import DagsterInstance, materialize
 
 from clickhouse.apply import apply as apply_ddl
@@ -21,7 +22,7 @@ from orchestration.assets import (
 from reconcile.reconcile import _read_candidates
 
 
-def _candidate_days(client) -> list[str]:
+def _candidate_days(client: Client) -> list[str]:
     """The distinct conversion-event-time days that hold hot-miss candidates —
     the only partitions worth materializing."""
     return sorted({c.event_time.date().isoformat() for c in _read_candidates(client)})

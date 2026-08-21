@@ -21,6 +21,7 @@ PROM_IMAGE = prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbb
 
 setup:
 	uv sync
+	uv run python -m lake.install_extension  # duckdb iceberg ext (network); tests load-only
 	uv run pre-commit install
 
 up:

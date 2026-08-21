@@ -227,8 +227,9 @@ lakehouse storage angle (Iceberg), compute angle (DuckDB), and an orchestrator.
 
 **Done when.** Reconciled output is byte-identical to the current ClickHouse-sourced
 pass (asserted on row content — Iceberg metadata is carved out of the determinism
-guarantee); a Dagster partition backfill is demonstrated; `make eval` reproduces
-long_delay recall 0.973. **Needs first:** 5-package allowlist add + ARCHITECTURE §3.5
+guarantee); a Dagster partition backfill is demonstrated; `make eval PROFILE=long_delay`
+reproduces long_delay recall 0.973 (`PROFILE=long_delay` required — bare `make eval`
+defaults to tiny; DECISIONS Phase 12). **Needs first:** 5-package allowlist add + ARCHITECTURE §3.5
 reversal. Spec: `specs/phase-12-lakehouse-landing.md`.
 
 ## Phase 13 — Query cost levers (PROPOSED)

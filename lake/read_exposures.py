@@ -49,12 +49,17 @@ def read_exposures_by_household(
 ) -> dict[str, list[Exposure]]:
     """Bulk-load the given households' exposures from the lake in one scan,
     deduped on exposure_id, grouped by household — the DuckDB/Iceberg counterpart
-    of reconcile._read_exposures_for. `min_event_time` (optional) day-partition
+    of reconcile.sources.ClickHouseExposureSource.read_for. `min_event_time`
+    (optional) day-partition
     prunes exposures provably outside every candidate's window."""
     if not household_ids:
         return {}
     con = duckdb.connect()
-    con.execute("install iceberg; load iceberg;")
+    # LOAD only — never install. The extension is installed once at setup
+    # (`make setup` / CI run `python -m lake.install_extension`, network allowed
+    # there); loading here reaches no network, so the offline unit suite stays
+    # offline and fails loud if setup was skipped (DECISIONS Phase 12).
+    con.execute("load iceberg")
     # Force UTC rendering: DuckDB returns a TIMESTAMPTZ in the session timezone, so
     # a default (local) session would hand back the same instant with a local-tz
     # tzinfo — the ARCHITECTURE §8 gotcha (clickhouse-connect had the mirror bug).

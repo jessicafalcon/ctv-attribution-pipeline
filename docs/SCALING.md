@@ -26,6 +26,13 @@ partition counts but not the structure.
 - **ClickHouse single node**: ReplacingMergeTree, **synchronous inserts** (async
   inserts are a scale-up lever, not built here — see the 50k/500k tiers below), a
   scheduled rollup refresh.
+- **Local lakehouse (Phase 12)**: exposures dual-write to a local Iceberg table
+  (SqlCatalog on SQLite + `file://` warehouse), read back by DuckDB as the reconcile
+  source, orchestrated by a local Dagster `dagster dev`. The **scale-tier port**
+  (cited by ARCHITECTURE §5 / README, not built): an object store + REST catalog for
+  the warehouse, Spark/Trino as the lake compute engine (DuckDB is the laptop proof of
+  the compute-on-lake pattern), and a deployed/containerized Dagster instead of the
+  loopback dev server.
 
 Everything below is what has to change as the *rate* (not the event count) climbs.
 

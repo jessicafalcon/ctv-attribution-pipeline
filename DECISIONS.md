@@ -1218,6 +1218,16 @@ One entry per non-obvious choice. Newest last.
   into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
   `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
   in the same order, so `make run` is byte-identical.
+- **The DuckDB `iceberg` extension is the ONE dependency not hash-pinned in uv.lock
+  (installed at setup, loaded offline).** DuckDB fetches the `iceberg` extension (a
+  signed binary, tied to the duckdb version) from extensions.duckdb.org — it is not a
+  Python package, so it lives outside `uv.lock`'s hashed supply chain. To keep the
+  offline unit suite (`make test`, run in CI) truly network-free (both code-reviewer
+  and security-reviewer flagged the original runtime `install`): `make setup` and the
+  CI offline job run `python -m lake.install_extension` once (network allowed there),
+  and `lake/read_exposures.py` does `load iceberg` only — so a machine that skipped
+  setup fails loud, never silently fetches. The CI edit re-triggered security-reviewer
+  (accepted). Provenance recorded here as the single non-uv.lock dependency.
 - **DONE-command `make eval` needs an explicit `PROFILE=long_delay` (5th spec-vs-reality
   fix).** `make eval` is `accuracy.run --profile "$(PROFILE)"` with `PROFILE ?= tiny` and
   no "last profile" mechanism, so bare `make eval` scores tiny's truth file against the

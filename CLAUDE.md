@@ -201,6 +201,11 @@ AI sits at the edge; the pipeline is deterministic.
 - The agent is read-only (DB-enforced SELECT-only user), off the critical
   path, and outputs are pydantic-validated. Pipeline output with the agent
   disabled is byte-identical.
+- The Iceberg lake's metadata (snapshot ids, commit times) and Dagster run
+  ids/wall-clock are non-deterministic and carved out of the byte-identical
+  guarantee, exactly like the agent — every asserted check reads row content
+  back, never metadata; landing is off by default (`--lake-land`), so `make
+  run`/CI stay byte-identical (Phase 12; DECISIONS Phase 12).
 - The pipeline NEVER reads truth links.
 - Every write to attributed_conversions is idempotent (ReplacingMergeTree
   keyed conversion_id, version processed_at). Rollups are refreshed on
