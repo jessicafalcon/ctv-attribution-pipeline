@@ -241,9 +241,10 @@ make down && make up && make seed PROFILE=long_delay && make run && make eval PR
 `make run` is engine (resolve in-process) → reconciliation, a single pass (not a
 daemon). `make run-hot` stops before reconciliation and backs the hot-path oracle
 suites, where a reconciliation pass would over-credit the tiny/medium long-tail
-organics and shift the pinned numbers. Nine profiles live under `producer/profiles/`: `tiny`,
+organics and shift the pinned numbers. Eleven profiles live under `producer/profiles/`: `tiny`,
 `medium`, `long_delay`, plus six fault/control profiles (`shared_ip_spike`,
-`late_burst`, `co_view_bug`, `real_lift`, `duplicate_flood`, `no_fault_baseline`).
+`late_burst`, `co_view_bug`, `real_lift`, `duplicate_flood`, `no_fault_baseline`) and two
+volume profiles (`bench_large`, `scale_curve`).
 
 Other entry points — `make report` / `restate` / `bench` / `context` (metrics and the
 LLM-free context object), `make eval` (accuracy vs truth), `make test` (offline,

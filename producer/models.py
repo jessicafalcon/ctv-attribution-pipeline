@@ -1,10 +1,12 @@
 """Pydantic models — the single source of truth for every wire and row schema:
-the Kafka topic schemas (`Exposure`, `Conversion`, `ResolvedConversion`, plus
-the graph/truth records) AND the ClickHouse serving-table schema
-(`AttributedConversion`). The topic models have JSON Schemas generated from them
-(producer/schemas.py) and registered in the schema registry; never hand-edited.
-`AttributedConversion` is a *table* schema, not a registered subject — its
-columns live in clickhouse/ddl.sql and its insert order in streaming/sink.py.
+the Kafka topic schemas (`Exposure`, `Conversion`, `Household` for the
+`device_graph` topic, plus the truth record), the in-process resolve output
+(`ResolvedConversion` — no topic since Phase 16), AND the ClickHouse
+serving-table schema (`AttributedConversion`). The three topic models have JSON
+Schemas generated from them (producer/schemas.py) and registered in the schema
+registry; never hand-edited. `ResolvedConversion` and `AttributedConversion` are
+not registered subjects — the latter is a *table* schema whose columns live in
+clickhouse/ddl.sql and whose insert order lives in streaming/sink.py.
 
 Co-located deliberately so the output models can subclass `Conversion` without
 a cross-package import cycle (see DECISIONS Phase 3). Split trigger: move the

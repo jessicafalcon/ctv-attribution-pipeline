@@ -1081,9 +1081,10 @@ One entry per non-obvious choice. Newest last.
 - **The tiebreak moved, not rewritten, and lives in ONE place.**
   `reconcile.pick_household` is the old `reduce_conversion` body — most-recent
   last-touch exposure, ties `exposure_id` then `household_id`, attributed beats
-  unattributed, all-unattributed → no recovery (stays the hot row). `grep
-  reduce_conversion` returns nothing. Deterministic: candidate order is the graph's
-  sorted owners; the max key is a total order.
+  unattributed, all-unattributed → no recovery (stays the hot row). No code
+  symbol named `reduce_conversion` remains — the only source hit is the
+  `pick_household` docstring naming its origin. Deterministic: candidate order is
+  the graph's sorted owners; the max key is a total order.
 - **Reconciliation reads the device graph from the compacted topic, not a landed
   table.** `expand_candidates` re-resolves an ambiguous placeholder with the
   engine's own `resolve_one` against `load_graph_index(broker)` — the same loader,
@@ -1143,6 +1144,24 @@ One entry per non-obvious choice. Newest last.
   registered subject and `ResolvedConversion` no longer is, so this change
   re-registers nothing — the `ResolvedConversion` / `schemas.py` docstrings were
   cleaned in the same commit (the old "Topic: conversions_resolved").
+- **The agent's shared-IP discriminator is now reconciliation-dependent — an
+  accepted consequence, said plainly.** `agent/readers.py` computes
+  `ambiguous_attributed` / `ip_resolved_fraction` over `attributed = 1` rows. Since
+  the hot path never credits an ambiguous row, on a hot-only DB (`make run-hot`
+  then `make context`) `ambiguous_attributed` is **structurally 0** and
+  `device_graph_mismatch` is undetectable until a reconcile pass has run. `make
+  run` and `make agent-eval` reconcile first, so the signal returns there — but its
+  meaning shifted from "a hot fan-out landed here" to "reconciliation credited it
+  here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
+  new field — agent contract pinned); one sentence in `agent/context.py` says it.
+  Trigger to re-validate the agent on this: BACKLOG 47 (`make agent-eval` re-run,
+  API tokens, ask first).
+- **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
+  match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
+  the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the
+  rule still discriminates (long_delay 0.696 fires, tiny stays silent) and a band
+  retuned to a single profile's new number is a worse rule; revisit in Phase 18
+  when the alert rules are recaptured with the cost/ops levers.
 - **The promtool alert fixture was recaptured; tiny now trips `RestatementMagnitude`
   and the fixture says so.** `make metrics-capture` on clean tiny and long_delay
   stacks, then `gen_alert_fixtures.py`: long_delay's hot attributed 83 → 80 and
@@ -1160,11 +1179,6 @@ One entry per non-obvious choice. Newest last.
   possible after `make run` — FINAL collapses the hot rows under the reconciled
   versions — so the target stops at the hot path and `test_context.py` calls
   `reconcile.run()` between its two assertions. `test-int-agent` keeps `make run`.
-- **`producer/models.py` still says "Topic: conversions_resolved" in the
-  `ResolvedConversion` docstring.** Left as-is under the producer zero-diff pin (a
-  docstring edit also bumps the generated JSON schema description); flagged for the
-  developer as a one-line follow-up.
-
 ## Phase 15
 
 - **The runbook is a retrospective incident log by choice, not a forward playbook.**

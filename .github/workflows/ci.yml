@@ -50,8 +50,9 @@ jobs:
       # Reconciliation coverage: its rollup/restatement/RMT-supersession logic is
       # live-only (no offline oracle), so it must run in CI. Its own clean
       # long_delay stack (the target does down && up && seed && run), which tiny
-      # can't substitute — tiny has no caused hot-misses, so it can't test
-      # recovery at all. Costs a second stack cycle.
+      # can't substitute — tiny's only hot-misses are its 3 deferred shared-IP
+      # conversions (Phase 16), no state-misses, so it can't test long-window
+      # recovery. Costs a second stack cycle.
       - run: make test-int-long-delay
       # Benchmark equality guard: test-int-long-delay above leaves a populated
       # campaign_hourly on a long_delay stack, so `make bench` runs for free here

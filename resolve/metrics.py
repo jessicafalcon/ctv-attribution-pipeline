@@ -16,11 +16,11 @@ from producer.models import ResolvedConversion
 CONSUMED = Counter("resolve_conversions_consumed_total", "Conversion rows consumed.")
 INPUT_BACKLOG = Gauge(
     "resolve_input_backlog",
-    "Messages the resolve consumer must clear from `conversions` at drain start "
-    "(offset 0 → end-of-log). BATCH PROXY for consumer lag: the stage reads from "
-    "OFFSET_BEGINNING every pass with no committed group offsets (BACKLOG 19), so "
-    "this is the topic backlog ≈ f(volume), not live consumer-group lag. Set once "
-    "per run (the backlog the consumer started behind by).",
+    "Conversions the engine's in-process resolve step cleared from `conversions` "
+    "at drain start (offset 0 → end-of-log). BATCH PROXY for consumer lag: the "
+    "engine drains from OFFSET_BEGINNING every pass with no committed group "
+    "offsets (BACKLOG 19), so this is the topic backlog ≈ f(volume), not live "
+    "consumer-group lag. Set once per run (emitted by the engine since Phase 16).",
 )
 RESOLVED = Counter(
     "resolve_conversions_resolved_total",

@@ -212,6 +212,16 @@ Two honesty boundaries on what this proves:
 
 Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
 
+> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** The three
+> tables below were captured by `make agent-eval` (30 live invocations) before
+> Phase 16 deferred shared-IP conversions to reconciliation. Since then the
+> context a fault profile presents has moved in one place: profiles with
+> ambiguous conversions (`shared_ip_spike`: 25, `co_view_bug`: 1) now restate
+> after `make run` (the deferral landing), so their `max|Δroas|` is no longer
+> 0 — those two cells are blanked below rather than shown stale. Verdicts,
+> `ip_resolved_fraction` and `ambig` are not affected by construction, but the
+> catalog has not been re-validated live (API tokens). Re-run: BACKLOG 47.
+
 ### Fault → top hypothesis → correct?
 
 | scenario | kind | expected outcome | correct | verdict spread | top-hypothesis spread |
@@ -240,10 +250,10 @@ The discriminator each scenario turns on, captured once per profile from ClickHo
 
 | scenario | match_rate | ip_resolved_fraction | ambig | max_cand | max\|Δroas\| | near_edge |
 |---|---|---|---|---|---|---|
-| `shared_ip_spike` | 0.992 | 0.420 | 25 | 3 | 0.000 | 0.000 |
+| `shared_ip_spike` | 0.992 | 0.420 | 25 | 3 | — (restates since Phase 16) | 0.000 |
 | `real_lift` | 1.000 | 0.061 | 0 | 1 | 0.000 | 0.000 |
 | `late_burst` | 1.000 | 0.065 | 1 | 2 | 26.604 | 0.000 |
-| `co_view_bug` | 0.988 | 0.067 | 1 | 3 | 0.000 | 0.000 |
+| `co_view_bug` | 0.988 | 0.067 | 1 | 3 | — (restates since Phase 16) | 0.000 |
 | `duplicate_flood` | 0.984 | 0.074 | 0 | 1 | 0.000 | 0.000 |
 | `no_fault_baseline` | 0.977 | 0.039 | 0 | 1 | 0.000 | 0.000 |
 
@@ -269,7 +279,7 @@ ClickHouse `exposures_landed FINAL` or from Iceberg-via-DuckDB:
 | lake `raw.exposures` rows after `make lake-land` | 360 (== exposures produced), day-partitioned on `event_time` |
 | ClickHouse-sourced vs Iceberg-sourced recovered rows | **byte-identical** (same set, same order, same `processed_at`, same last-touch exposure_id + assists) |
 | `make eval` recall (long_delay) | **0.9733** — unchanged from the ClickHouse-sourced reconcile |
-| `path='reconciled'` rows written | 29 (== the Phase-6 recovery pin: 32 candidates → 29 recovered) |
+| `path='reconciled'` rows written | 32 (== the live pin since Phase 16: 35 candidates → 32 recovered — 29 state-misses + the 3 deferred shared-IP conversions; 3 organics without an in-90d exposure stay unmatched) |
 
 Parity holds because the lake read (a) dedups on `exposure_id` (reproducing the
 ReplacingMergeTree FINAL collapse — `exposure_id` is unique) and (b) returns naive

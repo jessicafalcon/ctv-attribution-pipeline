@@ -58,6 +58,12 @@ rate, ambiguity rate, fan-out.
 fan-out; a run over the tiny fixture yields the expected resolved records
 (committed under `fixtures/tiny/expected/`).
 
+(Superseded in part by Phase 16: the consumer, the `conversions_resolved` topic
+and its subject are gone — resolve is the same function called in-process by the
+engine (`resolve_one`, the Phase-2 signature). The Done-when still holds as written
+for the function and the fixture; see `specs/phase-16-simplify-core.md` and
+DECISIONS Phase 16, which are authoritative.)
+
 ---
 
 ## Phase 3 — Attribution engine, minimal
@@ -87,6 +93,17 @@ conversions credited to a coincidentally-recent in-window exposure), NOT
 shared-IP misattribution; shared-IP wrong-household misattribution is exercised
 by the fault profiles (Phase 8), not tiny. (Compare against the
 expected-attributed fixture, not directly against truth.)
+
+(Corrected by Phase 16 — the text above is the Phase-3 contract as written and is
+kept as history: the `conversion_id`-keyed reduction no longer exists, and the
+"MUST include" clause is superseded. An ambiguous shared-IP conversion is now
+emitted unattributed on the hot path (`reason='ambiguous_ip'`, one placeholder
+row per `conversion_id`) and settled by reconciliation's `pick_household` — the
+same most-recent-exposure rule, moved. Bytewax is gone too; the engine is a
+plain-Python batch attributor. tiny's hot precision is therefore 0.681 (32/47,
+the 3 caused ambiguous conversions deferred), and 0.673 (35/52) is its
+post-reconcile number. `specs/phase-16-simplify-core.md`, `tests/pins.py` and
+DECISIONS Phase 16 are authoritative.)
 
 ---
 
@@ -208,14 +225,17 @@ section listing what was cut and why.
 
 # Proposed extensions (post-plan)
 
-Phases 12–15 are **proposed**, not part of the original plan above (which ends at
-the Phase 11 checkpoint and yields a coherent project on its own). They extend the
-data-platform surface — lakehouse storage + compute, an orchestrator, a real
-query-cost story, a measured scaling point, and a runbook.
-Each has a spec under `specs/phase-N-<slug>.md` and is marked PROPOSED there: none
-opens a branch until approved, and Phase 12 additionally needs dependency sign-off
-and an ARCHITECTURE §3.5 scope reversal. They are independent except that Phase 13
-reuses Phase 14's volume profile if that lands first.
+Phases 12–19 are post-plan extensions, not part of the original plan above (which
+ends at the Phase 11 checkpoint and yields a coherent project on its own). They
+extend the data-platform surface — lakehouse storage + compute, an orchestrator, a
+real query-cost story, a measured scaling point, a runbook, a simplified core, a
+lake of record, cost/ops levers, and a docs reshape. Each has a spec under
+`specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
+how it was approved, and none opens a branch until approved. Status: **12–15
+merged**, **16 in review** (`phase-16-simplify-core`), **17–19 specs approved,
+not started** (Phase 17's spec needs the Phase-16 follow-up edit recorded in
+BACKLOG before its branch opens). Phase 12 additionally needed dependency sign-off
+and an ARCHITECTURE §3.5 scope reversal.
 
 ## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
 
@@ -293,3 +313,30 @@ passes against the once-re-frozen tiny golden and re-pinned `tests/pins.py` (tin
 47/35/32, medium hot 129/92/91, long_delay 80/75/44 → 112/75/73; post-reconcile tiny
 and medium equal the pre-Phase-16 hot numbers; shared_ip_spike post-reconcile 69/80
 == the old hot reduce). Spec: `specs/phase-16-simplify-core.md`.
+
+## Phase 17 — Lake of record (PROPOSED)
+
+**Goal.** Flip the arrow: the Iceberg lake becomes the system of record and
+ClickHouse a replayable serving projection, with bucket-aligned reconciliation.
+Spec: `specs/phase-17-lake-of-record.md`. Pre-condition from Phase 16 (BACKLOG):
+the spec must add an explicit ambiguous-candidate path — a deferred row's
+candidate households hash to other buckets, so a bucket-local join would silently
+stop recovering them — via a `candidate_households` column and "explode per
+candidate → bucket-local join → reduce by `conversion_id`" (fan-out/reduce in
+batch, never on the hot path); `reason` and `candidate_households` join the
+"same columns" list; `device_graph` lands as a lake table so reconciliation needs
+no broker.
+
+## Phase 18 — Cost and ops levers (PROPOSED)
+
+**Goal.** Incremental rollups from a dirty set (the Phase-16
+`engine_conversions_ambiguous_deferred_total` / `reason` column are its
+precursors), part-count alerts, async inserts, a query-cost table, schema
+compatibility BACKWARD; the alert rules get recaptured here (revisit the
+`MatchRateOutOfBand` headroom then). Spec: `specs/phase-18-cost-and-ops.md`.
+
+## Phase 19 — Docs reshape (PROPOSED)
+
+**Goal.** Generated blocks or pins, nothing hand-typed, for every number in
+RESULTS; BACKLOG triage (close, not re-defer); rename `streaming/` to reflect the
+batch attributor it is. Spec: `specs/phase-19-docs-reshape.md`.

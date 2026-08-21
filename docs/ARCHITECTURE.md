@@ -392,7 +392,7 @@ clickhouse/      DDL, users, migrations
 queries/         reporting SQL + benchmark harness
 observability/   prometheus, grafana dashboards (JSON), alert rules
 agent/           collectors, hypothesis catalog, probe registry, loop, eval
-docs/            ARCHITECTURE.md  PHASES.md  SCALING.md  RESULTS.md
+docs/            ARCHITECTURE.md  PHASES.md  SCALING.md  RESULTS.md  RUNBOOK.md
 tests/           unit; tests/integration/ against compose
 fixtures/        golden tiny-profile data and expected outputs
 README.md        problem → architecture → results, reads like a design doc

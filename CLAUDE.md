@@ -81,7 +81,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `fixtures/tiny/` — golden producer output + expected resolved/attributed
   rows. READ-ONLY ground truth after Phase 1.
 - `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
-  RESULTS.md, demo_checklist.md.
+  RESULTS.md, RUNBOOK.md (+ check_runbook.py).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -161,7 +161,8 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test` — pytest, no services, no network
 - `make test-int` — pytest against running compose stack (tiny profile)
 - `make test-int-medium` — clean medium-only stack (make down && up && seed
-  medium && run medium) → the Phase-5 live hardening proof; isolated because
+  medium && run-hot) → the Phase-5 live hardening proof (hot engine only — a
+  reconcile pass would shift the pinned hot precision); isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
 - `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
   long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
@@ -184,8 +185,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
-- Hot-path headline (fast, stable pins — tiny has no caused hot-misses, so
-  `run-hot` avoids reconciliation over-crediting its organics):
+- Hot-path headline (fast, stable pins — tiny's only caused hot-misses are the
+  3 deferred shared-IP conversions, so `run-hot` keeps the hot pins and avoids
+  reconciliation over-crediting its organics):
   `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
 - Reconciliation + restatement (where the long tail earns its keep — recall
   0.587→0.973, ROAS restated up):
@@ -308,7 +310,8 @@ standard way over the clever way.
 - Stack surprises (ClickHouse, Redpanda, pyiceberg/DuckDB/Dagster): check official docs
   before working around; log the finding under ARCHITECTURE.md "Gotchas".
 - Do not add features outside ARCHITECTURE.md without asking. Out of scope
-  v1: co-viewing inside the engine, Iceberg landing, multi-touch models.
+  v1: co-viewing inside the engine, multi-touch models. (Iceberg landing was
+  out of scope v1 until the approved Phase-12 reversal — ARCHITECTURE §3.5.)
 - Destructive commands (volume removal, DROP, TRUNCATE): only via `make
   down`, or with explicit confirmation.
 - API-token commands (`make agent-run`, `make agent-eval`): ask first.
