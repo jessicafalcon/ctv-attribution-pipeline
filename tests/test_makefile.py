@@ -98,6 +98,14 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         # Phase 17: a clean stack is a clean lake — the target resets ITS profile's
         # lake (explicit CONFIRM=yes), else run-hot would reload an older pass.
         assert resets == seeds, f"{target}: lake-reset {resets} != seed {seeds}"
+        # … and the target pins PROFILE target-wide, so its pytest line (run by the
+        # parent make, not the `$(MAKE) … PROFILE=p` children) gets the same
+        # LAKE_ROOT as the populate step.
+        (seed,) = seeds
+        pin = rf"^{target}: PROFILE = {re.escape(seed)}$"
+        assert re.search(pin, MAKEFILE.read_text(), re.M), (
+            f"{target}: missing target-specific `PROFILE = {seed}`"
+        )
 
 
 def test_lake_reset_prompts_unless_confirmed_and_scopes_to_the_profile() -> None:

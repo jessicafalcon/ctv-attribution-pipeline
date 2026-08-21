@@ -66,6 +66,10 @@ resolve:
 # its own PROFILE instead of inheriting the parent's exported value (the
 # test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
 # Override on the command line (make run LAKE_ROOT=...); tests use a tmp root.
+# Each clean-stack test-int-* target pins PROFILE target-wide (`target: PROFILE =
+# p`) so its pytest line — which runs in the parent make — sees the same lake as
+# the `$(MAKE) run PROFILE=p` child (seen live: the test otherwise landed into
+# data/lake/tiny while run-hot populated data/lake/long_delay).
 LAKE_ROOT = data/lake/$(PROFILE)
 export LAKE_ROOT
 
@@ -231,6 +235,7 @@ test-int:
 # has a couple of hot-unattributed organics that the 90d pass would over-credit,
 # reconciling here would shift the pinned hot-only precision (92/130). The medium
 # proof is a hot-engine proof by design.
+test-int-medium: PROFILE = medium
 test-int-medium:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=medium CONFIRM=yes
@@ -243,6 +248,7 @@ test-int-medium:
 # the sanctioned `make down` (tiny/medium/long_delay share conversion_id space;
 # DECISIONS Phase 5). Recovers the long-delay misses, then asserts the recovery
 # delta + restatement against ClickHouse FINAL.
+test-int-long-delay: PROFILE = long_delay
 test-int-long-delay:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
@@ -258,6 +264,7 @@ test-int-long-delay:
 # Phase 16), then runs the reconcile pass itself and pins the post side (the
 # shared-IP fault observed: 69/80 correct, 11 wrong-household, Row 20) and the
 # populated context (report_snapshots exists once that pass has run).
+test-int-shared-ip: PROFILE = shared_ip_spike
 test-int-shared-ip:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
@@ -271,6 +278,7 @@ test-int-shared-ip:
 # INSERT/ALTER/DROP/CREATE → ACCESS_DENIED — and that the whole collector read path
 # runs under agent_ro (SN2). NO LLM call, so no API tokens: the loop is unit-tested
 # with a mocked client (tests/test_loop.py); this proves the DB boundary live.
+test-int-agent: PROFILE = shared_ip_spike
 test-int-agent:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
@@ -287,6 +295,7 @@ test-int-agent:
 # sourced == Iceberg-sourced, byte-identical); the Dagster-orchestrated pass
 # reproduces the recovery; and an ACCUMULATED lake (≥3 appends) loads and
 # reconciles byte-identically. No API tokens.
+test-int-lakehouse: PROFILE = long_delay
 test-int-lakehouse:
 	$(MAKE) down
 	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
