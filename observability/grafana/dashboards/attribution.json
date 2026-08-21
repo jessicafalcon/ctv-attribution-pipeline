@@ -112,6 +112,20 @@
         { "refId": "A", "expr": "engine_dedup_suppressed_total", "legendFormat": "dedup suppressed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
         { "refId": "B", "expr": "engine_exposures_evicted_total", "legendFormat": "exposures evicted", "datasource": { "type": "prometheus", "uid": "prometheus" } }
       ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Engine — ambiguous deferred (shared-IP → reconciliation)",
+      "description": "engine_conversions_ambiguous_deferred_total: shared-IP conversions the hot path emitted unattributed (reason ambiguous_ip) instead of guessing a household (Phase 16). A subset of unattributed; the reconcile pass credits them. The only hot-path signal that ambiguity is being deferred — the Phase-18 dirty-set precursor.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "engine_conversions_ambiguous_deferred_total", "legendFormat": "ambiguous deferred", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "engine_conversions_unattributed_total", "legendFormat": "unattributed (all reasons)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
     }
   ]
 }

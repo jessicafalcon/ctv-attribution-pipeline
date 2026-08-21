@@ -18,12 +18,18 @@ from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
 from producer.serialize import jsonl
-from reconcile.reconcile import LONG_WINDOW
+from reconcile.reconcile import (
+    LONG_WINDOW,
+    expand_candidates,
+    reconcile,
+    reconciled_at_for,
+)
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, HOT_WINDOW, attribute, dedup_streams
 from streaming.dataflow import run_attribution
+from tests.pins import SHARED_IP_HOT
 
 FAULT_PROFILES = [
     "shared_ip_spike",
@@ -96,7 +102,11 @@ def test_shared_ip_spike_defers_ambiguous_hot_no_wrong_household(runs) -> None:
     r = runs["shared_ip_spike"].score()
     assert r.caused_wrong_household == 0
     assert r.caused_missed == 19  # every one an ambiguous_ip deferral, not a loss
-    assert (r.truth_links, r.household_correct) == (80, 61)
+    assert (r.credited, r.truth_links, r.household_correct) == (
+        SHARED_IP_HOT.credited,
+        SHARED_IP_HOT.truth,
+        SHARED_IP_HOT.correct,
+    )
     assert r.recall < 1.0
     deferred = [c for c in runs["shared_ip_spike"].rows if not c.attributed]
     assert sum(c.candidate_count > 1 for c in deferred) >= 19
@@ -192,31 +202,47 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
     assert peak_late < 7 * 86400
 
 
-# --- Phase 10: the full-run sweep injects no spurious STATE-MISS restatement --
+# --- Phase 10/16: what the full-run sweep restates on the in-window scenarios ---
 # `make agent-eval` runs the FULL pipeline (incl. reconciliation) per scenario so
-# late_burst's restatement exists. Confirm the three IN-WINDOW scenarios (all event-time
-# delays inside the 7d window) recover no state-miss on the long window — the long
-# window credits exactly the hot set. (late_burst is excluded: its misses are arrival
-# lateness / eviction, not event-time, so it genuinely restates.)
-# Phase 16 caveat: these profiles DO now restate through a second channel — their
-# shared-IP conversions are deferred hot (ambiguous_ip) and credited by the
-# reconcile pass — so report_snapshots PRE != FINAL wherever a profile has ambiguous
-# conversions. That restatement is the deferral landing, not a late-arrival signal;
-# agent-eval is not re-run in Phase 16 (API tokens) — recorded as an open risk.
+# late_burst's restatement exists. The three IN-WINDOW scenarios (all event-time
+# delays inside the 7d window) have two reconciliation channels, pinned separately
+# through the REAL path (expand_candidates + reconcile, not the hot oracle, which
+# refuses ambiguous rows at any window):
+# - state-miss channel: recovers NOTHING (the long window credits exactly the hot
+#   set) — no late-arrival restatement, the Phase-10 false-positive guard;
+# - ambiguous_ip channel (Phase 16): recovers exactly the deferred shared-IP
+#   conversions. shared_ip_spike has 25 and therefore DOES restate after `make run`
+#   (the deferral landing, not a late-arrival signal); real_lift and
+#   no_fault_baseline have none and do not restate. agent-eval is not re-run in
+#   Phase 16 (API tokens) — BACKLOG 47.
+# (late_burst is excluded: its misses are arrival lateness / eviction, not
+# event-time, so it genuinely restates.)
 
 
-@pytest.mark.parametrize("name", ["shared_ip_spike", "real_lift", "no_fault_baseline"])
-def test_in_window_scenarios_recover_nothing_on_the_long_window(name: str) -> None:
+@pytest.mark.parametrize(
+    "name,deferred",
+    [("shared_ip_spike", 25), ("real_lift", 0), ("no_fault_baseline", 0)],
+)
+def test_in_window_scenarios_restate_only_through_the_deferral_channel(
+    name: str, deferred: int
+) -> None:
     p = load_profile(name)
     s = generate(p, p.seed)
     idx = GraphIndex.from_households(s.graph.households)
     exps, res, _ = dedup_streams(s.exposures, resolve_stream(s.conversions, idx))
+    hot = attribute(exps, res, HOT_WINDOW)
+    by_hh: dict[str, list] = defaultdict(list)
+    for e in exps:
+        by_hh[e.household_id].append(e)
+    at = reconciled_at_for(max(e.ingest_time for e in exps))
+    candidates = [r for r in hot if not r.attributed]
+    state_miss = [r for r in candidates if r.reason == "state_miss"]
+    ambiguous = [r for r in candidates if r.reason == "ambiguous_ip"]
+    assert len(state_miss) + len(ambiguous) == len(candidates)
 
-    def attributed_ids(window):
-        return {r.conversion_id for r in attribute(exps, res, window) if r.attributed}
-
-    hot = attributed_ids(HOT_WINDOW)
-    long = attributed_ids(LONG_WINDOW)
-    # The long window credits exactly the hot set — reconciliation recovers nothing,
-    # so no restatement (roas_delta) is produced on these profiles.
-    assert long == hot
+    # State-miss channel: nothing to recover on the long window.
+    assert reconcile(state_miss, by_hh, LONG_WINDOW, at) == []
+    # Ambiguous channel: exactly the deferred set, each credited once.
+    recovered = reconcile(expand_candidates(ambiguous, idx), by_hh, LONG_WINDOW, at)
+    assert len(ambiguous) == deferred
+    assert {r.conversion_id for r in recovered} == {r.conversion_id for r in ambiguous}

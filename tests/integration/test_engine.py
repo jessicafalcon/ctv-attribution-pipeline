@@ -51,6 +51,7 @@ def _expected_decisions() -> dict[str, tuple]:
             bool(r["attributed"]),
             tuple(r["assists"]),
             r["path"],
+            r["reason"],
         )
     return out
 
@@ -61,6 +62,15 @@ def test_engine_final_matches_expected_fixture() -> None:
 
     got = read_attributed_decisions(connect())
     assert got == _expected_decisions()
+    # The Phase-16 reason column round-trips: 47 credited (null), 3 state-misses,
+    # 5 shared-IP deferrals — read back live, not only written.
+    from collections import Counter
+
+    assert Counter(d[5] for d in got.values()) == {
+        None: 47,
+        "state_miss": 3,
+        "ambiguous_ip": 5,
+    }
 
 
 def test_exposures_landed_idempotent_over_two_runs() -> None:

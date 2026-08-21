@@ -158,16 +158,19 @@ def reconcile(
 def _read_candidates(client: Client) -> list[ResolvedConversion]:
     """Hot-unattributed rows only (attributed=0 AND path='hot') from FINAL,
     reconstructed as ResolvedConversion — both `reason` values, state_miss and
-    ambiguous_ip. The `reason` column is the explicit contract; it is asserted to
-    agree with `candidate_count` (a mismatch would mean a writer bypassed the
-    engine's `_attributed`). Never reads the accuracy side file."""
+    ambiguous_ip. The `reason` column is the explicit contract; a NON-NULL value is
+    asserted to agree with `candidate_count` (a mismatch would mean a writer
+    bypassed the engine's `_attributed`). NULL is accepted: rows written before the
+    Phase-16 additive migration carry NULL until the next engine pass rewrites
+    them, and the candidate kind is still derivable from `candidate_count`. Never
+    reads the accuracy side file."""
     rows = client.query(
         f"select {_CANDIDATE_COLS} from attributed_conversions final "
         "where attributed = 0 and path = 'hot' order by conversion_id"
     ).result_rows
     for r in rows:
         expected = "ambiguous_ip" if r[11] > 1 else "state_miss"
-        if r[12] != expected:
+        if r[12] is not None and r[12] != expected:
             raise ValueError(
                 f"{r[0]}: reason={r[12]!r} disagrees with candidate_count={r[11]}"
             )

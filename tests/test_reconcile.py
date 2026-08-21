@@ -27,6 +27,7 @@ from reconcile.reconcile import (
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming.attribute import HOT_WINDOW, attribute, dedup_streams, last_touch
+from tests.pins import SHARED_IP_POST, SHARED_IP_POST_WRONG_HOUSEHOLD
 
 T0 = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -260,11 +261,61 @@ def test_shared_ip_spike_post_reconcile_is_at_least_as_correct_as_the_old_hot_gu
     post_report = _score(post.values())
 
     assert post_report.caused_missed == 0  # every deferral was recovered
-    assert post_report.household_correct >= 69  # ≥ the old hot reduce's 69/80
-    assert post_report.caused_wrong_household <= 11  # ≤ the old hot reduce's 11
+    # == the deleted hot reduce's pick, pinned (tests/pins.py), not just ≥.
+    assert (post_report.credited, post_report.household_correct) == (
+        SHARED_IP_POST.credited,
+        SHARED_IP_POST.correct,
+    )
+    assert post_report.caused_wrong_household == SHARED_IP_POST_WRONG_HOUSEHOLD
     assert all(r.path == "reconciled" for r in recovered)
     print(
         f"shared_ip_spike post-reconcile: correct {post_report.household_correct}/80, "
         f"wrong-household {post_report.caused_wrong_household}, "
         f"recovered {len(recovered)}"
     )
+
+
+# ---- _read_candidates: the reason/candidate_count contract ---------------------
+
+
+class _StubClient:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def query(self, _sql):
+        class _R:
+            pass
+
+        r = _R()
+        r.result_rows = self._rows
+        return r
+
+
+def _db_row(cid: str, candidate_count: int, reason):
+    t = T0 + timedelta(days=10)
+    return (
+        cid, t, t, "d-1", "100.64.0.1", "purchase", 1.0, None,
+        "H1", "ip", int(candidate_count > 1), candidate_count, reason,
+    )  # fmt: skip
+
+
+def test_read_candidates_accepts_null_reason_from_pre_migration_rows():
+    # Rows written before the Phase-16 additive migration carry NULL reason; the
+    # candidate kind is still derivable from candidate_count (a replay input, not a
+    # hypothetical — ReplacingMergeTree keeps them until the next engine pass).
+    from reconcile.reconcile import _read_candidates
+
+    rows = _read_candidates(
+        _StubClient([_db_row("c-1", 1, None), _db_row("c-2", 3, None)])
+    )
+    assert [(r.conversion_id, r.candidate_count) for r in rows] == [
+        ("c-1", 1),
+        ("c-2", 3),
+    ]
+
+
+def test_read_candidates_refuses_a_reason_that_disagrees_with_candidate_count():
+    from reconcile.reconcile import _read_candidates
+
+    with pytest.raises(ValueError, match="disagrees with candidate_count=3"):
+        _read_candidates(_StubClient([_db_row("c-9", 3, "state_miss")]))

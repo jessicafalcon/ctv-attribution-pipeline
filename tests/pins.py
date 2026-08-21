@@ -52,3 +52,17 @@ MEDIUM_HOT = AccuracyPin(credited=129, truth=92, correct=91)
 # reconcile pass credits those same conversions with the same rule.
 LONG_DELAY_HOT = AccuracyPin(credited=80, truth=75, correct=44)
 LONG_DELAY_POST = AccuracyPin(credited=112, truth=75, correct=73)
+
+# Phase 16's central claim — "same answer after reconciliation" — asserted offline
+# in tests/test_post_reconcile_pins.py (not in the docs accuracy tables, which stay
+# hot-path for tiny/medium). tiny/medium POST equal their pre-Phase-16 hot numbers.
+TINY_POST = AccuracyPin(credited=52, truth=35, correct=35)
+MEDIUM_POST = AccuracyPin(credited=130, truth=92, correct=92)
+# shared_ip_spike (seed 0): hot defers 19 caused (0 wrong-household, by
+# construction); the reconcile pass makes the identical pick the deleted hot reduce
+# made — 69/80 correct, 11 wrong-household (caused_wrong_household is asserted
+# alongside these in the tests). Referenced by tests/test_fault_profiles.py,
+# tests/test_reconcile.py and tests/integration/test_context.py.
+SHARED_IP_HOT = AccuracyPin(credited=94, truth=80, correct=61)
+SHARED_IP_POST = AccuracyPin(credited=119, truth=80, correct=69)
+SHARED_IP_POST_WRONG_HOUSEHOLD = 11

@@ -25,19 +25,21 @@ from accuracy.score import score
 from agent.run_context import collect
 from clickhouse.client import connect, read_credited, read_exposure_households
 from reconcile import reconcile
+from tests.pins import (
+    SHARED_IP_HOT,
+    SHARED_IP_POST,
+    SHARED_IP_POST_WRONG_HOUSEHOLD,
+)
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 PROFILE = "shared_ip_spike"
 
-# Pinned caused-side numbers (seed 0), like the long_delay/medium live pins:
-# changing producer/profiles/shared_ip_spike.json means updating these in the SAME
-# change. Hot: 61 correct, 19 deferred (ambiguous_ip), 0 wrong. Post-reconcile:
-# 69 correct, 11 wrong — the same pick the old hot reduce made, now made where
-# every exposure is visible (Phase 16). Matches the offline proof in
-# tests/test_reconcile.py.
-_TRUTH_LINKS = 80
-_HOT_CORRECT, _HOT_DEFERRED = 61, 19
-_POST_CORRECT, _POST_WRONG_HOUSEHOLD = 69, 11
+# Pinned caused-side numbers (seed 0) come from tests/pins.py (SHARED_IP_HOT /
+# SHARED_IP_POST), shared with the offline proofs in tests/test_reconcile.py and
+# tests/test_post_reconcile_pins.py. Hot: 61 correct, 19 deferred (ambiguous_ip),
+# 0 wrong. Post-reconcile: 69 correct, 11 wrong — the same pick the old hot reduce
+# made, now made where every exposure is visible (Phase 16).
+_HOT_DEFERRED = 19
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -65,32 +67,51 @@ def _score():
     )
 
 
-def test_hot_path_never_guesses_a_shared_ip_household() -> None:
+# The stack arrives post-`make run-hot`. The hot report is captured FIRST (module
+# scope), then the reconcile pass runs ONCE; every test names the fixture it needs,
+# so the hot/post dependency is explicit rather than an accident of file order.
+@pytest.fixture(scope="module")
+def hot_report():
+    return _score()
+
+
+@pytest.fixture(scope="module")
+def reconciled(hot_report):
+    counts = reconcile.run(connect())
+    return {"counts": counts, "report": _score()}
+
+
+def test_hot_path_never_guesses_a_shared_ip_household(hot_report) -> None:
     # Phase 16 Done-when: after `make run-hot`, wrong-household is 0 by
     # construction; the ambiguous caused conversions sit unattributed (deferred).
-    report = _score()
-    assert report.truth_links == _TRUTH_LINKS
-    assert report.caused_wrong_household == 0
-    assert (report.household_correct, report.caused_missed) == (
-        _HOT_CORRECT,
-        _HOT_DEFERRED,
-    )
+    assert hot_report.caused_wrong_household == 0
+    assert (
+        hot_report.credited,
+        hot_report.truth_links,
+        hot_report.household_correct,
+    ) == (SHARED_IP_HOT.credited, SHARED_IP_HOT.truth, SHARED_IP_HOT.correct)
+    assert hot_report.caused_missed == _HOT_DEFERRED
 
 
-def test_shared_ip_fault_is_observed_live_after_reconcile() -> None:
+def test_shared_ip_fault_is_observed_live_after_reconcile(reconciled) -> None:
     # Row 20: the reconcile pass picks a household per deferred conversion
     # (most-recent exposure across the IP's owners); recall < 1 because some of
     # those picks land on the WRONG shared-IP household — observed, not assumed.
-    counts = reconcile.run(connect())
-    assert counts["recovered"] >= _HOT_DEFERRED  # every deferral got a pick
-    report = _score()
+    assert reconciled["counts"]["recovered"] >= _HOT_DEFERRED  # every deferral picked
+    report = reconciled["report"]
     assert report.caused_missed == 0
-    assert report.household_correct == _POST_CORRECT  # ≥ the old hot reduce
-    assert report.caused_wrong_household == _POST_WRONG_HOUSEHOLD
+    assert (report.credited, report.household_correct) == (
+        SHARED_IP_POST.credited,
+        SHARED_IP_POST.correct,
+    )
+    assert report.caused_wrong_household == SHARED_IP_POST_WRONG_HOUSEHOLD
     assert report.recall < 1.0
 
 
-def test_context_is_populated_and_shows_the_shared_ip_signal() -> None:
+def test_context_is_populated_and_shows_the_shared_ip_signal(reconciled) -> None:
+    # Needs the reconcile pass: report_snapshots (restatements) exist only after it,
+    # and since Phase 16 an ambiguous row is attributed only on the reconciled path
+    # (DECISIONS Phase 16 — ambiguous_attributed is structurally 0 hot-only).
     ctx = collect(connect(), PROFILE)
     # Populated headline.
     assert ctx.processed > 0 and ctx.attributed > 0
