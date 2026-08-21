@@ -10,10 +10,12 @@ Two properties make this byte-identical to the ClickHouse-sourced read:
     one row per exposure (rows are byte-identical replays), reproducing the
     exposures_landed ReplacingMergeTree FINAL collapse (invariant: exposure_id is
     unique — DECISIONS Phase 12).
-  * ms-granular tz-aware UTC round-trip — the timestamptz column comes back as a
-    tz-aware UTC datetime at the same millisecond the ClickHouse DateTime64(3,'UTC')
-    column returns (landing truncated to ms), so window/last-touch comparisons in
-    the leaf are identical.
+  * naive-UTC-ms round-trip — clickhouse-connect hands the DateTime64(3,'UTC')
+    column back as a NAIVE datetime holding the UTC wall-clock (tzinfo=None). We
+    match that exactly: `SET TimeZone='UTC'` renders the timestamptz at the correct
+    UTC wall-clock (the §8 defense — a default local session would shift it), then
+    we drop tzinfo so the matcher compares like-with-like and the recovered rows
+    are identical to the ClickHouse-sourced pass.
 
 The optional `min_event_time` lower bound prunes whole day-partitions: it is set
 to (earliest candidate event_time − long window), so every pruned exposure is
@@ -74,8 +76,10 @@ def read_exposures_by_household(
         by_household[r[4]].append(
             Exposure(
                 exposure_id=r[0],
-                event_time=r[1],
-                ingest_time=r[2],
+                # Drop tzinfo → naive UTC, matching clickhouse-connect (the UTC
+                # wall-clock is already correct via SET TimeZone='UTC').
+                event_time=r[1].replace(tzinfo=None),
+                ingest_time=r[2].replace(tzinfo=None),
                 campaign_id=r[3],
                 household_id=r[4],
                 ip=r[5],

@@ -5,7 +5,7 @@ Asserts the asset graph's shape — the lineage and partitioning that make
 or the lake. Run behavior lives in the live test_lakehouse integration test.
 """
 
-from dagster import DailyPartitionsDefinition
+from dagster import StaticPartitionsDefinition
 
 from orchestration.assets import (
     exposures_iceberg,
@@ -20,8 +20,14 @@ def test_definitions_expose_the_three_assets() -> None:
     assert keys == {"exposures_iceberg", "reconciled_conversions", "reconciled_report"}
 
 
-def test_reconciled_conversions_is_daily_partitioned_on_the_lake() -> None:
-    assert isinstance(reconciled_conversions.partitions_def, DailyPartitionsDefinition)
+def test_reconciled_conversions_is_day_partitioned_on_the_lake() -> None:
+    # Static day partitions (wall-clock-independent — determinism policy), each key
+    # a calendar day, feeding an independently backfillable per-day recovery.
+    pdef = reconciled_conversions.partitions_def
+    assert isinstance(pdef, StaticPartitionsDefinition)
+    keys = pdef.get_partition_keys()
+    assert keys[0] == "2026-08-01"
+    assert all(len(k) == 10 and k.count("-") == 2 for k in keys)  # YYYY-MM-DD
     # depends on the Iceberg lake source (lineage, not a data-passing input)
     deps = reconciled_conversions.asset_deps[reconciled_conversions.key]
     assert exposures_iceberg.key in deps

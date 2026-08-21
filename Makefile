@@ -170,15 +170,16 @@ test:
 	uv run pytest --ignore=tests/integration
 
 # Integration tests against the running compose stack (`make up` first). Tiny
-# only — the medium hardening test and the long_delay reconciliation test each
-# need a clean single-profile stack (profiles share conversion_id space; DECISIONS
-# Phase 5), so they are excluded here and run via test-int-medium /
-# test-int-long-delay.
+# only — the medium hardening test, the long_delay reconciliation test, and the
+# long_delay lakehouse test each need a clean single-profile stack (profiles share
+# conversion_id space; DECISIONS Phase 5), so they are excluded here and run via
+# test-int-medium / test-int-long-delay / test-int-lakehouse.
 test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
 		--ignore=tests/integration/test_reconcile.py \
-		--ignore=tests/integration/test_context.py
+		--ignore=tests/integration/test_context.py \
+		--ignore=tests/integration/test_lakehouse.py
 
 # Feature-5 live medium hardening proof on a CLEAN medium-only stack, isolated by
 # the sanctioned `make down` (not a per-test TRUNCATE). Asserts Done-when clauses

@@ -53,10 +53,13 @@ def test_exposure_round_trips_field_by_field_to_the_ms() -> None:
     assert back.app_id == original.app_id
     assert back.program_genre == original.program_genre
     assert back.spend == original.spend
-    assert back.event_time == _to_utc_ms(original.event_time)
-    assert back.ingest_time == _to_utc_ms(original.ingest_time)
-    # tz-aware UTC on the way back (never naive, never local-tz).
-    assert back.event_time.utcoffset() == timedelta(0)
+    # Naive UTC to the ms — the exact representation clickhouse-connect returns for
+    # exposures_landed, so the matcher compares like-with-like (SET TimeZone='UTC'
+    # then drop tzinfo). The instant is the ms-truncated UTC wall-clock.
+    assert back.event_time == _to_utc_ms(original.event_time).replace(tzinfo=None)
+    assert back.ingest_time == _to_utc_ms(original.ingest_time).replace(tzinfo=None)
+    assert back.event_time.tzinfo is None
+    assert back.event_time == datetime(2026, 8, 1, 12, 0, 0, 123_000)  # UTC wall-clock
 
 
 def test_sub_ms_input_is_truncated_to_match_datetime64_3() -> None:
@@ -65,7 +68,7 @@ def test_sub_ms_input_is_truncated_to_match_datetime64_3() -> None:
     noisy = datetime(2026, 8, 1, 12, 0, 0, 123_456, tzinfo=UTC)
     land([_exposure(1, "hh-2", noisy)])
     back = read_exposures_by_household({"hh-2"})["hh-2"][0]
-    assert back.event_time == datetime(2026, 8, 1, 12, 0, 0, 123_000, tzinfo=UTC)
+    assert back.event_time == datetime(2026, 8, 1, 12, 0, 0, 123_000)  # naive UTC, ms
 
 
 def test_re_landing_is_idempotent_on_read() -> None:

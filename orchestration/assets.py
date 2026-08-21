@@ -9,11 +9,13 @@ exposure source is the Iceberg lake. Dagster run ids / wall-clock are
 non-deterministic and are NOT asserted on (DECISIONS Phase 12).
 """
 
+from datetime import date, timedelta
+
 from dagster import (
     AssetExecutionContext,
-    DailyPartitionsDefinition,
     MaterializeResult,
     MetadataValue,
+    StaticPartitionsDefinition,
     asset,
 )
 
@@ -30,10 +32,24 @@ from reconcile.reconcile import (
 )
 from reconcile.sources import IcebergExposureSource
 
-# Daily partitions covering every profile (all seed 2026-08-01; long_delay
-# conversions trail ~33 days). The headless runner materializes only the days
-# that actually hold candidates, so the wide range costs nothing unused.
-DAILY = DailyPartitionsDefinition(start_date="2026-08-01", end_date="2027-01-01")
+
+def _day_keys(start: date, end: date) -> list[str]:
+    """YYYY-MM-DD keys for [start, end)."""
+    return [(start + timedelta(days=i)).isoformat() for i in range((end - start).days)]
+
+
+# Day partitions as a STATIC set, not DailyPartitionsDefinition: the latter
+# validates keys against the real wall clock (rejecting any day not yet elapsed),
+# but the deterministic producer emits conversion days in the wall-clock future —
+# so a DailyPartitionsDefinition run would accept a different set of partitions
+# depending on when it ran, breaking the determinism policy ("same input → same
+# answer on a re-run"). A fixed static set spanning the sim calendar is
+# reproducible and still day-granular + backfillable (DECISIONS Phase 12). All
+# profiles seed 2026-08-01; a one-year span covers every tail. The runner
+# materializes only the days that hold candidates.
+DAY_PARTITIONS = StaticPartitionsDefinition(
+    _day_keys(date(2026, 8, 1), date(2027, 8, 1))
+)
 
 
 @asset
@@ -47,7 +63,7 @@ def exposures_iceberg() -> MaterializeResult:
     return MaterializeResult(metadata={"rows": MetadataValue.int(rows)})
 
 
-@asset(deps=[exposures_iceberg], partitions_def=DAILY)
+@asset(deps=[exposures_iceberg], partitions_def=DAY_PARTITIONS)
 def reconciled_conversions(context: AssetExecutionContext) -> MaterializeResult:
     """Recover the hot-misses whose conversion event_time falls on this partition
     day, sourcing their households' exposures from the Iceberg lake via DuckDB.
