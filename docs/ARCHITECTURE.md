@@ -308,7 +308,7 @@ change worked.
 
 #### Observability
 
-Prometheus metrics from producer, engine (including the in-process resolve step's `resolve_` series), and reconciliation job.
+Prometheus metrics from producer, engine (including the in-process resolve step's `resolve_` series), the lake → ClickHouse load (`lake_rows_loaded_total{table}`, emitted by whichever process ran the load), and reconciliation job.
 Grafana dashboards committed as JSON. Alertmanager rules for the deterministic
 conditions (lag, watermark stall, match rate outside band, restatement magnitude).
 Alerts fire a webhook to the agent, which is the second-stage triage.

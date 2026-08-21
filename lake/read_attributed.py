@@ -5,7 +5,9 @@ a later reconciled row, and exact re-lands of the same row. `read_current` gives
 the CURRENT row per conversion_id — the highest `processed_at`, i.e. what the
 ClickHouse ReplacingMergeTree(processed_at) FINAL would keep — computed in SQL
 (`distinct` then `row_number() over (partition by conversion_id order by
-processed_at desc) = 1`, the argMax form). Never assume one row per key.
+processed_at desc, path desc) = 1`, the argMax form; `path` breaks a tie on an
+equal `processed_at` — 'reconciled' > 'hot' — so the pick is a total order, never
+the scan's whim). Never assume one row per key.
 
 Same naive-UTC-ms round-trip as lake.read_exposures: `set timezone='UTC'`, then
 drop tzinfo, so a row read back compares equal to the clickhouse-connect
@@ -52,12 +54,10 @@ def day_ranges_predicate(days: list[str], params: list[object]) -> str:
     return "(" + " or ".join(clauses) + ")"
 
 
-def read_current(
-    days: list[str] | None = None, min_event_time: datetime | None = None
-) -> list[AttributedConversion]:
+def read_current(days: list[str] | None = None) -> list[AttributedConversion]:
     """Current row per conversion_id, ordered by conversion_id. `days`
-    (YYYY-MM-DD event_time days) and/or `min_event_time` prune day partitions;
-    both are output-invariant filters on the conversion's own event_time. The day
+    (YYYY-MM-DD event_time days) prunes day partitions — an output-invariant
+    filter on the conversion's own event_time. The day
     filter is written as raw `event_time` RANGES (`>= d and < d+1`, one per day),
     the form DuckDB's iceberg_scan can push down to the `day(event_time)`
     partition — an expression over the column (`strftime(...) = ...`) would filter
@@ -66,9 +66,6 @@ def read_current(
     params: list[object] = [metadata_path(ensure_attributed())]
     if days is not None:
         predicates.append(day_ranges_predicate(sorted(days), params))
-    if min_event_time is not None:
-        predicates.append("event_time >= ?")
-        params.append(min_event_time)
     where = ("where " + " and ".join(predicates)) if predicates else ""
     rows = (
         _connect()
@@ -76,7 +73,7 @@ def read_current(
             f"select {_SELECT} from ("
             f"select distinct {_SELECT} from iceberg_scan(?) {where}) "
             "qualify row_number() over ("
-            "partition by conversion_id order by processed_at desc) = 1 "
+            "partition by conversion_id order by processed_at desc, path desc) = 1 "
             "order by conversion_id",
             params,
         )

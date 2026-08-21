@@ -25,7 +25,7 @@ from reconcile.reconcile import (
     LONG_WINDOW,
     RECONCILE_DELTA,
     PrePhase17RowError,
-    _read_candidates,
+    _check_candidate,
     expand_candidates,
     pick_household,
     reconcile,
@@ -297,54 +297,21 @@ def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     )
 
 
-# ---- _read_candidates: the reason/candidate_count contract ---------------------
+# ---- the reason/candidate_count/candidate_households contract on read-back ------
 
 
-class _StubClient:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def query(self, _sql):
-        class _R:
-            pass
-
-        r = _R()
-        r.result_rows = self._rows
-        return r
-
-
-def _db_row(cid: str, candidate_count: int, reason):
-    t = T0 + timedelta(days=10)
-    hhs = (
-        [f"H{i}" for i in range(1, candidate_count + 1)] if candidate_count > 1 else []
-    )
-    return (
-        cid, t, t, "d-1", "100.64.0.1", "purchase", 1.0, None,
-        "H1", "ip", int(candidate_count > 1), candidate_count,
-        None, [], 0, "hot", t, reason, hhs,
-    )  # fmt: skip
-
-
-def test_read_candidates_accepts_null_reason_from_pre_migration_rows() -> None:
+def test_check_candidate_accepts_null_reason_from_pre_migration_rows() -> None:
     # Rows written before the Phase-16 additive migration carry NULL reason; the
-    # candidate kind is still derivable from candidate_count (a replay input, not a
-    # hypothetical — ReplacingMergeTree keeps them until the next engine pass).
-    rows = _read_candidates(
-        _StubClient([_db_row("c-1", 1, None), _db_row("c-2", 3, None)])
-    )
-    assert [(r.conversion_id, r.candidate_count) for r in rows] == [
-        ("c-1", 1),
-        ("c-2", 3),
-    ]
+    # candidate kind is still derivable from candidate_count.
+    _check_candidate("c-1", 1, None, [])
+    _check_candidate("c-2", 3, None, ["H1", "H2", "H3"])
 
 
-def test_read_candidates_names_the_fix_for_a_pre_phase_17_ambiguous_row() -> None:
-    row = list(_db_row("c-7", 2, "ambiguous_ip"))
-    row[18] = []  # the additive migration's default on an old volume
+def test_check_candidate_names_the_fix_for_a_pre_phase_17_ambiguous_row() -> None:
     with pytest.raises(PrePhase17RowError, match="predates Phase 17.*make run"):
-        _read_candidates(_StubClient([tuple(row)]))
+        _check_candidate("c-7", 2, "ambiguous_ip", [])
 
 
-def test_read_candidates_refuses_a_reason_that_disagrees_with_candidate_count() -> None:
+def test_check_candidate_refuses_a_reason_that_disagrees_with_candidate_count() -> None:
     with pytest.raises(ValueError, match="disagrees with candidate_count=3"):
-        _read_candidates(_StubClient([_db_row("c-9", 3, "state_miss")]))
+        _check_candidate("c-9", 3, "state_miss", ["H1", "H2", "H3"])

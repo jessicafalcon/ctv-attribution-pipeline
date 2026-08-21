@@ -12,7 +12,6 @@ must serialize byte-identically, and every datetime handed to the ClickHouse
 client must be tz-aware UTC. Offline: tmp lake, no services.
 """
 
-import os
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -60,9 +59,9 @@ def _exposure(eid: str, hh: str, days: float) -> Exposure:
     )
 
 
-def _write_path(tmp_root: str) -> tuple[list[str], list[object]]:
+def _write_path(monkeypatch, tmp_root: str) -> tuple[list[str], list[object]]:
     """reconcile (naive-UTC inputs) → land → lake read → loader values, serialized."""
-    os.environ["LAKE_ROOT"] = tmp_root
+    monkeypatch.setenv("LAKE_ROOT", tmp_root)
     exps = {"H1": [_exposure("e-1", "H1", 0.0)]}
     recovered = reconcile(
         [_candidate("c-1", "H1", 20.0)], exps, LONG_WINDOW, reconciled_at_for(T0)
@@ -79,24 +78,19 @@ def _write_path(tmp_root: str) -> tuple[list[str], list[object]]:
 
 
 @pytest.fixture
-def _tz():
-    saved = os.environ.get("TZ")
-    yield
-    if saved is None:
-        os.environ.pop("TZ", None)
-    else:
-        os.environ["TZ"] = saved
+def _tz(monkeypatch):
+    yield monkeypatch  # TZ is set through it below; undone at teardown, then tzset
     time.tzset()
 
 
 def test_reconcile_write_path_is_byte_identical_across_machine_timezones(
-    tmp_path, _tz
+    tmp_path, _tz, monkeypatch
 ) -> None:
     outputs = {}
     for zone in ("UTC", "America/Denver", "Asia/Kolkata"):
-        os.environ["TZ"] = zone
+        monkeypatch.setenv("TZ", zone)
         time.tzset()
-        serialized, datetimes = _write_path(str(tmp_path / zone))
+        serialized, datetimes = _write_path(monkeypatch, str(tmp_path / zone))
         assert datetimes, "the path must hand datetimes to the client"
         assert all(
             d.tzinfo is not None and d.utcoffset() == timedelta(0) for d in datetimes

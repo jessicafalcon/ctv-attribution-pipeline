@@ -78,13 +78,6 @@ LONG_WINDOW = timedelta(days=90)
 RECONCILE_DELTA_MS = 1000
 RECONCILE_DELTA = timedelta(milliseconds=RECONCILE_DELTA_MS)
 
-_CANDIDATE_COLS = (
-    "conversion_id, event_time, ingest_time, device_id, ip, conversion_type, "
-    "revenue, order_id, household_id, resolution, ambiguous, candidate_count, "
-    "exposure_id, assists, attributed, path, processed_at, reason, "
-    "candidate_households"
-)
-
 
 class PrePhase17RowError(ValueError):
     """An ambiguous hot row with no persisted candidate set (written before the
@@ -185,50 +178,6 @@ def reconcile(
     return recovered
 
 
-def _read_candidates(client: Client) -> list[AttributedConversion]:
-    """Hot-unattributed rows only (attributed=0 AND path='hot') from FINAL, as
-    the full hot row — both `reason` values, state_miss and ambiguous_ip, and the
-    `candidate_households` the ambiguous ones are exploded over. The `reason`
-    column is the explicit contract; a NON-NULL value is asserted to agree with
-    `candidate_count` (a mismatch would mean a writer bypassed the engine's
-    `_attributed`). NULL is accepted: rows written before the Phase-16 additive
-    migration carry NULL until the next engine pass rewrites them. An ambiguous
-    row whose `candidate_households` is empty was written before the Phase-17
-    column existed and can never be exploded: refused loud, naming the fix
-    (re-populate with `make run`) — the eval_meta-guard standard, not a bare
-    pydantic error. Never reads the accuracy side file."""
-    rows = client.query(
-        f"select {_CANDIDATE_COLS} from attributed_conversions final "
-        "where attributed = 0 and path = 'hot' order by conversion_id"
-    ).result_rows
-    for r in rows:
-        _check_candidate(r[0], r[11], r[17], r[18])
-    return [
-        AttributedConversion(
-            conversion_id=r[0],
-            event_time=r[1],
-            ingest_time=r[2],
-            device_id=r[3],
-            ip=r[4],
-            conversion_type=r[5],
-            revenue=r[6],
-            order_id=r[7],
-            household_id=r[8],
-            resolution=r[9],
-            ambiguous=bool(r[10]),
-            candidate_count=r[11],
-            exposure_id=r[12],
-            assists=list(r[13]),
-            attributed=bool(r[14]),
-            path=r[15],
-            processed_at=r[16],
-            reason=r[17],
-            candidate_households=list(r[18]),
-        )
-        for r in rows
-    ]
-
-
 def _check_candidate(cid: str, candidate_count: int, reason, households) -> None:
     expected = "ambiguous_ip" if candidate_count > 1 else "state_miss"
     if reason is not None and reason != expected:
@@ -246,8 +195,10 @@ def _check_candidate(cid: str, candidate_count: int, reason, households) -> None
 def lake_candidates(day: str | None = None) -> list[AttributedConversion]:
     """The current hot-unattributed rows of raw.attributed_conversions
     (argMax processed_at — a conversion already corrected by an earlier pass is
-    not a candidate), for one event_time `day` or the whole lake. The Phase-17
-    counterpart of `_read_candidates`; same reason/candidate-set checks."""
+    not a candidate), for one event_time `day` or the whole lake — the ONE
+    candidate reader (the Phase-6 ClickHouse reader and the Phase-12 source
+    classes were deleted at the Phase-17 review gate). Same reason/candidate-set
+    checks as before."""
     rows = [
         r
         for r in read_current(days=[day] if day else None)

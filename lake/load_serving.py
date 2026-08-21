@@ -21,6 +21,7 @@ from itertools import batched
 
 from clickhouse_connect.driver.client import Client
 
+from lake import metrics
 from lake.read_attributed import read_current
 from lake.read_exposures import read_exposures_for_days
 from producer.models import AttributedConversion, Exposure
@@ -88,6 +89,7 @@ def insert_attributed(client: Client, rows: Sequence[AttributedConversion]) -> N
             [_attributed_values(r) for r in chunk],
             column_names=ATTRIBUTED_COLS,
         )
+    metrics.ROWS_LOADED.labels(table="attributed_conversions").inc(len(rows))
 
 
 def insert_exposures(client: Client, rows: Sequence[Exposure]) -> None:
@@ -97,6 +99,7 @@ def insert_exposures(client: Client, rows: Sequence[Exposure]) -> None:
             [_exposure_values(r) for r in chunk],
             column_names=EXPOSURE_COLS,
         )
+    metrics.ROWS_LOADED.labels(table="exposures_landed").inc(len(rows))
 
 
 def load_exposures_day(client: Client, day: str) -> int:

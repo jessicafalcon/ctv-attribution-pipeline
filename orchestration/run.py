@@ -36,9 +36,10 @@ def main(argv: list[str] | None = None) -> None:
     connect()  # fail early if the serving layer is down
     instance = DagsterInstance.ephemeral()
 
-    assert materialize(
-        [exposures_iceberg, attributed_iceberg], instance=instance
-    ).success
+    observed = materialize([exposures_iceberg, attributed_iceberg], instance=instance)
+
+    if not observed.success:
+        raise RuntimeError("lake observe assets failed")
 
     days = [args.partition] if args.partition else candidate_days()
     touched: set[str] = set()
@@ -48,13 +49,15 @@ def main(argv: list[str] | None = None) -> None:
             partition_key=day,
             instance=instance,
         )
-        assert result.success
+        if not result.success:
+            raise RuntimeError(f"reconciled_conversions[{day}] failed")
         (event,) = result.get_asset_materialization_events()
         touched |= set(event.materialization.metadata["touched_days"].value)
         print(f"reconciled_conversions[{day}] materialized")
 
     loaded = materialize_load(touched)
-    assert materialize([reconciled_report], instance=instance).success
+    if not materialize([reconciled_report], instance=instance).success:
+        raise RuntimeError("reconciled_report failed")
     print(
         f"reconcile-dagster: {len(days)} day-partition(s) recovered, "
         f"{loaded['attributed']} corrected rows reloaded over {len(touched)} "

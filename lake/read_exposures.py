@@ -1,8 +1,9 @@
 """Read exposures back from the Iceberg lake via DuckDB (Phase 12).
 
 DuckDB's `iceberg_scan` reads an Iceberg table directly from its current metadata
-file — the same table pyiceberg wrote — so the reconcile long-window matcher can
-source its candidate exposures from the lake instead of ClickHouse, feeding the
+file — the same table pyiceberg wrote. Since Phase 17 the lake is the record: this
+is THE exposure read of the reconcile pass (`recover_day`, one call per (day,
+bucket)) and of the ClickHouse loader (`read_exposures_for_days`), feeding the
 UNCHANGED pure `last_touch` leaf (Phase 16 name; `attribute_household` until then).
 
 Two properties make this byte-identical to the ClickHouse-sourced read:
@@ -17,10 +18,10 @@ Two properties make this byte-identical to the ClickHouse-sourced read:
     we drop tzinfo so the matcher compares like-with-like and the recovered rows
     are identical to the ClickHouse-sourced pass.
 
-The optional `min_event_time` lower bound prunes whole day-partitions: it is set
-to (earliest candidate event_time − long window), so every pruned exposure is
-older than every candidate's window and the leaf would discard it anyway — the
-prune is output-invariant, not a filter that could drop a real match.
+The optional `min_event_time` / `max_event_time` bounds prune whole
+day-partitions: `recover_day` passes `[day − long window, day + 1d)`, so every
+pruned exposure is outside every candidate's window and the leaf would discard it
+anyway — the prune is output-invariant, not a filter that could drop a real match.
 """
 
 from collections import defaultdict
@@ -80,8 +81,8 @@ def read_exposures_by_household(
     max_event_time: datetime | None = None,
 ) -> dict[str, list[Exposure]]:
     """Bulk-load the given households' exposures from the lake in one scan,
-    deduped on exposure_id, grouped by household — the DuckDB/Iceberg counterpart
-    of reconcile.sources.ClickHouseExposureSource.read_for. `min_event_time` /
+    deduped on exposure_id, grouped by household (the Phase-6 ClickHouse read's
+    shape, `dict[household_id -> list[Exposure]]`). `min_event_time` /
     `max_event_time` (optional, half-open) day-partition-prune exposures provably
     outside every candidate's window; with the households all in ONE bucket this
     is the bucket-aligned partitioned read of the Phase-17 reconcile (DuckDB

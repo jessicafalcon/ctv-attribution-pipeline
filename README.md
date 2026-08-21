@@ -2,6 +2,10 @@
 
 *A streaming attribution engine with an AI measurement-integrity agent — scored against ground truth.*
 
+*This README is the living design doc: it describes `main` as of its last edit.
+Dated facts live in `docs/RESULTS.md` and the per-phase history
+(`docs/PHASES.md`, `DECISIONS.md`).*
+
 The ad is seen on a TV; the conversion happens on a phone. This pipeline joins those
 two separately-keyed event streams across a household/device graph, inside a time
 window, tolerating duplicates and conversions that arrive days late, and serves the

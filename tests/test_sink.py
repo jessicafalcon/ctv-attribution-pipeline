@@ -1,8 +1,9 @@
 """Schema-contract drift guard: the hand-maintained ClickHouse column lists — the
 loader's (lake/load_serving.py, the one product writer) and the test oracle's
-(tests/oracle.py, the pre-Phase-17 direct sink) — must match the pydantic models
-they insert. A field added to a model but not to a writer would drift silently
-and only surface in the opt-in integration test — this pins it offline."""
+(tests/oracle.py, the pre-Phase-17 direct sink's value mapping) — must match the
+pydantic models they map. A field added to a model but not to a writer would
+drift silently and only surface in the opt-in integration test — this pins it
+offline."""
 
 from lake.load_serving import ATTRIBUTED_COLS, EXPOSURE_COLS
 from producer.models import AttributedConversion, Exposure

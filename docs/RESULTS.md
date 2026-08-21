@@ -128,7 +128,7 @@ The block below is regenerated verbatim by that command:
 
 <!-- COST_LEVERS_START -->
 
-_Measured by `make cost-levers` on `bench_large` (attributed_conversions 25,168 rows ≈ 3 granules; exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged steady state first; rows/bytes are ClickHouse's cache-independent `X-ClickHouse-Summary`. Re-run byte-stable._
+_Measured by `make cost-levers` on `bench_large` (attributed_conversions 25,168 rows ≈ 3 granules; exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged steady state first; rows/bytes are ClickHouse's cache-independent `X-ClickHouse-Summary`. Re-run byte-stable on the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16) and `candidate_households` (Phase 17) and the projection is `select *`, so a re-run regenerates different byte figures — the direction asserts are what is pinned._
 
 **Lever 1 — projection ordered by `event_time` (WINS).** A date-scoped reporting slice over `attributed_conversions`. The base table is sorted by `conversion_id`, so `event_time` is scattered across every granule and the range predicate prunes nothing; the projection keeps an alternate copy ordered by `event_time` that ClickHouse auto-picks for the range.
 

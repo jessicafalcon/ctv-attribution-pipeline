@@ -114,9 +114,26 @@ def test_read_current_is_argmax_processed_at_over_an_append_only_log() -> None:
 def test_day_filter_prunes_by_the_conversions_event_time() -> None:
     land_attributed([_row("c-1"), _row("c-2", event_time=T + timedelta(days=3))])
     assert [r.conversion_id for r in read_current(days=["2026-08-04"])] == ["c-2"]
-    assert [
-        r.conversion_id for r in read_current(min_event_time=T + timedelta(days=1))
-    ] == ["c-2"]
+
+
+def test_read_current_tiebreak_on_equal_processed_at_is_path() -> None:
+    # Two DISTINCT rows with the same version: the reconciled one wins by `path`,
+    # a total order — never the scan's file order (review gate).
+    hot = _row(
+        "c-1", attributed=False, exposure_id=None, assists=[], reason="state_miss"
+    )
+    rec = hot.model_copy(
+        update={
+            "attributed": True,
+            "exposure_id": "e-9",
+            "reason": None,
+            "path": "reconciled",
+        }
+    )
+    land_attributed([rec])
+    land_attributed([hot])
+    (current,) = read_current()
+    assert current.path == "reconciled"
 
 
 def test_day_filter_is_a_prunable_predicate() -> None:

@@ -1230,6 +1230,18 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Review-gate minors, batched.** `read_current` breaks an equal-`processed_at`
+  tie by `path` (total order, never file order); the tz test uses `monkeypatch`,
+  not `os.environ`; Dagster control flow raises instead of `assert` (stripped
+  under `-O`); `reconcile/` is one reader (the lake), one picker, one fix —
+  `_read_candidates`, `reconcile/sources.py` and the oracle's insert functions
+  were deleted (the junk-drawer symptom the audit named; the parity proof reads
+  `exposures_landed` in the test); the oracle's values go through the loader's
+  `_utc` so it cannot reproduce the §8 naive write; the load stage has a metric
+  (`lake_rows_loaded_total{table}`) like every stage; stale prose (RESULTS
+  cost-lever provenance, `read_exposures` header, CI description in CLAUDE.md)
+  corrected. Left as-is on the developer's ruling: the seven "Phase-17+ decision"
+  labels for continuous follow, type hints outside touched code.
 - **`reconciled_at` stays anchored in ClickHouse (`_max_ingest` over the loaded
   serving tables), not in the lake — for now.** Reconciliation reads the record
   for candidates and exposures but stamps its version from the derived store;

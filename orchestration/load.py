@@ -24,16 +24,17 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     totals = {"exposures": 0, "attributed": 0}
     if not days:
         return totals
-    assert materialize(
-        [exposures_iceberg, attributed_iceberg], instance=instance
-    ).success
+    observed = materialize([exposures_iceberg, attributed_iceberg], instance=instance)
+    if not observed.success:
+        raise RuntimeError("lake observe assets failed")
     for day in sorted(days):
         for key, asset_def in (
             ("exposures", clickhouse_exposures_landed),
             ("attributed", clickhouse_attributed_conversions),
         ):
             result = materialize([asset_def], partition_key=day, instance=instance)
-            assert result.success, f"{asset_def.key.to_user_string()}[{day}] failed"
+            if not result.success:
+                raise RuntimeError(f"{asset_def.key.to_user_string()}[{day}] failed")
             (event,) = result.get_asset_materialization_events()
             totals[key] += int(event.materialization.metadata["rows"].value)
     return totals

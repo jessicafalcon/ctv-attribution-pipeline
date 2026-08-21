@@ -157,7 +157,7 @@ make test && make lint \
   helpers), `streaming/sink.py` (lake sink replaces the ClickHouse sink on the engine
   path; the direct ClickHouse writer moves to `tests/` as the oracle),
   `orchestration/assets.py` + `definitions.py` (load assets, multi-partition
-  reconcile, maintenance job), `reconcile/sources.py` + `reconcile.py` (bucket-aligned
+  reconcile, maintenance job), `reconcile.py` (bucket-aligned; `reconcile/sources.py` was deleted at the review gate — one reader, the lake
   SQL), `Makefile`, `.github/workflows` (CI integration job runs the lake path),
   `tests/integration/test_lakehouse.py`, BACKLOG (close 3 rows), DECISIONS Phase 17,
   PHASES.md, CLAUDE.md, ARCHITECTURE §3.2/3.3/§5, SCALING.md.
