@@ -32,11 +32,16 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Hot path against the compose stack: seed → engine (resolve in-process) → ClickHouse,
-      # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
-      # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
-      # reconciliation pass would over-credit tiny's long-tail organics and shift
-      # them.
+      # Phase 17: every row reaches ClickHouse through the lake (engine → Iceberg →
+      # Dagster load → ClickHouse), so the integration job needs the DuckDB iceberg
+      # extension too (same one-time fetch as the offline job; DECISIONS Phase 12).
+      - run: uv run python -m lake.install_extension
+      # Hot path against the compose stack: seed → engine (resolve in-process) →
+      # lake → load → ClickHouse, then the tiny integration suite (FINAL-state +
+      # idempotency). `run-hot`, not `run`: the tiny golden + pinned accuracy are
+      # hot-path oracles, and a reconciliation pass would over-credit tiny's
+      # long-tail organics and shift them. Runtime grows with the lake hop
+      # (Dagster + DuckDB) — accepted (spec D5).
       - run: make up
       # Alert-rule guard (offline w.r.t. the stack — needs only the digest-pinned
       # prometheus image, already pulled by `make up`): promtool check rules +

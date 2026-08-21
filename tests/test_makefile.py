@@ -80,7 +80,7 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         populates = {
             t
             for ln in lines
-            if re.search(r"\bmake (run|run-hot|lake-land)\b", ln)
+            if re.search(r"\bmake (run|run-hot)\b", ln)
             for t in _profile_tokens(ln)
         }
         markers = {

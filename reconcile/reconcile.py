@@ -40,6 +40,7 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
+from lake.land_attributed import land_attributed
 from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
 from reconcile.sources import ClickHouseExposureSource, ExposureSource
@@ -48,7 +49,6 @@ from streaming.attribute import (
     candidate_households_by_conversion,
     last_touch,
 )
-from streaming.sink import insert_attributed
 
 # The long window: exposures up to 90 days before a conversion are eligible
 # (ARCHITECTURE §3.4). This is the reconciliation counterpart to the engine's
@@ -260,7 +260,6 @@ def _restatement_abs_delta(client: Client) -> float:
 
 
 def recover(
-    client: Client,
     candidates: list[AttributedConversion],
     exposure_source: ExposureSource,
     window: timedelta,
@@ -268,17 +267,16 @@ def recover(
 ) -> list[AttributedConversion]:
     """Recover the given candidates: explode ambiguous ones over their persisted
     candidate households, read every candidate household's exposures from the
-    source, run the matcher, insert the recovered rows. The recovery half of a
-    pass, shared by `run` (all candidates, ClickHouse source) and the Dagster
-    day-partitioned asset (one day's candidates, Iceberg source). `reconciled_at`
-    is passed in (not recomputed) so every day of a partitioned run stamps the
-    same version — identical to a single full pass."""
+    source, run the matcher, return the recovered rows — WITHOUT writing them.
+    The caller lands them in the lake (`land_attributed`) and loads the touched
+    days into ClickHouse (Phase 17). The recovery half of a pass, shared by
+    `run` (all candidates, ClickHouse source) and the Dagster day-partitioned
+    asset (one day's candidates, Iceberg source). `reconciled_at` is passed in
+    (not recomputed) so every day of a partitioned run stamps the same version —
+    identical to a single full pass."""
     expanded = expand_candidates(candidates)
     exposures = exposure_source.read_for(expanded, window)
-    recovered = reconcile(expanded, exposures, window, reconciled_at)
-    if recovered:
-        insert_attributed(client, recovered)
-    return recovered
+    return reconcile(expanded, exposures, window, reconciled_at)
 
 
 def finalize(client: Client) -> None:
@@ -298,8 +296,9 @@ def run(
     exposure_source: ExposureSource | None = None,
 ) -> dict[str, int]:
     """One reconciliation pass: recover ALL hot misses (state-miss and
-    ambiguous_ip) over the long window, then finalize (snapshots + rollup
-    refresh). Returns counts for logging/tests.
+    ambiguous_ip) over the long window, land the corrections in the lake, load
+    the touched days into ClickHouse, then finalize (snapshots + rollup refresh).
+    Returns counts for logging/tests.
 
     `exposure_source` selects where the candidate households' exposures are read
     from: the default ClickHouse source keeps `make run` byte-identical; the
@@ -310,9 +309,13 @@ def run(
     client = client or connect()
     exposure_source = exposure_source or ClickHouseExposureSource(client)
 
+    # Imported here: the offline suites import this module without Dagster.
+    from orchestration.load import materialize_load
+
     reconciled_at = reconciled_at_for(_max_ingest(client))
     candidates = _read_candidates(client)
-    recovered = recover(client, candidates, exposure_source, LONG_WINDOW, reconciled_at)
+    recovered = recover(candidates, exposure_source, LONG_WINDOW, reconciled_at)
+    materialize_load(land_attributed(recovered))
     finalize(client)
 
     still_missing = len(candidates) - len(recovered)

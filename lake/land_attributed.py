@@ -15,7 +15,7 @@ Phase 12), so a row read back is bit-for-bit the DateTime64(3) ClickHouse holds.
 import pyarrow as pa
 
 from lake.iceberg_catalog import ensure_attributed
-from lake.land_exposures import _to_utc_ms
+from lake.land_exposures import _to_utc_ms, touched_days
 from producer.models import AttributedConversion
 
 # Mirrors ATTRIBUTED_SCHEMA (lake/iceberg_catalog.py): nullable exactly where the
@@ -69,9 +69,10 @@ def _to_arrow(rows: list[AttributedConversion]) -> pa.Table:
     )
 
 
-def land_attributed(rows: list[AttributedConversion]) -> int:
-    """Append `rows` to raw.attributed_conversions; return the count appended."""
+def land_attributed(rows: list[AttributedConversion]) -> set[str]:
+    """Append `rows` to raw.attributed_conversions; return the event_time days
+    touched (spec D6 — the days the loader must (re)materialize)."""
     if not rows:
-        return 0
+        return set()
     ensure_attributed().append(_to_arrow(rows))
-    return len(rows)
+    return touched_days(r.event_time for r in rows)

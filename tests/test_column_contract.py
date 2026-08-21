@@ -1,8 +1,8 @@
 """Phase-17 column contract (spec D3): the attributed row has ONE shape, in ONE
-order, everywhere it is written or read back — the pydantic model, the ClickHouse
-sink's column list, the DDL, and reconcile's read-back select. 19 columns. The
-Iceberg `raw.attributed_conversions` schema joins this assertion when it lands
-(D7/D3 commit). tests/test_sink.py pins the SET; this pins the ORDER."""
+order, everywhere it is written or read back — the pydantic model, the lake
+loader's column list, the direct-write oracle, the DDL, the Iceberg schema + its
+arrow writer, and reconcile's read-back select. 19 columns. tests/test_sink.py
+pins the SET; this pins the ORDER."""
 
 import re
 from pathlib import Path
@@ -10,9 +10,10 @@ from pathlib import Path
 from lake.iceberg_catalog import ATTRIBUTED_SCHEMA, EXPOSURE_SCHEMA
 from lake.land_attributed import _ARROW_SCHEMA as _ATTRIBUTED_ARROW
 from lake.land_exposures import _ARROW_SCHEMA as _EXPOSURE_ARROW
+from lake.load_serving import ATTRIBUTED_COLS, EXPOSURE_COLS
 from producer.models import AttributedConversion, Exposure
 from reconcile.reconcile import _CANDIDATE_COLS
-from streaming.sink import _ATTRIBUTED_COLS, _EXPOSURE_COLS
+from tests.oracle import _ATTRIBUTED_COLS, _EXPOSURE_COLS
 
 DDL = Path(__file__).parent.parent / "clickhouse" / "ddl.sql"
 
@@ -30,7 +31,8 @@ def test_attributed_conversions_is_19_columns_in_model_order() -> None:
     model = list(AttributedConversion.model_fields)
     assert len(model) == 19
     assert model[-2:] == ["reason", "candidate_households"]
-    assert _ATTRIBUTED_COLS == model
+    assert ATTRIBUTED_COLS == model  # the loader (product writer)
+    assert _ATTRIBUTED_COLS == model  # the direct-write oracle (tests/oracle.py)
     assert _ddl_columns("attributed_conversions") == model
     assert [c.strip() for c in _CANDIDATE_COLS.split(",")] == model
     # the lake copy (spec D3): Iceberg schema and its arrow writer, same order
@@ -44,6 +46,7 @@ def test_attributed_conversions_is_19_columns_in_model_order() -> None:
 
 def test_exposures_landed_matches_the_exposure_model_order() -> None:
     model = list(Exposure.model_fields)
+    assert EXPOSURE_COLS == model
     assert _EXPOSURE_COLS == model
     assert _ddl_columns("exposures_landed") == model
     assert [f.name for f in EXPOSURE_SCHEMA.fields] == model

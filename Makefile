@@ -44,10 +44,18 @@ seed:
 resolve:
 	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
 
+# Phase 17: the lake is the record. One lake per PROFILE (profiles share
+# conversion_id space — the same isolation `make down` gives ClickHouse, without a
+# destructive step): engine and reconcile land under data/lake/<profile>/ and the
+# Dagster load reads it back. Override to point anywhere (tests use a tmp root).
+LAKE_ROOT ?= data/lake/$(PROFILE)
+export LAKE_ROOT
+
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
-# hot join) → reconciliation pass (recovers long-window misses AND the deferred
-# shared-IP conversions, refreshes the rollup, writes pre/post report snapshots).
-# Run after `make up && make seed`.
+# hot join) → lake → Dagster load → ClickHouse, then the reconciliation pass
+# (recovers long-window misses AND the deferred shared-IP conversions → lake →
+# reload → rollup refresh + pre/post report snapshots). Run after `make up &&
+# make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
 run:
 	uv run python -m streaming.dataflow
 	uv run python -m reconcile.reconcile
@@ -62,19 +70,12 @@ run-hot:
 	uv run python -m streaming.dataflow
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
-# Phase 12: run the hot path (engine) and dual-write the SAME deduped
-# exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
-# landing site — make run/CI never land, so the engine path stays byte-identical.
-# Run after make up && make seed.
-lake-land:
-	uv run python -m streaming.dataflow --lake-land
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
-
-# Phase 12: orchestrated reconciliation. Materialize the day-partitioned
-# reconciled_conversions asset (exposures sourced from Iceberg via DuckDB) over
-# the candidate days + the finalize asset, headless (no webserver, ephemeral
-# Dagster instance). PROFILE is informational; PARTITION=<YYYY-MM-DD> materializes
-# a single day. Run after make lake-land.
+# Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
+# reconciled_conversions asset (exposures sourced from Iceberg via DuckDB,
+# corrections appended to the lake) over the candidate days, reload the touched
+# days, then the finalize asset — headless (no webserver, ephemeral Dagster
+# instance). PROFILE selects the lake; PARTITION=<YYYY-MM-DD> materializes a
+# single day. Run after make run-hot.
 reconcile-dagster:
 	uv run python -m orchestration.run --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
 
@@ -240,16 +241,19 @@ test-int-agent:
 	$(MAKE) run PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_agent_readonly.py
 
-# Phase-12 live lakehouse proof on a CLEAN long_delay-only stack (same shared-
-# conversion_id isolation as the others). Lands to the lake + ClickHouse, then
-# asserts the reconcile source-equivalence (ClickHouse-sourced == Iceberg-sourced
-# recovered rows, byte-identical) and that the Dagster-orchestrated pass reproduces
-# the long_delay recovery. No API tokens.
+# Phase-12/17 live lakehouse proof on a CLEAN long_delay-only stack (same shared-
+# conversion_id isolation as the others), against a FRESH per-profile lake (the
+# test itself points LAKE_ROOT at a tmp dir and re-runs the engine, so the
+# developer's data/lake/long_delay is untouched). Asserts: lake-loaded serving rows
+# == the direct-write oracle's rows; reconcile source-equivalence (ClickHouse-
+# sourced == Iceberg-sourced, byte-identical); the Dagster-orchestrated pass
+# reproduces the recovery; and an ACCUMULATED lake (≥3 appends) loads and
+# reconciles byte-identically. No API tokens.
 test-int-lakehouse:
 	$(MAKE) down
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
-	$(MAKE) lake-land PROFILE=long_delay
+	$(MAKE) run-hot PROFILE=long_delay
 	uv run pytest tests/integration/test_lakehouse.py
 
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool

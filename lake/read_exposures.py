@@ -37,6 +37,40 @@ _SELECT_COLS = (
 )
 
 
+def read_exposures_for_days(days: list[str]) -> list[Exposure]:
+    """Every distinct exposure whose event_time falls on one of `days`
+    (YYYY-MM-DD) — the loader's per-day-partition read (Phase 17). Dedup-on-read
+    as above, ordered by the exposures_landed sort key for a stable insert."""
+    if not days:
+        return []
+    con = duckdb.connect()
+    con.execute("load iceberg")
+    con.execute("set timezone='UTC'")
+    rows = con.execute(
+        f"select distinct {_SELECT_COLS} from iceberg_scan(?) "
+        "where strftime(event_time, '%Y-%m-%d') = any(?) "
+        "order by campaign_id, event_time, exposure_id",
+        [metadata_path(ensure_exposures()), sorted(days)],
+    ).fetchall()
+    return [_exposure(r) for r in rows]
+
+
+def _exposure(r: tuple) -> Exposure:
+    return Exposure(
+        exposure_id=r[0],
+        # Drop tzinfo → naive UTC, matching clickhouse-connect (the UTC
+        # wall-clock is already correct via SET TimeZone='UTC').
+        event_time=r[1].replace(tzinfo=None),
+        ingest_time=r[2].replace(tzinfo=None),
+        campaign_id=r[3],
+        household_id=r[4],
+        ip=r[5],
+        app_id=r[6],
+        program_genre=r[7],
+        spend=r[8],
+    )
+
+
 def read_exposures_by_household(
     household_ids: set[str], min_event_time: datetime | None = None
 ) -> dict[str, list[Exposure]]:
@@ -71,19 +105,5 @@ def read_exposures_by_household(
     ).fetchall()
     by_household: dict[str, list[Exposure]] = defaultdict(list)
     for r in rows:
-        by_household[r[4]].append(
-            Exposure(
-                exposure_id=r[0],
-                # Drop tzinfo → naive UTC, matching clickhouse-connect (the UTC
-                # wall-clock is already correct via SET TimeZone='UTC').
-                event_time=r[1].replace(tzinfo=None),
-                ingest_time=r[2].replace(tzinfo=None),
-                campaign_id=r[3],
-                household_id=r[4],
-                ip=r[5],
-                app_id=r[6],
-                program_genre=r[7],
-                spend=r[8],
-            )
-        )
+        by_household[r[4]].append(_exposure(r))
     return by_household
