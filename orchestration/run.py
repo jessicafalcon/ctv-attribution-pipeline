@@ -1,19 +1,18 @@
-"""The ONE headless orchestration CLI (Phase 17 review gate — four near-identical
-runners became one): `python -m orchestration.run <load|reconcile|replay|maintain>
---profile <p>`. `--profile` is required on every subcommand and binds the lake of
-record (`lake.iceberg_catalog.configure` → data/lake/<profile>); nothing here has
-a default root.
+"""The headless orchestration CLI (Phase 17 review gate — four near-identical
+runners became one): `python -m orchestration.run <load|reconcile> --profile <p>`.
+The destructive paths (`replay`, `maintain`, `reset`) live in `lake.destructive`,
+one validate → confirm → act process. `--profile` is required on every subcommand
+and binds the lake of record (`lake.iceberg_catalog.configure` →
+data/lake/<profile>); nothing here has a default root.
 
 Every Dagster materialization goes through `_materialize` on an ephemeral
 instance (nothing persists, no DAGSTER_HOME, no webserver). The pipeline output
 is identical to the in-process paths — Dagster only orchestrates (DECISIONS
 Phase 12): `load` is what the engine and the reconcile job call after landing,
-`reconcile` is `make run`'s pass one day-partition at a time, `replay` rebuilds
-the serving tables from the lake, `maintain` runs the `lake_maintenance` job.
+`reconcile` is `make run`'s pass one day-partition at a time.
 """
 
 import argparse
-import sys
 from collections.abc import Sequence
 
 from dagster import (
@@ -34,8 +33,6 @@ from orchestration.assets import (
     reconciled_conversions,
     reconciled_report,
 )
-from orchestration.maintenance import lake_maintenance
-from orchestration.replay import EmptyLakeError, replay
 from reconcile.reconcile import candidate_days
 
 _LOAD_ASSETS = (
@@ -104,22 +101,12 @@ def run_reconcile(partition: str | None) -> None:
     )
 
 
-def run_maintain() -> None:
-    result = lake_maintenance.execute_in_process()
-    if not result.success:
-        raise RuntimeError("lake_maintenance job failed")
-    for name in ("maintain_exposures", "maintain_attributed"):
-        print(f"lake-maintain {name}: {result.output_for_node(name)}")
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="headless orchestration")
     sub = parser.add_subparsers(dest="command", required=True)
     for name, help_ in (
         ("load", "load the given event_time days from the lake into ClickHouse"),
         ("reconcile", "orchestrated reconciliation (make reconcile-dagster)"),
-        ("replay", "truncate + reload the serving tables from the lake (no broker)"),
-        ("maintain", "lake hygiene job: compact day partitions, expire snapshots"),
     ):
         p = sub.add_parser(name, help=help_)
         p.add_argument(
@@ -131,27 +118,13 @@ def main(argv: list[str] | None = None) -> None:
     sub.choices["reconcile"].add_argument(
         "--partition", default=None, help="materialize only this day (YYYY-MM-DD)"
     )
-    sub.choices["replay"].add_argument(
-        "--confirm", action="store_true", help="skip the prompt"
-    )
     args = parser.parse_args(argv)
     configure(args.profile)
     if args.command == "load":
         loaded = materialize_load(set(args.days))
         print(f"load: {loaded}")
-    elif args.command == "reconcile":
-        run_reconcile(args.partition)
-    elif args.command == "replay":
-        try:
-            loaded = replay(args.confirm)
-        except EmptyLakeError as e:
-            sys.exit(str(e))
-        print(
-            f"replay-serving: {loaded['exposures']} exposures, "
-            f"{loaded['attributed']} attributed rows reloaded from the lake (no broker)"
-        )
     else:
-        run_maintain()
+        run_reconcile(args.partition)
 
 
 if __name__ == "__main__":

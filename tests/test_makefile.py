@@ -112,99 +112,81 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
 
 
 def _make_in_sandbox(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
-    """Run the REAL recipe (not -n) with the repo Makefile but cwd = a sandbox dir,
-    so a guard failure could only ever remove something inside the sandbox."""
+    """Run the REAL lake-reset recipe (not -n) with the repo Makefile but cwd = a
+    sandbox dir, so a guard failure could only ever remove something inside the
+    sandbox. UV_PROJECT points `uv run` at the repo from the foreign cwd."""
     (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True)
     (tmp_path / "data" / "x").mkdir()
     return subprocess.run(
-        ["make", "-f", str(MAKEFILE), "-C", str(tmp_path), "lake-reset", *args],
+        ["make", "-f", str(MAKEFILE), "-C", str(tmp_path), *args],
         capture_output=True,
         text=True,
-        env=_ENV,
-    )
-
-
-@pytest.mark.parametrize(
-    "hostile",
-    [
-        ["PROFILE=", "CONFIRM=yes"],  # → data/lake/  (every profile's lake)
-        ["PROFILE=../x", "CONFIRM=yes"],  # → escapes data/lake
-        ["PROFILE=/abs", "CONFIRM=yes"],
-    ],
-)
-def test_lake_reset_refuses_a_root_outside_data_lake_profile(
-    tmp_path: Path, hostile: list[str]
-) -> None:
-    res = _make_in_sandbox(tmp_path, *hostile)
-    assert res.returncode != 0, res.stdout + res.stderr
-    assert "refusing" in res.stdout
-    assert (tmp_path / "data" / "lake" / "tiny").exists()  # nothing removed
-    assert (tmp_path / "data" / "x").exists()
-
-
-def test_lake_reset_ignores_a_command_line_lake_root_override(tmp_path: Path) -> None:
-    # `override LAKE_ROOT` — a caller cannot retarget the rm (it would propagate
-    # into the test-int-* targets, where CONFIRM=yes is already set).
-    (tmp_path / "elsewhere").mkdir()
-    res = _make_in_sandbox(
-        tmp_path, "LAKE_ROOT=" + str(tmp_path / "elsewhere"), "CONFIRM=yes"
-    )
-    assert res.returncode == 0, res.stdout + res.stderr
-    assert (tmp_path / "elsewhere").exists()
-    assert not (tmp_path / "data" / "lake" / "tiny").exists()  # the real target went
-    assert "removed data/lake/tiny" in res.stdout
-
-
-def test_lake_reset_prompts_unless_confirmed_and_scopes_to_the_profile() -> None:
-    recipe = "\n".join(_dry_run("lake-reset"))
-    # `$(_CONFIRMED)` expands to "" in a dry run: the guard shape is what survives
-    assert "rm -rf" in recipe and '!= "yes" ]' in recipe and "read ans" in recipe
-    # per-profile root, rebuilt from the VALIDATED shell variable — never from a
-    # make-interpolated value; never data/lake itself
-    assert 'rm -rf "data/lake/$_LAKE_RESET_PROFILE"' in recipe, recipe
-    assert 'rm -rf "data/lake"' not in recipe
-
-
-INJECTION = 'x" ; touch pwned ; echo "'
-
-
-def test_lake_reset_never_interpolates_the_profile_into_the_recipe() -> None:
-    # Security review round 2: a PROFILE carrying shell metacharacters used to run
-    # its payload BEFORE the refusal. The dry run must show the user text nowhere
-    # in the recipe (it reaches the shell as an environment variable), and the
-    # `case` guard must be the first command.
-    lines = [ln for ln in _dry_run("lake-reset", f"PROFILE={INJECTION}") if ln.strip()]
-    assert "touch pwned" not in "\n".join(lines)
-    assert lines[0].lstrip().startswith('case "$_LAKE_RESET_PROFILE"'), lines[0]
-
-
-def test_lake_reset_injection_runs_nothing_and_refuses(tmp_path: Path) -> None:
-    res = _make_in_sandbox(tmp_path, f"PROFILE={INJECTION}", "CONFIRM=yes")
-    assert res.returncode != 0
-    assert not (tmp_path / "pwned").exists()
-    assert "refusing" in res.stdout
-    assert (tmp_path / "data" / "lake" / "tiny").exists()
-
-
-def test_lake_reset_ignores_an_exported_confirm(tmp_path: Path) -> None:
-    # `$(origin CONFIRM)` must be the command line: an ambient CONFIRM=yes in the
-    # shell does not skip the prompt (stdin is closed → "aborted").
-    (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True)
-    res = subprocess.run(
-        [
-            "make",
-            "-f",
-            str(MAKEFILE),
-            "-C",
-            str(tmp_path),
-            "lake-reset",
-            "PROFILE=tiny",
-        ],
-        capture_output=True,
-        text=True,
-        env={**_ENV, "CONFIRM": "yes"},
+        # UV_PROJECT: the repo venv from a foreign cwd; PYTHONPATH: the repo is
+        # not an installed package (pytest's pythonpath=. does the same thing).
+        env={**_ENV, "UV_PROJECT": str(REPO_ROOT), "PYTHONPATH": str(REPO_ROOT)},
         stdin=subprocess.DEVNULL,
     )
-    assert res.returncode != 0
+
+
+def test_destructive_recipes_are_one_python_process_each() -> None:
+    # Rounds 2 and 3 of the Phase-17 review each found a hole in a Make-level
+    # guard; the fix is structural: every destructive recipe is ONE line invoking
+    # lake.destructive, which validates, confirms, then acts inside one process.
+    for target, action in (
+        ("lake-reset", "reset"),
+        ("replay-serving", "replay"),
+        ("lake-maintain", "maintain"),
+    ):
+        lines = [ln for ln in _dry_run(target, "PROFILE=tiny") if ln.strip()]
+        assert lines[0].startswith(
+            f'uv run python -m lake.destructive {action} --profile "tiny"'
+        ), lines
+        assert "--yes" not in lines[0]  # prompts unless CONFIRM=yes on the command line
+        assert "rm -rf" not in "\n".join(lines) and "truncate" not in "\n".join(lines)
+        (yes_line,) = [
+            ln
+            for ln in _dry_run(target, "PROFILE=tiny", "CONFIRM=yes")
+            if "lake.destructive" in ln
+        ]
+        assert yes_line.rstrip().endswith("--yes")
+
+
+def test_confirm_counts_only_from_the_command_line() -> None:
+    # `$(origin CONFIRM)`: an exported CONFIRM=yes must not become --yes.
+    out = subprocess.run(
+        ["make", "-n", "lake-reset", "PROFILE=tiny"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**_ENV, "CONFIRM": "yes"},
+    ).stdout
+    assert "--yes" not in out
+
+
+@pytest.mark.parametrize("flags", [[], ["-i"]])
+def test_lake_reset_hostile_profile_refused_even_under_make_i(
+    tmp_path: Path, flags
+) -> None:
+    # `make -i` steps over failed recipe LINES; it cannot step inside one process
+    # (round 3: the shell-level guard was bypassed exactly this way).
+    res = _make_in_sandbox(
+        tmp_path, *flags, "lake-reset", "PROFILE=../x", "CONFIRM=yes"
+    )
+    assert "refusing" in res.stdout + res.stderr
+    assert (tmp_path / "data" / "x").exists() and (
+        tmp_path / "data" / "lake" / "tiny"
+    ).exists()
+
+
+def test_lake_reset_without_confirm_aborts_even_under_make_i(tmp_path: Path) -> None:
+    res = _make_in_sandbox(tmp_path, "-i", "lake-reset", "PROFILE=tiny")
     assert "aborted" in res.stdout
     assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+def test_lake_reset_removes_exactly_the_profile_lake(tmp_path: Path) -> None:
+    res = _make_in_sandbox(tmp_path, "lake-reset", "PROFILE=tiny", "CONFIRM=yes")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not (tmp_path / "data" / "lake" / "tiny").exists()
+    assert (tmp_path / "data" / "x").exists()

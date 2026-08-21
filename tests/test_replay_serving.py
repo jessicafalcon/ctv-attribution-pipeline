@@ -62,7 +62,7 @@ def test_replay_truncates_both_tables_then_reloads_every_lake_day(monkeypatch) -
     land([_exp("e-1", t), _exp("e-2", t + timedelta(days=4))])
     client, loaded = _Client(), []
     _stub(monkeypatch, client, loaded)
-    rp.replay(confirm=True)
+    rp.truncate_and_reload(rp.lake_days())
     assert client.commands == [
         "truncate table exposures_landed",
         "truncate table attributed_conversions",
@@ -71,21 +71,14 @@ def test_replay_truncates_both_tables_then_reloads_every_lake_day(monkeypatch) -
 
 
 def test_replay_refuses_an_empty_lake_before_touching_clickhouse(monkeypatch) -> None:
+    # the CLI refuses BEFORE truncate (tests/test_destructive.py); the library
+    # act refuses too, so no caller can truncate to reload nothing
     client, loaded = _Client(), []
     _stub(monkeypatch, client, loaded)
-    with pytest.raises(rp.EmptyLakeError, match="refusing to truncate"):
-        rp.replay(confirm=True)
+    assert rp.lake_days() == set()
+    with pytest.raises(rp.EmptyLakeError):
+        rp.truncate_and_reload(set())
     assert client.commands == [] and loaded == []
-
-
-def test_replay_prompt_aborts_without_yes(monkeypatch) -> None:
-    land([_exp("e-1", datetime(2026, 8, 1, 12, tzinfo=UTC))])
-    client, loaded = _Client(), []
-    _stub(monkeypatch, client, loaded)
-    monkeypatch.setattr("builtins.input", lambda prompt: "no")
-    with pytest.raises(SystemExit):
-        rp.replay(confirm=False)
-    assert client.commands == []
 
 
 def _dry_run(*args: str) -> str:
@@ -100,7 +93,7 @@ def _dry_run(*args: str) -> str:
 
 def test_make_replay_serving_stamps_eval_meta_and_gates_confirm() -> None:
     out = _dry_run("PROFILE=long_delay")
-    assert re.search(r'orchestration\.run replay --profile "long_delay"\s*$', out, re.M)
-    assert "--confirm" not in out  # prompts unless CONFIRM=yes
+    assert re.search(r'lake\.destructive replay --profile "long_delay"\s*$', out, re.M)
+    assert "--yes" not in out  # prompts unless CONFIRM=yes on the command line
     assert re.search(r'write_marker --profile "long_delay"', out)  # D8: stamps
-    assert "--confirm" in _dry_run("PROFILE=long_delay", "CONFIRM=yes")
+    assert "--yes" in _dry_run("PROFILE=long_delay", "CONFIRM=yes")

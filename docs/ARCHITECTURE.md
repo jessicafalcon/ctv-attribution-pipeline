@@ -609,7 +609,8 @@ handled.*
   on disk.** `table.maintenance.expire_snapshots()` drops old snapshots and
   manifests, but there is no `remove_orphan_files`, so the Parquet files those
   snapshots referenced (and the files a compaction replaced) are never deleted:
-  `make lake-maintain` bounds the LIVE file count, not the directory size
+  `make lake-maintain` (compaction = a rewrite of the day's data files, row content
+  unchanged; then expiry) bounds the LIVE file count, not the directory size
   (measured: 24 → 32 files on disk across one compaction + expiry). Only `make
   lake-reset` reclaims today (BACKLOG 45, re-qualified; pinned so a pyiceberg bump
   fails loud).

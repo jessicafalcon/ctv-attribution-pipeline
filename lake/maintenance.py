@@ -17,6 +17,10 @@ makes the rows right regardless (BACKLOG "data/lake accumulates unboundedly").
   write the day once → one file per (day, bucket), same rows (physical
   duplicates included: compaction does not dedup; the read does).
 
+Compaction is a REWRITE of the record's data files (row content unchanged —
+asserted on both raw tables offline), so `make lake-maintain` prompts like the
+other destructive paths (lake/destructive.py). Expiry is metadata-only on
+pyiceberg 0.11.1 (no `remove_orphan_files`): the directory does not shrink.
 Non-deterministic by nature (wall-clock age, snapshot ids) and therefore OFF the
 `make run` path and outside the byte-identical guarantee like all lake
 metadata (DECISIONS Phase 12/17); every asserted check reads rows back.

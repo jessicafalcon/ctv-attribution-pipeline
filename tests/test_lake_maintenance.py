@@ -64,6 +64,42 @@ def test_compaction_rewrites_to_one_file_per_partition_with_rows_unchanged() -> 
     assert read_exposures_for_days(["2026-08-01", "2026-08-02"]) == before
 
 
+def test_compaction_on_the_attributed_table_keeps_rows_and_schema() -> None:
+    # raw.attributed_conversions is the schema-risky one (two list columns, three
+    # nullables) — the rewrite (`overwrite` with a day filter) must round-trip it.
+    from lake.land_attributed import land_attributed
+    from lake.read_attributed import read_current
+    from tests.test_lake_attributed import _row
+
+    t = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    rows = [
+        _row("c-1", event_time=t, order_id="o-1"),
+        _row(
+            "c-2",
+            event_time=t,
+            hh="h-b",
+            resolution="ip",
+            ambiguous=True,
+            candidate_count=2,
+            exposure_id=None,
+            assists=[],
+            attributed=False,
+            reason="ambiguous_ip",
+            candidate_households=["h-a", "h-b"],
+        ),
+    ]
+    for _ in range(3):
+        land_attributed(rows)
+    table = cat.ensure_attributed()
+    before = [r.model_dump() for r in read_current()]
+    out = maintain(table, max_age=timedelta(days=365), now=datetime.now(UTC))
+    assert out["compacted_days"] == 1
+    table = cat.ensure_attributed()
+    assert set(_files_per_partition(table).values()) == {1}
+    assert [r.model_dump() for r in read_current()] == before
+    assert [f.name for f in table.schema().fields] == list(before[0].keys())
+
+
 def test_expiry_drops_old_snapshots_but_keeps_the_current_one() -> None:
     for i in range(3):
         land([_exp(i, 1)])

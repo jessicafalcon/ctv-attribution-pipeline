@@ -35,34 +35,24 @@ up:
 down:
 	docker compose down -v
 
-# The second sanctioned destructive path (Phase 17, spec D9): delete this
-# PROFILE's lake under $(LAKE_ROOT). Prompts unless CONFIRM=yes is passed
-# explicitly. The clean-stack test-int-* targets pass it: a "clean stack" for a
-# profile means a clean lake too, since the lake outlives `make down` and the
-# serving tables are loaded from it (a hot-only proof would otherwise reload an
-# earlier reconcile pass's current rows).
-# Scope guard (security review, two rounds): the rm target must be exactly
-# data/lake/<profile> — no empty PROFILE (would be data/lake/), no `..`, no
-# absolute path, no shell metacharacters, no newline. The values reach the shell
-# as ENVIRONMENT VARIABLES (target-specific `export`), never make-interpolated
-# into the recipe text: a PROFILE of `x" ; touch pwned ; echo "` used to run its
-# payload before the refusal. `case` validates the value as data; the check is
-# the first command, so nothing runs before it. CONFIRM counts only when given on
-# the command line (`$(origin CONFIRM)`), never from an exported shell variable.
-lake-reset: export _LAKE_RESET_PROFILE = $(value PROFILE)
-lake-reset: export _LAKE_RESET_ROOT = $(value LAKE_ROOT)
-lake-reset: _CONFIRMED = $(if $(filter command line,$(origin CONFIRM)),$(filter yes,$(CONFIRM)),)
+# The three destructive paths — lake-reset, replay-serving, lake-maintain — are
+# ONE Python process each (lake/destructive.py): validate the profile, derive the
+# root from it (no path argument exists to escape with), prompt on a tty, then
+# act. Make never interpolates a user value into a guard and never splits guard
+# and action across shells (rounds 2 and 3 of the Phase-17 review each found a
+# hole in a Make-level guard; `make -i` cannot step inside a process). CONFIRM
+# counts only from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes'
+# is a stated residual — these guards are for mistakes, not for a user who
+# controls the environment (DECISIONS Phase 17).
+_CONFIRMED = $(if $(filter command line,$(origin CONFIRM)),$(filter yes,$(CONFIRM)),)
+_YES = $(if $(_CONFIRMED),--yes,)
+
+# Delete this PROFILE's lake of record, data/lake/<profile> (spec D9). The
+# clean-stack test-int-* targets pass CONFIRM=yes: a "clean stack" for a profile
+# means a clean lake too, since the lake outlives `make down` and the serving
+# tables are loaded from it.
 lake-reset:
-	@case "$$_LAKE_RESET_PROFILE" in "" | *[!a-z0-9_]*) \
-		echo "lake-reset: refusing — PROFILE must be [a-z0-9_]+"; exit 1;; esac; \
-	case "$$_LAKE_RESET_ROOT" in 'data/lake/$$(PROFILE)') ;; *) \
-		echo "lake-reset: refusing — LAKE_ROOT is fixed to data/lake/<profile>"; exit 1;; esac
-	@if [ "$(_CONFIRMED)" != "yes" ]; then \
-		printf 'lake-reset deletes data/lake/%s (the lake of record for that profile). Type yes to continue: ' "$$_LAKE_RESET_PROFILE"; \
-		read ans; [ "$$ans" = "yes" ] || { echo "aborted"; exit 1; }; \
-	fi
-	rm -rf "data/lake/$$_LAKE_RESET_PROFILE"
-	@echo "lake-reset: removed data/lake/$$_LAKE_RESET_PROFILE"
+	uv run python -m lake.destructive reset --profile "$(PROFILE)" $(_YES)
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
@@ -80,15 +70,9 @@ resolve:
 # each entry point's --profile) and the Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
 # its own PROFILE instead of inheriting the parent's exported value (the
 # test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
-# Make-internal only (lake-reset's target). NOT exported: every Python entry point
-# takes `--profile` and binds its own lake (lake.iceberg_catalog.configure), and
-# LAKE_ROOT in the environment is test-only (tmp fixtures) — an entry point refuses
-# it outside pytest. `override` + recursive `=`: not settable from the command line
-# or the environment (a `make … LAKE_ROOT=/x` would propagate into the test-int-*
-# targets' `lake-reset … CONFIRM=yes`), still re-expanded per target so each
-# clean-stack target's `target: PROFILE = p` applies. The rm in lake-reset does not
-# even use it — it rebuilds data/lake/<profile> from the validated profile.
-override LAKE_ROOT = data/lake/$(PROFILE)
+# No LAKE_ROOT here: every Python entry point takes `--profile` and binds its own
+# lake (lake.iceberg_catalog.configure → data/lake/<profile>); LAKE_ROOT in the
+# environment is test-only (tmp fixtures) and refused outside pytest.
 
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
 # hot join) → lake → Dagster load → ClickHouse, then the reconciliation pass
@@ -120,19 +104,21 @@ reconcile-dagster:
 
 # Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
 # the rows of exposures_landed + attributed_conversions (TRUNCATE — destructive,
-# so CONFIRM=yes or the prompt), reloads every day the lake holds (hot AND
+# so CONFIRM=yes or the tty prompt), reloads every day the lake holds (hot AND
 # reconciled current rows), stamps eval_meta; `make eval` then reproduces the
 # pins. The backfill story: Kafka retention is hours, the lake is forever.
 replay-serving:
-	uv run python -m orchestration.run replay --profile "$(PROFILE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
+	uv run python -m lake.destructive replay --profile "$(PROFILE)" $(_YES)
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
 # than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7) and rewrite each day partition
 # that has accumulated more than one file per bucket into one file per bucket.
-# Not part of make run. Row content is unchanged (asserted offline).
+# Not part of make run. Row content is unchanged, data files are REWRITTEN (a
+# mutation of the record, so it prompts like the other two; asserted offline on
+# both raw tables). Expiry is metadata-only on pyiceberg 0.11.1 (BACKLOG 45).
 lake-maintain:
-	uv run python -m orchestration.run maintain --profile "$(PROFILE)"
+	uv run python -m lake.destructive maintain --profile "$(PROFILE)" $(_YES)
 
 # Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
 # controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.

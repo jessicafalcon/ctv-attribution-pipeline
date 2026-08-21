@@ -1232,6 +1232,29 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Review gate, round 3: stop hardening shell guards in Make — the destructive
+  paths are one Python process, and the threat model is written down.** Rounds 2
+  and 3 each found a new hole in the guard the previous round added (`$(origin
+  CONFIRM)` → `MAKEFLAGS='CONFIRM=yes'` reads back as command-line origin;
+  guard/prompt/`rm` on separate recipe lines → `make -i` steps over the
+  refusal). That is the signature of defending in the wrong layer: Make's
+  variable model and multi-shell recipes cannot express "one process validates,
+  confirms, then acts". `lake/destructive.py` can: `reset`, `replay`, `maintain`
+  — one `confirm_or_abort(action, yes=)` helper, the profile validated
+  (`[a-z0-9_]+`, via `configure`) before anything else, the root derived from the
+  profile (no path argument exists to escape with), a tty prompt (`n`/EOF/no
+  tty → "aborted", exit 1), the action last. Every Makefile recipe is one line
+  (`uv run python -m lake.destructive <action> --profile "$(PROFILE)" $(_YES)`);
+  `make -i` cannot step inside a process (pinned with a leading `-i` in the
+  sandbox test). `lake-maintain` now prompts too — compaction REWRITES the
+  record's data files (row content unchanged, pinned on both raw tables; the
+  earlier "metadata-only" wording covered only expiry). **Threat model, and
+  stop there:** these guards protect against MISTAKES — typos, an empty or
+  wrong PROFILE, a stray exported variable, a wrong-profile stack — not against
+  a user who controls the environment; that user can run `rm -rf` directly.
+  `MAKEFLAGS='CONFIRM=yes'` is therefore a stated residual, like `$(shell …)` in
+  an env-origin PROFILE. `override LAKE_ROOT` left the Makefile with the last
+  shell guard: nothing reads it now.
 - **Review gate, round 2 (security + code + coherence + functionality, second
   pass).** (1) `--profile` OWNS the lake root: every entry point binds
   `data/lake/<profile>` through `lake.iceberg_catalog.configure`; there is no
