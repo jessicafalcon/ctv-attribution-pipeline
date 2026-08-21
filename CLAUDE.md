@@ -552,7 +552,7 @@ never auto-fixed, ignored, or committed around.
   README webhook forward-points to the live-push cut), re-audit clean. Two loose ends filed,
   not fixed (branch stays docs-only): BACKLOG 35 (stale `sink.py:2` async marker → next
   streaming/ touch), BACKLOG 36 (a test guarding the docs accuracy table vs the integration
-  pins → next tests/ touch). Merged: PENDING (developer merges). Spec: none (docs phase;
+  pins → next tests/ touch). Merged (PR #13). Spec: none (docs phase;
   Done-when from PHASES.md).
 - Phase 11 follow-on (not in the docs PR): BACKLOG 34 — make the token targets auto-load
   `.env` via `uv run --env-file` (guarded `AGENT_ENV := $(if $(wildcard .env),--env-file .env,)`,
@@ -579,9 +579,11 @@ never auto-fixed, ignored, or committed around.
   file (avoids the run-tests-hook full-suite re-trigger, per BACKLOG 36): verifies every
   RUNBOOK link/anchor resolves and every named guard/alert still exists in source. DONE
   green: `make test` (206 offline) + `make lint` clean; `make check-runbook` OK. README
-  repo-map pointer added. Review gate: PENDING (developer runs code-reviewer +
-  functionality-tester + coherence-auditor; security-reviewer not triggered — no
-  CI/.env/compose/CH-user/agent change). Merged: PENDING. Spec: `specs/phase-15-runbook.md`.
+  repo-map pointer added. Review gate: PASSED (code-reviewer PASS, 1 optional suggestion
+  applied — link text; functionality-tester WORKS, all gates green, 3 coverage gaps → BACKLOG;
+  coherence-auditor PASS, no drift, notes dispositioned — DECISIONS Phase 15 + 2 BACKLOG
+  watches; security-reviewer not triggered — no CI/.env/compose/CH-user/agent change).
+  Merged (PR #18). Spec: `specs/phase-15-runbook.md`.
 - Phase 14 (2026-08-20): built on `phase-14-scaling-curve` — measured scaling curve
   (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Turns
   SCALING.md's guessed ~200 B/exposure into ONE measured constant. New reusable volume
@@ -608,9 +610,10 @@ never auto-fixed, ignored, or committed around.
   Phase 14). BACKLOG 35 (stale `sink.py:2` async marker) done in-branch (trigger fired — in
   `streaming/`); BACKLOG 36 (docs accuracy-pin test) trigger fired (added a test file) but
   consciously re-deferred pending developer decision (orthogonal to scaling; would widen the
-  PR). Review gate: PENDING (developer runs code-reviewer + functionality-tester +
-  coherence-auditor; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
-  change). Merged: PENDING. Spec: `specs/phase-14-scaling-curve.md`.
+  PR). Review gate: PASSED (code-reviewer 0 blockers, 2 findings applied; functionality-tester
+  PASS; coherence-auditor 1 BLOCKER — tracemalloc-in-committed-doc non-idempotency — fixed +
+  re-verified CLOSED; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
+  change). Merged (PR #19). Spec: `specs/phase-14-scaling-curve.md`.
 - Phase 13 (2026-08-20): built on `phase-13-query-cost-levers` — query cost levers
   (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Three
   ClickHouse-native cost levers measured before/after on scoped report queries over a
@@ -639,10 +642,11 @@ never auto-fixed, ignored, or committed around.
   and can't serve a FINAL query. Green: `make cost-levers` live + 6 offline unit tests
   (`test_cost_levers.py`, pure parse/predicate/render) + `make test` + `make lint`;
   `make check-runbook` OK (bench.py `_canonicalize` citation still resolves, BACKLOG 37
-  re-deferred). Review gate: PENDING (developer runs code-reviewer +
-  functionality-tester + coherence-auditor; security-reviewer NOT triggered — no
-  CI/.env/compose/CH-user/agent change; a projection/index DDL is not a user/exposure
-  change). Merged: PENDING. Spec: `specs/phase-13-query-cost-levers.md`.
+  re-deferred). Review gate: PASSED (functionality-tester PASS; code-reviewer PASS, 3 minor
+  suggestions applied; coherence-auditor BLOCKER + drift → both cleared on re-check, follow-up
+  ordinal note fixed; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
+  change; a projection/index DDL is not a user/exposure change). Merged (PR #20). Spec:
+  `specs/phase-13-query-cost-levers.md`.
 - Phase 12 (2026-08-20): built on `phase-12-lakehouse-landing` — lakehouse landing +
   orchestrated reconciliation (post-plan extension; reverses ARCHITECTURE §3.5's
   Iceberg out-of-scope, adds 5 packages — BOTH approved before the branch opened).
@@ -664,8 +668,8 @@ never auto-fixed, ignored, or committed around.
   UI is local `dagster dev` (loopback), NOT a compose service (spec self-contradiction
   resolved toward file-scope + minimal-but-scalable; DECISIONS Phase 12). Green: live
   clean long_delay stack — `make lake-land` (Gate 1: 360 rows, day-partitioned) →
-  `make reconcile-dagster` (Gate 2: 13 day-partitions + finalize) → `make eval` recall
-  0.9733 (unchanged) → `make test-int-lakehouse` 2 passed (source-equivalence byte-
+  `make reconcile-dagster` (Gate 2: 13 day-partitions + finalize) → `make eval PROFILE=long_delay`
+  recall 0.9733 (unchanged) → `make test-int-lakehouse` 2 passed (source-equivalence byte-
   identical + Dagster parity); gate-0 tiny golden byte-identical (`make test-int` 11);
   228 offline + lint; `make check-runbook` OK (BACKLOG 37 trigger fired, cited tz
   symbols untouched, re-deferred). Spec-vs-reality surfaced not repaired: hook wording
@@ -677,16 +681,19 @@ never auto-fixed, ignored, or committed around.
   pointer, determinism carve-out sentence) → all fixed in-branch; security-reviewer
   PASS then re-PASS 0-findings after the CI-edit re-trigger; functionality-tester WORKS
   (4/4). 3 findings BACKLOG'd (N-append/count-grain tests; lake accumulation/compaction;
-  test-int-lakehouse-in-CI weighed holistically w/ row 33). Merged: PENDING (developer;
-  not pushed). Spec: `specs/phase-12-lakehouse-landing.md`.
-- Phase 12 follow-on (NOT in the lakehouse PR): `fix/eval-demo-profile` — the pre-existing
-  bare-`make eval` bug in CLAUDE.md's eval prose (":108" "for the last profile") + the
-  long_delay canonical demo (":176"), shipped since Phase 6 (eval defaults to tiny; no
-  last-profile mechanism). Own tiny PR off main after Phase 12 merges: :176 → `make eval
-  PROFILE=long_delay`, prose → "for the given PROFILE (default tiny)". The durable
-  fail-loud guard (error on truth-profile/DB mismatch) is a BACKLOG row (next accuracy/
-  touch). Carved out of Phase 12 per the "phase reveals an earlier-phase change → own fix
-  PR" rule.
+  test-int-lakehouse-in-CI weighed holistically w/ row 33). Merged (PR #21). Spec:
+  `specs/phase-12-lakehouse-landing.md`.
+- Phase 12 follow-on (NOT in the lakehouse PR): `fix/eval-demo-profile` — Merged (PR #23).
+  Fixed the pre-existing eval-profile prose bugs in CLAUDE.md: the Commands-block `make eval`
+  line ("for the last profile" → "for the given PROFILE (default tiny)"; no last-profile
+  mechanism exists) and the long_delay canonical demo (bare `make eval` → `make eval
+  PROFILE=long_delay`). The tiny hot-path demo keeps bare `make eval` (correct — defaults to
+  tiny). Docs-only; review gate passed (code-reviewer + functionality-tester +
+  coherence-auditor; security-reviewer not triggered). Carved out of Phase 12 per the "phase
+  reveals an earlier-phase change → own fix PR" rule. Still open, both deferred to the
+  BACKLOG-43 guard PR (next `accuracy/` touch): the durable fail-loud guard (error on
+  truth-profile/DB mismatch) and the `eval`-target comment's twin "last seeded profile"
+  wording (`Makefile:128-129`).
 - No API keys in repo.
 
 (Update this section at the end of every working day.)
