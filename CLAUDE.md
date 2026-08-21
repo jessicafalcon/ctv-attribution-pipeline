@@ -427,6 +427,7 @@ the `specs/` file where one was cited.
 - `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
 - `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
 - `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/lake-land/metrics-capture), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
+- `fix/make-resolve-source` (PR #29) — two pre-existing Makefile bugs surfaced by the Phase-16 review: bare `make resolve` exited 2 (`SOURCE ?= fixtures  # …` carried trailing spaces into `--source`), and `test-int-medium` stamped `eval_meta=tiny` over a medium DB (ran `run-hot` without `PROFILE=medium`, so the BACKLOG-43 guard could not fire). `tests/test_makefile.py` guards both offline via `make -n`.
 - `fix/docs-accuracy-pin` (PR #26) — single-sourced the household-grain accuracy pins into `tests/pins.py` (tiny/medium/long_delay), referenced by the 5 test suites, plus `tests/test_docs_accuracy_pins.py` asserting the README/RESULTS accuracy TABLE cells equal them; closes BACKLOG 36. Table-scoped — prose citations deferred to a new BACKLOG row.
 
 No API keys in repo.
