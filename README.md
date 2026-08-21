@@ -34,14 +34,8 @@ inside an attribution window while handling duplicates and late arrivals.
 Every attribution method has a blind spot. Click attribution barely registers a
 channel that rarely produces clicks; view-through attribution treats "conversion
 followed impression" as causation and over-credits about as often as it
-under-credits. That ambiguity is why advertisers distrust the numbers — and why an
-integrity check on the numbers is worth an AI agent's cost.
-
-**Why this beats a metrics dashboard.** Aggregating impressions into a dashboard is
-table stakes. A stream-to-stream join across a device graph, with windowed
-late-tolerant matching and a reconciliation path serving an OLAP layer with
-restatements, is the harder data-engineering problem — and it is the machinery an
-attribution business actually runs on.
+under-credits. That ambiguity is where an automated
+integrity check on the numbers is useful, and is where the agent fits.
 
 ## Scope and honesty boundary
 
@@ -52,8 +46,8 @@ stateful joins, dedup, late-event handling, a reconciliation path, an OLAP servi
 layer with restatements, and the operational tooling around all of it.
 
 - **Scale posture.** It runs end to end on a laptop. It does **not** attempt a live
-  500k/sec demo — that is impossible on free
-  infrastructure and fools no one. The scaling story is a written deliverable:
+  500k/sec demo, which free infrastructure can't support. The scaling story is a
+  written deliverable:
   [`docs/SCALING.md`](docs/SCALING.md) says where the design breaks at 50k/sec and
   500k/sec and exactly what changes at each tier.
 - **Cost posture.** 16 GB laptop, Docker Compose. The agent evals cost under $10 in
@@ -160,12 +154,11 @@ scrape → Alertmanager → webhook push path is a documented cut — see
 
 ## The agent — attribution-integrity guardian
 
-An agent earns its cost only where the work is ambiguous, high-volume, and
-judgment-heavy. Threshold alerts already catch "lag is high." What they cannot catch
-is a **plausible-but-wrong attribution number**: a ROAS that looks fine but is
-inflated by a device-graph mismatch, a window-edge effect, or a late-arrival
-restatement. The agent does the cross-signal reasoning a data engineer would do by
-hand — and it is bounded to make that safe:
+Threshold alerts catch "lag is high." What they cannot catch is a
+**plausible-but-wrong attribution number**: a ROAS that looks fine but is inflated by
+a device-graph mismatch, a window-edge effect, or a late-arrival restatement. The
+agent does the cross-signal reasoning a data engineer would do by hand, bounded to
+make that safe:
 
 - **Read-only, enforced at the database.** It runs as a SELECT-only ClickHouse user
   (`agent_ro`); an integration test proves it cannot INSERT/ALTER/DROP/CREATE.
@@ -179,10 +172,10 @@ hand — and it is bounded to make that safe:
 - **Off the critical path.** Run the pipeline with the agent disabled and the
   attribution output is byte-identical.
 
-The headline test is the **near-miss pair**: a genuine performance lift and a
-shared-IP false-positive inflation both raise reported ROAS but demand opposite
-responses. Telling them apart on the evidence — the `ip_resolved_fraction`
-discriminator, not "ROAS went up" — is what proves reasoning over pattern-matching.
+The main test is the **near-miss pair**: a genuine performance lift and a shared-IP
+false-positive inflation both raise reported ROAS but demand opposite responses. The
+agent has to tell them apart on the evidence — the `ip_resolved_fraction`
+discriminator, not "ROAS went up".
 
 ---
 
@@ -227,11 +220,10 @@ Two canonical clean-state demos:
 
 ```bash
 # Hot-path headline — fast, stable pins
-make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report
+make down && make up && make seed PROFILE=tiny && make run-hot && make eval PROFILE=tiny && make report
 
-# Reconciliation + restatement — where the long tail earns its keep
-#   (recall 0.587 → 0.973, ROAS restated up)
-make down && make up && make seed PROFILE=long_delay && make run && make eval && make report && make restate
+# Reconciliation + restatement (recall 0.587 → 0.973, ROAS restated up)
+make down && make up && make seed PROFILE=long_delay && make run && make eval PROFILE=long_delay && make report && make restate
 ```
 
 `make run` is resolve → engine → reconciliation, a single pass (not a daemon).
@@ -320,11 +312,3 @@ not speculative code.
 - **Multi-touch models, schema evolution beyond v1, co-view inside the engine** — out
   of scope for v1 (ARCHITECTURE §3.5). Multi-touch is intentionally a *query* over the
   recorded assists, not a re-run.
-
----
-
-*This project builds the pipeline attribution actually runs on — a windowed,
-late-tolerant, cross-device stream join with a reconciliation path, serving an OLAP
-reporting layer with restatements — validates it against ground truth, and puts an AI
-agent where it earns its keep: guarding the integrity of the numbers advertisers bet
-their budgets on.*
