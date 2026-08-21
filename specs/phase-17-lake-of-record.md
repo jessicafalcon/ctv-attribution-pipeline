@@ -1,4 +1,4 @@
-# Phase 17 — Lake of record (PROPOSED)
+# Phase 17 — Lake of record
 
 Contract for the `phase-17-lake-of-record` branch. Source: post-plan extension — **not**
 in the original `docs/PHASES.md` plan. Origin: the Phase-15 architecture review
@@ -6,7 +6,10 @@ in the original `docs/PHASES.md` plan. Origin: the Phase-15 architecture review
 finding 5 ("DuckDB-over-Iceberg won't survive the 90d window at scale"). Depends on
 Phase 16 merged (two topics, in-process resolve, no Bytewax).
 
-**Status: PROPOSED — do not start until Phase 16 has merged and this is approved.**
+**Status: ACTIVE (2026-08-21).** Phase 16 merged (#28); the Phase-16 coherence audit
+found three gaps (F1–F3, BACKLOG "Phase 17 spec needs a Phase-16 follow-up edit") and
+the developer's decisions D1–D12 below amend this spec. The amendment is the first
+commit on the branch; no code before it.
 No new dependencies expected (pyiceberg, pyarrow, duckdb, dagster already allowlisted).
 If the bucket transform or snapshot expiry needs a pyiceberg feature not in the pinned
 version, STOP and ask before bumping.
@@ -34,22 +37,28 @@ Phase 12 recorded; every asserted check reads row content back.
 
 ```
 make test && make lint \
-  && make down && make up && make seed PROFILE=long_delay && make run \
-  && make eval PROFILE=long_delay && make test-int-lakehouse
+  && make down && make up && make seed PROFILE=tiny \
+  && make run-hot && make eval && make test-int \
+  && make test-int-lakehouse && make test-int-long-delay
 ```
 
-- `make run` now lands to the lake always (no `--lake-land` flag) and loads ClickHouse
-  from it; `make eval PROFILE=long_delay` reports the pinned 0.587 → 0.973.
-- `make test-int-lakehouse` becomes the arrow-flipped parity proof: serving rows loaded
-  from the lake == serving rows the engine would have written directly (the Phase-12
-  direct-write path is kept as a test-only oracle, not a product path).
+- tiny through the lake is the gate-0 proof: `make run-hot` is now engine → lake →
+  Dagster headless load, and `make eval` + `make test-int` reproduce the tiny golden
+  rows and `TINY_HOT` unchanged.
+- `make test-int-lakehouse` (its own clean long_delay stack) is the arrow-flipped parity
+  proof: serving rows loaded from the lake == serving rows the direct-write oracle (now
+  under `tests/`) would have written; plus the accumulated-lake check (Done-when 6).
+- `make test-int-long-delay` (its own clean long_delay stack) is the reconcile-through-
+  lake proof: `make run` = engine → lake → load → reconcile → lake → load, and
+  `LONG_DELAY_HOT` → `LONG_DELAY_POST` (recall 0.587 → 0.973) holds unchanged.
 
 ## Done-when
 
 1. **Engine writes to the lake, not to ClickHouse.** `streaming/` lands deduped
    exposures to `raw.exposures` and hot-path attributed rows to
-   `raw.attributed_conversions` (new Iceberg table, same columns as the ClickHouse
-   table), both day-partitioned by `event_time` and **bucketed by `household_id`**
+   `raw.attributed_conversions` (new Iceberg table — the ClickHouse table's 19
+   columns in the same order, incl. `reason` and the new `candidate_households`; D3),
+   both day-partitioned by `event_time` and **bucketed by `household_id`**
    (Iceberg `bucket(N, household_id)`, N fixed per profile tier and recorded in the
    table properties — laptop default 8). The `--lake-land` flag is removed; landing is
    the only write path.
@@ -57,23 +66,39 @@ make test && make lint \
    and `clickhouse_attributed_conversions` depend on the raw tables and load the day
    partition into ClickHouse (ReplacingMergeTree semantics unchanged: keyed
    `conversion_id`, version `processed_at`). Re-materializing a partition is idempotent.
-   `make run` = engine → lake → load → reconcile; `make reconcile-dagster` is the same
-   graph with day partitions selectable.
-3. **Reconciliation is a bucket-aligned partitioned join.** For partition
-   `(day, bucket)`, candidates (`attributed=false` rows in `raw.attributed_conversions`
-   for that day and bucket) join ONLY `raw.exposures` partitions in `[day − 90d, day]`
-   with the same bucket. Dagster asset becomes `MultiPartitionsDefinition(day × bucket)`.
-   The SQL is engine-agnostic (DuckDB runs it locally; the same statement is the
-   Spark/Trino target). This closes BACKLOG rows "reads ALL candidates per partition"
-   and "global `min_event_time` prune".
+   The load is driven by the set of `event_time` days the landing TOUCHED, never by
+   wall-clock (D6). `make run` = engine → lake → load → reconcile → lake → load;
+   `make run-hot`, CI and `metrics-capture` = the same minus the reconcile leg (D5);
+   `make reconcile-dagster` is the same graph with day partitions selectable.
+3. **Reconciliation is a bucket-aligned partitioned join, in two channels (D2).**
+   Candidates are the current (`argMax(processed_at)`, D4) `attributed=false`,
+   `path=hot` rows of `raw.attributed_conversions` for the day.
+   - **state-miss** (`candidate_count == 1`): the row's `household_id` is certain, so
+     it joins bucket-locally — `raw.exposures` partitions in `[day − 90d, day]` with
+     the same bucket — no explode.
+   - **ambiguous_ip** (`candidate_count > 1`): each deferred row is EXPLODED into one
+     row per entry of its `candidate_households` array BEFORE bucketing (the existing
+     `expand_candidates`, now reading the array instead of the device graph), each
+     exploded row joins bucket-locally against `raw.exposures` in its candidate's
+     bucket, and the results are REDUCED by `conversion_id` across buckets with
+     `pick_household` — the one implementation, unchanged. This is why the placeholder
+     `household_id` does not matter for recovery: the array is the truth, the
+     placeholder is only the RMT key.
+   Dagster asset becomes `MultiPartitionsDefinition(day × bucket)` for the join; the
+   cross-bucket reduce runs once per day after its buckets. The SQL is engine-agnostic
+   (DuckDB runs it locally; the same statement is the Spark/Trino target). This closes
+   BACKLOG rows "reads ALL candidates per partition" and "global `min_event_time`
+   prune". **Gate: one reconcile pass == the Phase-16 output byte-for-byte** (every
+   `tests/pins.py` POST pin, long_delay and shared_ip_spike included).
 4. **Lake hygiene is an asset, not a footnote.** A `lake_maintenance` Dagster job
    expires snapshots older than a configured age and rewrites small files per
    partition. `make down` still removes compose volumes only; a documented `make
    lake-reset` (explicit confirmation, like `down`) clears `data/lake/`. Closes the
    BACKLOG "`data/lake` accumulates unboundedly" row.
 5. **Replay is from the lake.** `make replay-serving` (new) truncates-and-reloads the
-   ClickHouse serving tables from the lake with no Kafka involvement, and `make eval`
-   afterwards reproduces the pins. This is the backfill story for a petabyte tier:
+   ClickHouse serving tables from the lake with no Kafka involvement — genuinely
+   broker-free, since reconciliation no longer reads the device graph (D1) — stamps
+   the `eval_meta` marker (D8), and `make eval` afterwards reproduces the pins. This is the backfill story for a petabyte tier:
    Kafka retention is hours; the lake is forever.
 6. **Parity proof inverted.** `tests/integration/test_lakehouse.py` asserts
    lake-loaded serving rows == direct-write oracle rows (row content, sorted, 6dp), and
@@ -97,12 +122,23 @@ make test && make lint \
 - **Landing is always on.** The Phase-12 "off by default to keep `make run` byte-
   identical" carve-out is retired because row-content checks (not metadata) are the
   guarantee; DECISIONS Phase 12 entry gets a superseded-by pointer.
-- **Serving-table DDL unchanged.** RMT key/version, sort keys, `eval_meta` marker,
-  `agent_ro` grants: zero diff.
+- **Serving-table DDL unchanged except ONE additive column.** RMT key/version, sort
+  keys, `eval_meta` marker, `agent_ro` grants: zero diff. The single addition is
+  `candidate_households Array(String)` (D1), by idempotent `add column if not exists`,
+  the Phase-16 `reason` pattern.
+- **Producer OUTPUT zero-diff.** `AttributedConversion` is the engine's table model
+  that lives in `producer/models.py` (Phase-16 ruling); topics, truth links and
+  profiles do not change.
+- **One `pick_household` implementation.** Not duplicated into SQL; the cross-bucket
+  reduce calls it.
+- **No magnitude pins.** Runtime/size numbers are reported, never asserted.
 
 ## Scope (files)
 
-- `lake/` (new `raw.attributed_conversions` table, bucket transform, maintenance
+- `producer/models.py` (`candidate_households` on `AttributedConversion`),
+  `clickhouse/` DDL (additive migration), `streaming/attribute.py` or
+  `dataflow.py` (the engine writes the full candidate set at deferral time),
+  `lake/` (new `raw.attributed_conversions` table, bucket transform, maintenance
   helpers), `streaming/sink.py` (lake sink replaces the ClickHouse sink on the engine
   path; the direct ClickHouse writer moves to `tests/` as the oracle),
   `orchestration/assets.py` + `definitions.py` (load assets, multi-partition
@@ -121,8 +157,10 @@ make test && make lint \
   replay-serving` reproduces pins from a cold ClickHouse.
 - **coherence-auditor** at exit: every "dual-write" / "`--lake-land`" / "off by
   default" sentence is gone.
-- Stack risk: pyiceberg bucket transforms and snapshot expiry in the pinned version —
-  verify in the first hour; if unsupported, STOP and report before any workaround.
+- Stack risk (D11): pyiceberg 0.11.1 bucket transforms on WRITE via pyiceberg-core,
+  `expire_snapshots`, and DuckDB `iceberg_scan` reading bucketed layouts with partition
+  pruning — verify in the first hour; if unsupported, STOP and report before any
+  workaround. Findings go under ARCHITECTURE §8.
 
 ## Out of scope (deferred, recorded)
 
@@ -131,3 +169,85 @@ make test && make lint \
   this phase keeps the batch drain.
 - Incremental rollups, part-count alerts, async inserts, query cost in dollars, schema
   compat BACKWARD — Phase 18 (cost & ops).
+- `engine_join_state_current` last-household-wins fix — Phase 18 (BACKLOG row).
+- `make agent-eval` re-run (API tokens) — BACKLOG 49, unchanged.
+- Landing `device_graph` as a lake table — NOT needed: D1 makes the candidate set part
+  of the attributed row, so neither reconcile nor replay reads the graph (the BACKLOG
+  broker-dependency row's suggested fix is superseded by D1).
+
+## Amendments (2026-08-21) — post-Phase-16 decisions D1–D12
+
+Written before the branch opened, against the Phase-16 coherence audit's F1–F3.
+Each is pinned; the implementation order follows them.
+
+- **D1 — `candidate_households` column (closes F2 + the BACKLOG broker-dependency
+  row).** `AttributedConversion.candidate_households: list[str]` (engine output model
+  in `producer/models.py` — same ruling as the Phase-16 `reason` column; producer
+  OUTPUT zero-diff), ClickHouse `candidate_households Array(String)` by additive
+  migration (empty when not ambiguous), the sink, and the Iceberg schema. The engine
+  writes the FULL candidate set (the graph's sorted owners) at deferral time.
+  Consequences: reconcile no longer needs the device graph or the broker;
+  `expand_candidates` reads the array; `load_graph_index` leaves `reconcile/` and
+  `orchestration/`; `make replay-serving` is genuinely Kafka-free. The Phase-16
+  placeholder `household_id` (min candidate) STAYS — a nullable ClickHouse key column
+  is worse than a documented placeholder. The array is the truth, the placeholder is
+  the key.
+- **D2 — Ambiguous path under bucketing (closes F1).** Reconcile's ambiguous channel
+  explodes each deferred row into one row per `candidate_households` entry BEFORE
+  bucketing, joins bucket-locally against `raw.exposures`, then reduces by
+  `conversion_id` ACROSS buckets with `pick_household` (one implementation, unchanged).
+  The state-miss channel joins bucket-locally with no explode. Spec + DECISIONS
+  wording: *the architecture's claim is no fan-out on the HOT path; batch fan-out with
+  the full 90-day picture is cheap and correct.* Gate: one reconcile pass == Phase-16
+  output byte-for-byte.
+- **D3 — `raw.attributed_conversions` column contract (closes F3).** Columns = the
+  ClickHouse table incl. `reason` and `candidate_households` — 19 columns, same order.
+  Pinned in a test (model fields == sink columns == DDL == Iceberg schema).
+- **D4 — Lake tables are append-only logs; current state lives in ClickHouse (RMT).**
+  Reconciled rows are APPENDED to `raw.attributed_conversions` with
+  `path=reconciled` and a later `processed_at`; any lake read that needs "current row
+  per `conversion_id`" uses `argMax(processed_at)` in SQL — never assumes one row per
+  key. The loader is idempotent because the RMT dedups on load.
+- **D5 — Every path goes through the lake.** `make run`, `make run-hot`, CI and
+  `metrics-capture` = engine → lake → Dagster headless load → (reconcile → lake →
+  load). The direct ClickHouse writer in `streaming/sink.py` moves to `tests/` as the
+  parity oracle; `make lake-land` and `--lake-land` are removed. Gate-0 golden and
+  every pin in `tests/pins.py` are byte-identical/unchanged — this phase moves rows,
+  it does not change them. CI integration job runtime grows (Dagster + DuckDB):
+  accepted, noted in the PR.
+- **D6 — Load is driven by days TOUCHED, not wall-clock.** `land()` returns the set
+  of `event_time` days it wrote; the Dagster load asset materializes exactly those
+  partitions (late rows land in old days and must reload those days). Partition keys
+  come from data min/max (the existing `_day_keys` static set), never from today's
+  date.
+- **D7 — Bucket count.** `bucket(8, household_id)` on BOTH raw tables, identical N,
+  recorded as a table property and asserted equal in a test. N is a SCALING.md lever
+  (tier table), set once per deployment — never changed on a populated lake.
+- **D8 — `eval_meta` stamping.** The populate targets still stamp the profile marker
+  (PR #25 / #29 guard); `make replay-serving` stamps too. If a new `test-int-*`
+  target is added, the Makefile guard's target discovery (`tests/test_makefile.py`)
+  is extended.
+- **D9 — `make lake-reset`.** The second sanctioned destructive path beside `make
+  down`; requires explicit confirmation; documented in CLAUDE.md Commands. `make
+  down` still does not touch `data/lake/`.
+- **D10 — Maintenance asset.** Expire snapshots older than a configured age + rewrite
+  small files per partition, as a Dagster job, run by `make lake-maintain`. Not part
+  of `make run`.
+- **D11 — First-hour stack check (STOP and report on any failure, no workaround).**
+  pyiceberg 0.11.1 (pinned) supports bucket partition transforms on WRITE via
+  pyiceberg-core, `expire_snapshots`, and DuckDB `iceberg_scan` reads bucketed layouts
+  with partition pruning. Findings recorded under ARCHITECTURE §8.
+- **D12 — Out of scope, unchanged.** Spark/Trino, object store/REST catalog,
+  continuous follow, `engine_join_state_current` fix (Phase 18), agent-eval re-run
+  (tokens).
+
+**Implementation order** (one commit per green state, `phase-17:` prefix): D1
+model/DDL/sink/schema + column-contract test → D7/D3 lake tables with bucketing →
+D5 engine→lake + Dagster load assets + direct writer to `tests/` → D2 bucketed
+reconcile (ambiguous explode + state-miss) with the byte-identical gate → D6
+touched-days loader → replay-serving + lake-reset + maintenance → docs
+(ARCHITECTURE §3.2/§3.3/§5 + determinism bullet, CLAUDE.md commands/determinism/
+status, SCALING baseline + tier table, RESULTS provenance lines, DECISIONS Phase 17
+incl. "supersedes the Phase-12 off-by-default carve-out", PHASES.md row, BACKLOG:
+close the F1–F3 row, the broker row, the `data/lake` growth row, the
+accumulated-lake row).
