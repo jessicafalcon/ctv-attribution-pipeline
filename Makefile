@@ -47,6 +47,7 @@ run:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 	uv run python -m reconcile.reconcile
+	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Hot path only (resolve → engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -56,6 +57,7 @@ run:
 run-hot:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
+	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 12: run the hot path (resolve → engine) and dual-write the SAME deduped
 # exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
@@ -64,6 +66,7 @@ run-hot:
 lake-land:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow --lake-land
+	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 12: orchestrated reconciliation. Materialize the day-partitioned
 # reconciled_conversions asset (exposures sourced from Iceberg via DuckDB) over
@@ -125,9 +128,10 @@ metrics-capture:
 	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
 	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 
-# Attribution accuracy (household grain) vs the truth side file, for the last
-# seeded profile. Reads attributed_conversions FINAL from ClickHouse; truth
-# never enters the DB (N1, DECISIONS Phase 4).
+# Attribution accuracy (household grain) vs the truth side file, for the given
+# PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;
+# truth never enters the DB (N1, DECISIONS Phase 4). Refuses a profile/DB
+# mismatch via the eval_meta marker the populate path writes (BACKLOG 43).
 eval:
 	uv run python -m accuracy.run --profile "$(PROFILE)"
 

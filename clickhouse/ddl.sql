@@ -95,3 +95,18 @@ create table if not exists report_snapshots
 )
 engine = ReplacingMergeTree
 order by (reported_at, campaign_id, period);
+
+-- Eval guard marker (BACKLOG 43). A single-row table naming which profile
+-- populated the serving tables, so `make eval` can refuse to score one profile
+-- against a DB populated from another (e.g. scoring tiny against a long_delay DB
+-- → ~0.17, silently). OFF the golden-compared path (attributed_conversions /
+-- exposures_landed FINAL), so gate-0 stays byte-identical. Keyed on the constant
+-- k=0: the populate path's insert replaces the row, so a replay converges. No
+-- timestamp — the marker is fully deterministic (only a profile string).
+create table if not exists eval_meta
+(
+    k       UInt8,
+    profile String
+)
+engine = ReplacingMergeTree
+order by k;

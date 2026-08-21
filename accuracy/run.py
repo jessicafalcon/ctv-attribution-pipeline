@@ -13,10 +13,19 @@ import json
 import sys
 from pathlib import Path
 
+from accuracy.guard import assert_profile_marker
 from accuracy.score import format_report, score
 from clickhouse.client import connect, read_credited, read_exposure_households
 
 REPO_ROOT = Path(__file__).parent.parent
+
+
+def _db_profile_marker(client) -> str | None:
+    """The profile string in `eval_meta` (None if the table is empty). The
+    populate path stamps it so the DB self-describes which profile populated the
+    serving tables (BACKLOG 43)."""
+    rows = client.query("select profile from eval_meta final").result_rows
+    return rows[0][0] if rows else None
 
 
 def load_truth(profile: str) -> dict[str, str]:
@@ -38,6 +47,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     client = connect()
+    assert_profile_marker(_db_profile_marker(client), args.profile)
     credited = read_credited(client)
     exposure_household = read_exposure_households(client)
     truth = load_truth(args.profile)
