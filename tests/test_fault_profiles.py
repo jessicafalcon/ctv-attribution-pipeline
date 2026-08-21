@@ -198,13 +198,17 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
     assert peak_late < 7 * 86400
 
 
-# --- Phase 10: the full-run sweep injects no spurious restatement ------------
+# --- Phase 10: the full-run sweep injects no spurious STATE-MISS restatement --
 # `make agent-eval` runs the FULL pipeline (incl. reconciliation) per scenario so
 # late_burst's restatement exists. Confirm the three IN-WINDOW scenarios (all event-time
-# delays inside the 7d window) recover nothing on the long window — so reconciliation
-# writes no corrected rows, report_snapshots PRE == FINAL, and no spurious roas_delta
-# baits a false late_arrival_distortion. (late_burst is excluded: its misses are arrival
+# delays inside the 7d window) recover no state-miss on the long window — the long
+# window credits exactly the hot set. (late_burst is excluded: its misses are arrival
 # lateness / eviction, not event-time, so it genuinely restates.)
+# Phase 16 caveat: these profiles DO now restate through a second channel — their
+# shared-IP conversions are deferred hot (ambiguous_ip) and credited by the
+# reconcile pass — so report_snapshots PRE != FINAL wherever a profile has ambiguous
+# conversions. That restatement is the deferral landing, not a late-arrival signal;
+# agent-eval is not re-run in Phase 16 (API tokens) — recorded as an open risk.
 
 
 @pytest.mark.parametrize("name", ["shared_ip_spike", "real_lift", "no_fault_baseline"])

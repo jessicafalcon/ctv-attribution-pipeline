@@ -288,7 +288,10 @@ def _attributed(
     attributed: bool,
 ) -> AttributedConversion:
     return AttributedConversion(
-        **conv.model_dump(),
+        # ResolvedConversion fields only: a reconciliation candidate may arrive as
+        # a hot AttributedConversion row (a subclass) — its old decision columns
+        # must not leak through.
+        **conv.model_dump(include=set(ResolvedConversion.model_fields)),
         exposure_id=exposure_id,
         assists=assists,
         attributed=attributed,

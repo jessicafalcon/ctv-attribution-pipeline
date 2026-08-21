@@ -212,17 +212,18 @@ test-int-long-delay:
 	$(MAKE) run PROFILE=long_delay
 	uv run pytest tests/integration/test_reconcile.py
 
-# Phase-8 live fault-harness proof on a CLEAN shared_ip_spike-only stack, isolated
-# by the sanctioned `make down` (profiles share conversion_id space; DECISIONS
-# Phase 5). `make run` (resolve → engine → reconcile) so report_snapshots exists
-# for the context's restatement field; shared_ip_spike keeps delays in the hot
-# window, so reconciliation only touches organics and the caused-side pins hold.
-# Asserts the shared-IP fault is observed live (Row 20) + the context is populated.
+# Phase-8/16 live fault-harness proof on a CLEAN shared_ip_spike-only stack,
+# isolated by the sanctioned `make down` (profiles share conversion_id space;
+# DECISIONS Phase 5). `run-hot` here, NOT `run`: the test pins the hot side first
+# (caused_wrong_household == 0 — ambiguous shared-IP conversions are deferred,
+# Phase 16), then runs the reconcile pass itself and pins the post side (the
+# shared-IP fault observed: 69/80 correct, 11 wrong-household, Row 20) and the
+# populated context (report_snapshots exists once that pass has run).
 test-int-shared-ip:
 	$(MAKE) down
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
-	$(MAKE) run PROFILE=shared_ip_spike
+	$(MAKE) run-hot PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_context.py
 
 # Phase-9 live read-only proof on a CLEAN shared_ip_spike-only stack (same isolation

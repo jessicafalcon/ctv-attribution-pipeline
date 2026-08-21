@@ -7,7 +7,7 @@ from prometheus_client import Counter, Gauge
 CANDIDATES = Counter(
     "reconcile_candidates_total",
     "Hot-unattributed conversions (attributed=0, path=hot) scanned as "
-    "reconciliation candidates.",
+    "reconciliation candidates — state-misses and ambiguous_ip deferrals.",
 )
 RESTATEMENT_ROAS_ABS_DELTA = Gauge(
     "reconcile_restatement_roas_abs_delta",
