@@ -1,4 +1,5 @@
-"""Prometheus metrics for the resolve stage (`resolve_` prefix per CLAUDE.md).
+"""Prometheus metrics for the resolve step (`resolve_` prefix per CLAUDE.md;
+emitted from the engine process since Phase 16).
 
 Counters only — rates are ratios computed at query time in Prometheus, which
 keeps this collector deterministic and side-effect-free (the determinism

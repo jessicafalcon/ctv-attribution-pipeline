@@ -132,22 +132,27 @@ surprise.
 **What is proven.** The attribution engine runs the real windowing semantics —
 **arrival-ordered processing, watermarks + allowed-lateness release, and hot-window
 eviction** (Phase 5) — over a **bounded drain** of the seeded stream. It drains
-both topics to memory once (EOF-driven, the same idiom as the resolve stage), feeds
-a bounded source, and exits at end-of-input. The windowing correctness is real and
-tested; what it operates on is finite.
+both event topics to memory once (EOF-driven, `common.kafka.drain`), resolves
+conversions in-process against the compacted device graph, runs the pure core per
+household, and exits at end-of-input. The windowing correctness is real and tested;
+what it operates on is finite.
 
-**Why it's batch.** `bytewax.connectors.kafka` is an **unbounded** source — it
-never signals end-of-input — so a dataflow built directly on it would not terminate
-on a finite seeded stream. Draining to a bounded source also guarantees every
-candidate for a `conversion_id` is present when the reduction runs. See
-[`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-gotchas), gotcha "Bytewax's Kafka source
-follows forever", and [`DECISIONS.md`](../DECISIONS.md) (Phase 3/5).
+**Why it's batch.** It is a deterministic batch attributor in plain Python by
+choice since Phase 16: the earlier Bytewax dataflow was a bounded `TestingSource` +
+`fold_final` wrapper around this same drain (Bytewax's Kafka source never signals
+end-of-input, so a dataflow built directly on it would not terminate on a finite
+seeded stream), and the framework did no work, so it was removed rather than made
+real. Draining to memory also guarantees every fan-out row for a `conversion_id` is
+present when it is collapsed to one row. See [`ARCHITECTURE.md`
+§8](ARCHITECTURE.md#8-gotchas), gotcha "The engine is a batch drain, not a
+continuous follow", and [`DECISIONS.md`](../DECISIONS.md) (Phase 3/5/16).
 
 **What is not operated.** Three things the batch shape defers, none of them
 exercised here:
 
 - **Continuous unbounded Kafka follow** — the engine does not run as a daemon
-  tailing the topics; no phase owns the move to continuous follow yet.
+  tailing the topics; the move to continuous follow, and the framework to run it on
+  (Bytewax proper vs Flink), is a Phase-17+ decision.
 - **Spill-to-disk / checkpointed state** — the whole topic is held in memory on a
   single partition; there is no RocksDB-style state backend.
 - **TTL'd dedup** — dedup is a full in-memory seen-set, not a windowed/TTL'd one.
@@ -160,7 +165,7 @@ Two of the four alerts carry the same batch-mode honesty in their own comments:
 watermark-advance stall — because a batch drain has no advancing watermark to
 stall against. Read them as batch-mode signals, not continuous-mode ones.
 
-**Where the continuous version is spec'd.** The 500k/sec port maps every Bytewax
+**Where the continuous version is spec'd.** The 500k/sec port maps every engine
 construct to its Flink equivalent — RocksDB state backend, incremental
 checkpointing, watermarks + `allowedLateness`, late events to a side output — in
 [`SCALING.md` — "Flink mapping"](SCALING.md#flink-mapping-500ksec-port). That's the

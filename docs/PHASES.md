@@ -276,3 +276,20 @@ fact).
 root cause → fix → generalization form; a trace check confirms every cross-reference
 resolves; un-alerted failure modes are named as un-alerted. No new deps.
 Spec: `specs/phase-15-runbook.md`.
+
+## Phase 16 — Simplify the core (PROPOSED)
+
+**Goal.** Deletion-first: remove three boxes that were neither a seam nor a scale
+boundary. (1) Ambiguous shared-IP conversions are deferred hot (unattributed, reason
+ambiguous_ip) and settled by reconciliation with the ONE most-recent-exposure
+tiebreak (moved, not rewritten) — hot wrong-household 0 by construction. (2) Resolve
+becomes an in-process map step; the `conversions_resolved` topic, subject and stage
+producer go (two event topics + `device_graph`). (3) Bytewax is removed; `dataflow.py`
+drives the pure core directly. Producer zero-diff; agent contract untouched.
+
+**Done when.** `make test && make lint && make down && make up && make seed
+PROFILE=tiny && make run-hot && make eval && make test-int && make test-int-shared-ip`
+passes against the once-re-frozen tiny golden and re-pinned `tests/pins.py` (tiny hot
+47/35/32, medium hot 129/92/91, long_delay 80/75/44 → 112/75/73; post-reconcile tiny
+and medium equal the pre-Phase-16 hot numbers; shared_ip_spike post-reconcile 69/80
+== the old hot reduce). Spec: `specs/phase-16-simplify-core.md`.

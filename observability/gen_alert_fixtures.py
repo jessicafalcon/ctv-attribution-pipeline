@@ -33,13 +33,16 @@ ALERTS = ["ConsumerLag", "WatermarkStall", "MatchRateOutOfBand", "RestatementMag
 
 # Capture profile → (metrics dir, alerts expected to fire). long_delay's knobs
 # (volume, 300-min late injector, >7d causal delays, long-window recovery) trip
-# all four; tiny trips none — so each alert is proven to fire on a real knobbed
-# run AND stay silent on another. The fire/silent expectation is the test's
-# claim; promtool independently checks the RULES produce it from the captured
-# numbers (no circularity — the generator never evaluates a threshold).
+# all four; tiny trips only RestatementMagnitude — since Phase 16 its 5 shared-IP
+# conversions are deferred hot and credited by the reconcile pass, which restates
+# a campaign ROAS by ~12.9 (> the 1.0 threshold); the other three stay silent on
+# tiny, so each of those is proven to fire on a real knobbed run AND stay silent
+# on another. The fire/silent expectation is the test's claim; promtool
+# independently checks the RULES produce it from the captured numbers (no
+# circularity — the generator never evaluates a threshold).
 PROFILES = [
     ("long_delay", "data/out/long_delay/metrics", ALERTS),
-    ("tiny", "data/out/tiny/metrics", []),
+    ("tiny", "data/out/tiny/metrics", ["RestatementMagnitude"]),
 ]
 
 

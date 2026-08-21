@@ -19,28 +19,33 @@ real failure mode, wrong-household (shared-IP) attribution.
 
 | profile | path | credited | truth | correct | precision | recall | wrong-hh |
 |---|---|---|---|---|---|---|---|
-| `tiny` | hot | 52 | 35 | 35 | 0.673 | 1.000 | 0 |
-| `medium` | hot | 130 | 92 | 92 | 0.708 | 1.000 | 0 |
-| `long_delay` | hot only | 83 | 75 | 44 | — | 0.587 | — |
+| `tiny` | hot | 47 | 35 | 32 | 0.681 | 0.914 | 0 |
+| `medium` | hot | 129 | 92 | 91 | 0.705 | 0.989 | 0 |
+| `long_delay` | hot only | 80 | 75 | 44 | — | 0.587 | — |
 | `long_delay` | post-reconcile | 112 | 75 | 73 | — | 0.973 | — |
 
 - **Precision below 1.0 on `tiny`/`medium` is last-touch *organic over-credit*, not a
-  bug.** 17 organic `tiny` conversions (no truth link) are credited to a
+  bug.** 15 organic `tiny` conversions (no truth link) are credited to a
   coincidentally-recent in-window exposure. Wrong-household count is **0** on both
-  clean profiles — shared-IP misattribution is a fault-profile story (see the agent
-  eval and `shared_ip_spike`), not a property of the clean runs. Recall is 1.000: the
-  hot path misses no caused conversion whose exposure is inside the 7-day window.
-  Exact-`exposure_id` match on `tiny` is a labeled diagnostic only (3/52 = 0.058),
-  never the headline.
+  clean profiles — and since Phase 16 it is 0 on the hot path **by construction**:
+  a shared-IP (ambiguous) conversion is never credited hot. Exact-`exposure_id` match
+  on `tiny` is a labeled diagnostic only (3/47 = 0.064), never the headline.
+- **Hot recall below 1.0 on `tiny`/`medium` is the Phase-16 deferral, not a miss.**
+  tiny's 3 and medium's 1 caused shared-IP conversions are emitted unattributed
+  (reason ambiguous_ip) and credited by the reconciliation pass, which re-enumerates
+  the candidate households from the device graph and applies the most-recent-exposure
+  rule there. Post-reconcile, tiny is 52/35/35 and medium 130/92/92 — exactly the
+  pre-Phase-16 hot numbers. Same answer after reconciliation; fewer moving parts.
 - **`long_delay` is the reconciliation story.** Its caused conversions arrive days
   late, so their exposures have aged out of the 7-day hot window — the hot pass misses
   them and recall sits at **0.587** (44/75). The periodic reconciliation pass re-runs
   the same pure attribution leaf at 90 days against `exposures_landed`, recovers **29**
-  caused misses to their correct household, and lifts recall to **0.973** (73/75) —
-  credited 83 → 112. The 2 residuals are wrong-household shared-IP attributions:
-  reconciliation recovered every recoverable caused miss (`caused_missed=0`), but 2
-  conversions resolve to the wrong household through a shared IP — an error
-  reconciliation cannot fix, which is what caps recall at 0.973. This is the
+  caused state-misses to their correct household and settles the 3 deferred shared-IP
+  conversions, and lifts recall to **0.973** (73/75) — credited 80 → 112. The 2
+  residuals are wrong-household shared-IP picks: reconciliation recovered every
+  recoverable caused miss (`caused_missed=0`), but 2 conversions' most-recent exposure
+  sits in the wrong shared-IP household — the measured fault, which caps recall at
+  0.973 (unchanged by Phase 16: the same rule, applied later). This is the
   recall-buys-at-some-precision-cost trade
   the long tail exists to make, and it is the headline reconciliation number.
 
@@ -178,7 +183,7 @@ the threshold-crossing values come from a real stage run, never hand-authored):
 
 | alert | expr | fires when |
 |---|---|---|
-| `ConsumerLag` | `resolve_input_backlog > 100` | resolve stage falls behind |
+| `ConsumerLag` | `resolve_input_backlog > 100` | conversions backlog at drain start (resolve runs in-process in the engine since Phase 16) |
 | `WatermarkStall` | `engine_watermark_lag_seconds > 14400` | peak arrival lateness > 4h |
 | `MatchRateOutOfBand` | match rate outside band | share of conversions attributed jumps/drops |
 | `RestatementMagnitude` | `reconcile_restatement_roas_abs_delta > 1.0` | reconciliation moves a period's ROAS materially |
@@ -192,11 +197,16 @@ Two honesty boundaries on what this proves:
   exact reason the agent earns its place. A green alert board does not mean the
   numbers are right.
 - **The rules discriminate; they do not isolate.** The fixtures prove each rule
-  **fires on the anomalous profile (`long_delay`) and stays silent on the clean one
-  (`tiny`)** — a discrimination between a knobbed profile and a baseline. They do
-  **not** claim single-knob isolation (one knob → one alert): `long_delay` trips more
-  than one rule, and that is expected. The proven claim is "the anomalous profile
-  trips the alerts, the clean profile does not," nothing stronger.
+  **fires on the anomalous profile (`long_delay`)**, and three of the four **stay
+  silent on the clean one (`tiny`)** — a discrimination between a knobbed profile
+  and a baseline. The exception since Phase 16 is `RestatementMagnitude`: tiny's 5
+  shared-IP conversions are deferred hot and credited by the reconcile pass, which
+  restates one campaign's ROAS by 12.9 (threshold 1.0) — a real restatement, so the
+  rule fires on tiny too and the fixture says so (`observability/gen_alert_fixtures.py`).
+  They do **not** claim single-knob isolation (one knob → one alert): `long_delay`
+  trips more than one rule, and that is expected. The proven claim is "the anomalous
+  profile trips the alerts; the clean profile trips only the restatement its own
+  deferral landing causes," nothing stronger.
 
 ## Agent eval — fault → diagnosis
 

@@ -33,7 +33,7 @@ def resolve_stream(
     conversions: Iterable[Conversion], index: GraphIndex
 ) -> list[ResolvedConversion]:
     """Stateless map over the stream — duplicates in, duplicates out. Dedup is
-    the engine's job (Phase 5), not the resolve stage's."""
+    the engine's job (Phase 5), not the resolve step's."""
     out: list[ResolvedConversion] = []
     for conv in conversions:
         out.extend(resolve_one(conv, index))

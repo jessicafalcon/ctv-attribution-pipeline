@@ -15,11 +15,20 @@ partition counts but not the structure.
 
 ## Baseline — what runs today
 
-- **One partition per topic**, single-process stages, a **bounded batch drain** in
-  the engine (Bytewax's Kafka source never signals EOF, so the engine drains both
-  topics to memory once and runs an arrival-ordered, watermark-gated, evicting pass —
-  ARCHITECTURE §8). Windowing, watermarks, allowed-lateness, dedup, and eviction are
-  all real, but on the drain.
+- **One partition per topic**, a single-process engine that is a **deterministic
+  batch attributor** in plain Python — it drains both event topics to memory once,
+  resolves conversions in-process against the compacted device graph, and runs an
+  arrival-ordered, watermark-gated, evicting pass (ARCHITECTURE §8). No stream
+  framework: the Bytewax wrapper was removed in Phase 16 because it only regrouped
+  lists; the framework for continuous follow (Bytewax proper vs Flink) is a Phase-17+
+  choice and the mapping table below is the port target. Windowing, watermarks,
+  allowed-lateness, dedup, and eviction are all real, but on the drain.
+- **Ambiguous shared-IP conversions are deferred, not guessed** (Phase 16): the hot
+  path emits them unattributed; reconciliation picks the household once every
+  exposure is visible. At scale this moves a slice of credit from the hot path to
+  the periodic pass — the size of that slice is the profile's shared-IP fraction ×
+  unknown-device fraction, which is what `resolve_conversions_ambiguous_total`
+  measures.
 - **Hot-window state in a plain in-memory dict.** The seeded profiles span days of
   *event-time* but only hundreds–thousands of events, so 7 days of window state is
   a few thousand rows — trivially in memory.
@@ -85,11 +94,15 @@ So parallelism = partition count, and
 partitions ≥ target_rate / per_partition_throughput
 ```
 
-The join constraint pins the layout: `exposures` and `conversions_resolved` are both
-keyed by `household_id` and **must use the same partition count**, so a household
-hashes to the same partition on both sides and the join is partition-local (no
-shuffle). `conversions` is keyed by `device_id` with its own count — the resolve
-stage re-keys to `household_id` on the way to `conversions_resolved`.
+The join constraint pins the layout: the engine joins on `household_id`, so under a
+multi-partition continuous follow the resolved conversions must be re-partitioned
+by `household_id` with the **same partition count** as `exposures` — a household
+then hashes to the same partition on both sides and the join is partition-local (no
+shuffle). Today (Phase 16) that re-key happens in-process: `conversions` is keyed by
+`device_id` with its own count, the engine resolves it to a household in memory, and
+there is no intermediate topic. The continuous-follow port re-introduces the keyed
+intermediate stream (a `keyBy(household_id)` in Flink terms) — it is the one topic
+Phase 16 removed and the one a framework would give back for free.
 
 | tier | target rate | per-topic partitions (≈) | engine workers |
 |---|---|---|---|
@@ -126,11 +139,12 @@ adding re-hashes keys), so it is provisioned for the target tier, not grown reac
   reconciliation carries proportionally more of the recall. State is RocksDB-backed
   per worker with checkpointing for recovery, sharded across 64–128 partitions so no
   single worker's key-range exceeds its memory + local disk budget.
-- **Move the engine to Flink.** Bytewax is the right call for a Python-first,
-  fast-iteration build with real state/window primitives, but at 500k/sec the mature
-  choice is Flink: a battle-tested RocksDB state backend, incremental checkpointing,
-  exactly-once, and operational tooling. The operator mapping is 1:1 (below), so this
-  is a port, not a redesign.
+- **Move the engine to a real stream framework — Flink at this tier.** The laptop
+  engine is a plain-Python batch attributor (Phase 16); at 500k/sec the mature choice
+  is Flink: a battle-tested RocksDB state backend, incremental checkpointing,
+  exactly-once, and operational tooling (Bytewax proper is the Python-first
+  alternative for the 50k tier — the Phase-17+ decision). The construct mapping is 1:1
+  (below), so this is a port, not a redesign.
 - **ClickHouse becomes a cluster.** ReplicatedReplacingMergeTree, sharded by a
   household hash (keeps a conversion's corrections on one shard) or by `campaign_id`
   (keeps a report local); a Distributed table fans inserts and reads out; buffer
@@ -153,7 +167,10 @@ at-least-once sink is correct by construction.
 
 ## Flink mapping (500k/sec port)
 
-| Bytewax construct here | Flink equivalent |
+Each row is a construct of today's pure core (`streaming/attribute.py`) or drain
+driver (`streaming/dataflow.py`) and its Flink equivalent.
+
+| Engine construct here | Flink equivalent |
 |---|---|
 | Kafka drain, EOF-gated | `KafkaSource` + `WatermarkStrategy.forBoundedOutOfOrderness(allowed_lateness)` |
 | household-keyed join | `keyBy(household_id)` + interval join / `KeyedCoProcessFunction` |
@@ -161,7 +178,7 @@ at-least-once sink is correct by construction.
 | watermark + allowed lateness | Flink watermarks + window `allowedLateness`; late events to a **side output** → reconciliation |
 | dedup seen-set | keyed state with TTL (the batch→TTL story maps directly) |
 | eviction (`watermark > event_time + 7d`) | state TTL / window expiry (automatic) |
-| `conversion_id`-keyed ambiguous reduction | second `keyBy(conversion_id)` + `reduce` |
+| ambiguous_ip deferral (hot path emits unattributed; reconciliation picks) | no second keyed stage — late events / deferrals to a **side output** consumed by the reconciliation job |
 | deterministic re-drain | checkpointing + transactional/idempotent sink → exactly-once |
 
 ## ClickHouse tier changes
@@ -209,5 +226,5 @@ sized to the real duplicate-injector / upstream re-send delay. This is also wher
 seeded fixture stops being a faithful proxy: the fixture's duplicate is
 **timestamp-identical** to its original (same `event_time` and `ingest_time`), so a
 real deployment with genuinely-later re-send timestamps is needed to exercise TTL
-sizing. Continuous follow is deferred (no phase owns it yet); the two resolve BACKLOG
-rows re-defer on the same trigger.
+sizing. Continuous follow and its framework are a Phase-17+ decision; the two resolve
+BACKLOG rows re-defer on the same trigger.
