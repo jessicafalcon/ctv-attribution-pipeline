@@ -43,14 +43,17 @@ def read_exposures_for_days(days: list[str]) -> list[Exposure]:
     as above, ordered by the exposures_landed sort key for a stable insert."""
     if not days:
         return []
+    from lake.read_attributed import day_ranges_predicate
+
     con = duckdb.connect()
     con.execute("load iceberg")
     con.execute("set timezone='UTC'")
+    params: list[object] = [metadata_path(ensure_exposures())]
+    where = day_ranges_predicate(sorted(days), params)  # prunable ranges, not strftime
     rows = con.execute(
-        f"select distinct {_SELECT_COLS} from iceberg_scan(?) "
-        "where strftime(event_time, '%Y-%m-%d') = any(?) "
+        f"select distinct {_SELECT_COLS} from iceberg_scan(?) where {where} "
         "order by campaign_id, event_time, exposure_id",
-        [metadata_path(ensure_exposures()), sorted(days)],
+        params,
     ).fetchall()
     return [_exposure(r) for r in rows]
 

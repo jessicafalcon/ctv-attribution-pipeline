@@ -59,7 +59,9 @@ def test_reconcile_reads_candidates_and_exposures_from_the_lake() -> None:
     deps = reconciled_conversions.asset_deps[reconciled_conversions.key]
     assert attributed_iceberg.key in deps  # candidates (lake, argMax current)
     assert exposures_iceberg.key in deps  # exposures (lake via DuckDB)
-    assert clickhouse_exposures_landed.key in deps  # reconciled_at base
+    # reconciled_at = max(ingest_time) over BOTH loaded tables → both are lineage
+    assert clickhouse_exposures_landed.key in deps
+    assert clickhouse_attributed_conversions.key in deps
 
 
 def test_report_finalize_follows_recovery_and_reload() -> None:

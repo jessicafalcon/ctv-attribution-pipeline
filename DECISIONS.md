@@ -1230,8 +1230,20 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **`reconciled_at` stays anchored in ClickHouse (`_max_ingest` over the loaded
+  serving tables), not in the lake — for now.** Reconciliation reads the record
+  for candidates and exposures but stamps its version from the derived store;
+  anchoring in the lake would be purer but changes the Phase-6 restatement
+  semantics (`reported_at` is computed server-side from the same max) for no
+  current gain. The Dagster asset declares BOTH load assets as lineage so the
+  orchestrated pass cannot stamp a different version than `make run` (review
+  gate). Recorded as a Phase-18 question — it interacts with the dirty-set
+  design (BACKLOG, Phase-18 spec row).
 - **`make replay-serving` TRUNCATEs the two landed tables under explicit
-  confirmation.** The destructive-command rule allows TRUNCATE with explicit
+  confirmation — and refuses an empty lake.** Truncating the serving tables to
+  reload nothing would be data loss with a green exit code (review gate):
+  `lake_days()` must be non-empty before the TRUNCATE (`EmptyLakeError`).
+  The destructive-command rule allows TRUNCATE with explicit
   confirmation; the Makefile passes `--confirm` only under `CONFIRM=yes`, else the
   runner prompts. The rollup/snapshot tables are derived and left alone (the next
   reconcile pass refreshes them); `eval_meta` is re-stamped. Days come from the

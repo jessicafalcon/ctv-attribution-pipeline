@@ -119,6 +119,31 @@ def test_day_filter_prunes_by_the_conversions_event_time() -> None:
     ] == ["c-2"]
 
 
+def test_day_filter_is_a_prunable_predicate() -> None:
+    # The day filter must be the range form DuckDB can push down to the
+    # day(event_time) partition (review gate: a strftime() expression filtered
+    # correctly but scanned every file). 3 days × 1 household → 3 files; a
+    # one-day read must touch exactly one.
+    import duckdb
+
+    from lake.iceberg_catalog import metadata_path
+    from lake.read_attributed import day_ranges_predicate
+
+    land_attributed(
+        [_row(f"c-{d}", event_time=T + timedelta(days=d)) for d in range(3)]
+    )
+    params: list[object] = [metadata_path(cat.ensure_attributed())]
+    where = day_ranges_predicate(["2026-08-02"], params)
+    con = duckdb.connect()
+    con.execute("load iceberg")
+    plan = con.execute(
+        f"explain analyze select count(*) from iceberg_scan(?) where {where}", params
+    ).fetchall()[0][1]
+    (line,) = [ln for ln in plan.splitlines() if "Total Files Read" in ln]
+    assert "Total Files Read: 1" in line, line
+    assert [r.conversion_id for r in read_current(days=["2026-08-02"])] == ["c-1"]
+
+
 def test_both_raw_tables_share_the_bucket_layout_and_count() -> None:
     exp, att = cat.ensure_exposures(), cat.ensure_attributed()
     assert cat.bucket_count_of(exp) == cat.bucket_count_of(att) == cat.BUCKET_COUNT

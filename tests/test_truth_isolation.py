@@ -4,12 +4,24 @@ Structural guard: no pipeline-stage module may even mention truth links or
 the data/truth path. Only the producer (which writes them), the accuracy eval
 (`accuracy/`, which scores against them — Phase 4), the agent's eval harness,
 and tests may.
+
+Every new top-level package on the pipeline's write/load path must be added to
+PIPELINE_DIRS in the phase that creates it (Phase 17 added `lake` and
+`orchestration` at the review gate, after shipping without them).
 """
 
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
-PIPELINE_DIRS = ["resolve", "streaming", "reconcile", "clickhouse", "queries"]
+PIPELINE_DIRS = [
+    "resolve",
+    "streaming",
+    "reconcile",
+    "clickhouse",
+    "queries",
+    "lake",
+    "orchestration",
+]
 
 
 def test_pipeline_stages_never_mention_truth() -> None:

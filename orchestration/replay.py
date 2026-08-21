@@ -40,8 +40,18 @@ def lake_days() -> set[str]:
     return days
 
 
+class EmptyLakeError(SystemExit):
+    """Refuse to TRUNCATE the serving tables when the lake holds nothing to
+    reload — that would be data loss with a green exit code (review gate)."""
+
+
 def replay(confirm: bool) -> dict[str, int]:
     days = lake_days()
+    if not days:
+        raise EmptyLakeError(
+            "replay-serving: the lake holds no days (wrong PROFILE / LAKE_ROOT, or "
+            "never populated) — refusing to truncate the serving tables"
+        )
     if not confirm:
         answer = input(
             f"replay-serving TRUNCATEs {', '.join(SERVING_TABLES)} and reloads "

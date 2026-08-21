@@ -605,6 +605,14 @@ handled.*
   every non-UTC machine (RUNBOOK incident 3). Rule: every datetime is tz-aware UTC
   at every I/O boundary; a naive datetime never reaches a client call
   (`lake/load_serving.py` `_utc`; guard `tests/test_tz_invariance.py`).
+- **pyiceberg 0.11.1 snapshot expiry is metadata-only — orphaned data files stay
+  on disk.** `table.maintenance.expire_snapshots()` drops old snapshots and
+  manifests, but there is no `remove_orphan_files`, so the Parquet files those
+  snapshots referenced (and the files a compaction replaced) are never deleted:
+  `make lake-maintain` bounds the LIVE file count, not the directory size
+  (measured: 24 → 32 files on disk across one compaction + expiry). Only `make
+  lake-reset` reclaims today (BACKLOG 45, re-qualified; pinned so a pyiceberg bump
+  fails loud).
 - **Phase-17 first-hour stack check (spec D11) — all four supported by the pinned
   versions, no workaround needed.** pyiceberg 0.11.1 + pyiceberg-core, duckdb 1.5.5,
   verified on a scratch catalog before any lake-of-record code was written:

@@ -12,7 +12,7 @@ drop tzinfo, so a row read back compares equal to the clickhouse-connect
 representation and to the engine's in-memory row.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 
@@ -39,17 +39,33 @@ def _row(r: tuple) -> AttributedConversion:
     return AttributedConversion(**d)
 
 
+def day_ranges_predicate(days: list[str], params: list[object]) -> str:
+    """`(event_time >= ? and event_time < ?) or (...)` for each day — partition-
+    prunable; appends the bound parameters to `params`. No days → `false`."""
+    if not days:
+        return "false"
+    clauses = []
+    for day in days:
+        start = datetime.fromisoformat(day).replace(tzinfo=UTC)
+        clauses.append("(event_time >= ? and event_time < ?)")
+        params += [start, start + timedelta(days=1)]
+    return "(" + " or ".join(clauses) + ")"
+
+
 def read_current(
     days: list[str] | None = None, min_event_time: datetime | None = None
 ) -> list[AttributedConversion]:
     """Current row per conversion_id, ordered by conversion_id. `days`
     (YYYY-MM-DD event_time days) and/or `min_event_time` prune day partitions;
-    both are output-invariant filters on the conversion's own event_time."""
+    both are output-invariant filters on the conversion's own event_time. The day
+    filter is written as raw `event_time` RANGES (`>= d and < d+1`, one per day),
+    the form DuckDB's iceberg_scan can push down to the `day(event_time)`
+    partition — an expression over the column (`strftime(...) = ...`) would filter
+    correctly but scan every file (review gate; the FINAL `read_rows` lesson)."""
     predicates: list[str] = []
     params: list[object] = [metadata_path(ensure_attributed())]
     if days is not None:
-        predicates.append("strftime(event_time, '%Y-%m-%d') = any(?)")
-        params.append(sorted(days))
+        predicates.append(day_ranges_predicate(sorted(days), params))
     if min_event_time is not None:
         predicates.append("event_time >= ?")
         params.append(min_event_time)

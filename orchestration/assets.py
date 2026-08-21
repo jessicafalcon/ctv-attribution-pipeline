@@ -100,7 +100,15 @@ def clickhouse_attributed_conversions(
 
 
 @asset(
-    deps=[exposures_iceberg, attributed_iceberg, clickhouse_exposures_landed],
+    deps=[
+        exposures_iceberg,
+        attributed_iceberg,
+        # reconciled_at = max(ingest_time) over BOTH loaded serving tables
+        # (reconcile._max_ingest): both loads are lineage, else a scheduler
+        # reorder could stamp a different version than `make run` (review gate).
+        clickhouse_exposures_landed,
+        clickhouse_attributed_conversions,
+    ],
     partitions_def=DAY_PARTITIONS,
 )
 def reconciled_conversions(context: AssetExecutionContext) -> MaterializeResult:

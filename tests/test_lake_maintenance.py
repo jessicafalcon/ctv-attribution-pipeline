@@ -78,6 +78,29 @@ def test_expiry_drops_old_snapshots_but_keeps_the_current_one() -> None:
     assert len(read_exposures_for_days(["2026-08-01"])) == 3  # rows intact
 
 
+def test_expiry_is_metadata_only_on_this_pyiceberg() -> None:
+    # The known limitation, pinned (BACKLOG 45): pyiceberg 0.11.1 has no
+    # remove_orphan_files, so compaction + expiry do NOT shrink the directory —
+    # orphaned Parquet stays. When a pyiceberg bump adds it, the `raises` below
+    # fails: wire it into lake_maintenance, then flip this test to assert the
+    # on-disk count FALLS and close the BACKLOG row.
+    import glob
+    import os
+
+    from pyiceberg.table.maintenance import MaintenanceTable
+
+    for i in range(3):
+        land([_exp(i, 1)])
+    root = os.environ["LAKE_ROOT"]
+    on_disk = lambda: len(glob.glob(f"{root}/**/*.parquet", recursive=True))  # noqa: E731
+    before = on_disk()
+    table = cat.ensure_exposures()
+    maintain(table, max_age=timedelta(0), now=datetime.now(UTC) + timedelta(days=1))
+    assert on_disk() >= before  # nothing reclaimed (rewrite adds, expiry removes none)
+    with pytest.raises(AttributeError):
+        MaintenanceTable.remove_orphan_files  # noqa: B018
+
+
 def test_lake_days_come_from_the_data() -> None:
     land([_exp(1, 1), _exp(2, 5)])
     assert lake_days() == {"2026-08-01", "2026-08-05"}
