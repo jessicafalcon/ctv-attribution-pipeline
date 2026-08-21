@@ -79,6 +79,58 @@ def _canon(r) -> str:
     return r.model_copy(update=_naive(r)).model_dump_json()
 
 
+def test_accumulated_lake_reconciles_identically_to_a_fresh_one(
+    tmp_path, monkeypatch
+) -> None:
+    # Done-when 6 as its own property (not a side effect of test ordering): the
+    # same hot run landed 3× vs once → the bucketed pass recovers identical rows.
+    exps, hot = _hot_run("long_delay")
+    at = reconciled_at_for(max(e.ingest_time for e in exps))
+    outputs = []
+    for name, appends in (("fresh", 1), ("accumulated", 3)):
+        monkeypatch.setenv("LAKE_ROOT", str(tmp_path / name))
+        for _ in range(appends):
+            land(exps)
+            land_attributed(hot)
+        outputs.append(
+            [r.model_dump_json() for d in candidate_days() for r in recover_day(d, at)]
+        )
+    assert outputs[0] and outputs[0] == outputs[1]
+
+
+def test_recover_day_issues_one_bucket_homogeneous_read_per_bucket(monkeypatch) -> None:
+    # The product path is bucket-GROUPED, not one big read: every exposure read
+    # covers households of exactly one bucket, one read per bucket touched. A
+    # refactor to a single scan would keep every other test green — this one not.
+    import reconcile.reconcile as rc
+
+    exps, hot = _hot_run("shared_ip_spike")
+    land(exps)
+    land_attributed(hot)
+    at = reconciled_at_for(max(e.ingest_time for e in exps))
+    real = rc.read_exposures_by_household
+    calls: list[set[str]] = []
+
+    def spy(household_ids, **kw):
+        calls.append(set(household_ids))
+        return real(household_ids, **kw)
+
+    monkeypatch.setattr(rc, "read_exposures_by_household", spy)
+    for day in candidate_days():
+        calls.clear()
+        recovered = recover_day(day, at)
+        buckets = [{bucket_of(h) for h in hhs} for hhs in calls]
+        assert all(len(b) == 1 for b in buckets), buckets  # bucket-homogeneous
+        assert len(calls) == len({next(iter(b)) for b in buckets})  # one per bucket
+        expected = {
+            bucket_of(h)
+            for c in lake_candidates(day)
+            for h in (c.candidate_households or [c.household_id])
+        }
+        assert {next(iter(b)) for b in buckets} == expected
+    assert recovered  # the pass ran; its content is pinned by the gate above
+
+
 def _naive(r):
     """The lake round-trip shape: naive UTC to the ms (DECISIONS Phase 12)."""
     return {
