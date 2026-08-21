@@ -1,5 +1,5 @@
-"""`make replay-serving` (Phase 17, Done-when 5): rebuild the ClickHouse serving
-tables FROM THE LAKE with no Kafka involvement.
+"""`make replay-serving` = `python -m orchestration.run replay` (Phase 17, Done-when
+5): rebuild the ClickHouse serving tables FROM THE LAKE with no Kafka involvement.
 
 Truncates `exposures_landed` and `attributed_conversions` (destructive → the
 `--confirm` flag, which the Makefile passes only under CONFIRM=yes, else prompts),
@@ -12,7 +12,6 @@ a reconcile pass (`make run`'s second step / `make reconcile-dagster`) refreshes
 them.
 """
 
-import argparse
 import sys
 
 import duckdb
@@ -21,12 +20,10 @@ from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
 from lake.iceberg_catalog import (
     catalog_exists,
-    configure,
     ensure_attributed,
     ensure_exposures,
     metadata_path,
 )
-from orchestration.load import materialize_load
 
 SERVING_TABLES = ("exposures_landed", "attributed_conversions")
 
@@ -76,28 +73,6 @@ def replay(confirm: bool) -> dict[str, int]:
     client = connect()
     for table in SERVING_TABLES:
         client.command(f"truncate table {table}")
+    from orchestration.run import materialize_load  # the one CLI owns the loader
+
     return materialize_load(days)
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        description="replay the serving layer from the lake"
-    )
-    parser.add_argument(
-        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
-    )
-    parser.add_argument("--confirm", action="store_true", help="skip the prompt")
-    args = parser.parse_args(argv)
-    configure(args.profile)
-    try:
-        loaded = replay(args.confirm)
-    except EmptyLakeError as e:
-        sys.exit(str(e))
-    print(
-        f"replay-serving: {loaded['exposures']} exposures, {loaded['attributed']} "
-        "attributed rows reloaded from the lake (no broker)"
-    )
-
-
-if __name__ == "__main__":
-    main()

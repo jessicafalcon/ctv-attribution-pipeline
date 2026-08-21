@@ -116,7 +116,7 @@ run-hot:
 # instance). PROFILE selects the lake; PARTITION=<YYYY-MM-DD> materializes a
 # single day. Run after make run-hot.
 reconcile-dagster:
-	uv run python -m orchestration.run --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
+	uv run python -m orchestration.run reconcile --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
 
 # Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
 # the rows of exposures_landed + attributed_conversions (TRUNCATE — destructive,
@@ -124,7 +124,7 @@ reconcile-dagster:
 # reconciled current rows), stamps eval_meta; `make eval` then reproduces the
 # pins. The backfill story: Kafka retention is hours, the lake is forever.
 replay-serving:
-	uv run python -m orchestration.replay --profile "$(PROFILE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
+	uv run python -m orchestration.run replay --profile "$(PROFILE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
@@ -132,7 +132,7 @@ replay-serving:
 # that has accumulated more than one file per bucket into one file per bucket.
 # Not part of make run. Row content is unchanged (asserted offline).
 lake-maintain:
-	uv run python -m orchestration.maintenance --profile "$(PROFILE)"
+	uv run python -m orchestration.run maintain --profile "$(PROFILE)"
 
 # Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
 # controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.

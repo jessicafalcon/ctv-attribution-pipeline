@@ -85,8 +85,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   `load_serving.py` (the ONE ClickHouse writer of the landed tables),
   `maintenance.py` (compact + expire). Data under gitignored `data/lake/<profile>/`.
 - `orchestration/` — Dagster assets: per-day lake → ClickHouse load, day-partitioned
-  bucket-aligned reconciliation, finalize; `lake_maintenance` job; headless runners
-  (`load.py`, `run.py`, `replay.py`, `maintenance.py`).
+  bucket-aligned reconciliation, finalize; `lake_maintenance` job; ONE headless CLI,
+  `run.py` (`load | reconcile | replay | maintain`, `--profile` required on each —
+  it binds the lake), with `replay.py` / `maintenance.py` as its library code.
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).

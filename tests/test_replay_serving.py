@@ -48,8 +48,10 @@ def _exp(eid: str, event: datetime) -> Exposure:
 def _stub(monkeypatch, client: _Client, loaded: list[set[str]]) -> None:
     monkeypatch.setattr(rp, "apply_ddl", lambda: None)
     monkeypatch.setattr(rp, "connect", lambda: client)
+    import orchestration.run as run
+
     monkeypatch.setattr(
-        rp,
+        run,
         "materialize_load",
         lambda days: loaded.append(set(days)) or {"exposures": 1, "attributed": 0},
     )
@@ -98,7 +100,7 @@ def _dry_run(*args: str) -> str:
 
 def test_make_replay_serving_stamps_eval_meta_and_gates_confirm() -> None:
     out = _dry_run("PROFILE=long_delay")
-    assert re.search(r'orchestration\.replay --profile "long_delay"\s*$', out, re.M)
+    assert re.search(r'orchestration\.run replay --profile "long_delay"\s*$', out, re.M)
     assert "--confirm" not in out  # prompts unless CONFIRM=yes
     assert re.search(r'write_marker --profile "long_delay"', out)  # D8: stamps
     assert "--confirm" in _dry_run("PROFILE=long_delay", "CONFIRM=yes")

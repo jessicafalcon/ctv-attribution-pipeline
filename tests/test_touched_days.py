@@ -3,7 +3,7 @@
 `land()` / `land_attributed()` return the set of event_time days they wrote — a
 late row (ingested weeks later) lands in its OLD event day and that day is what
 gets reloaded — and both drivers (`streaming.dataflow.main`, `reconcile.run`) hand
-exactly that set to `orchestration.load.materialize_load`. Offline: tmp lake; the
+exactly that set to `orchestration.run.materialize_load`. Offline: tmp lake; the
 broker, ClickHouse and Dagster are monkeypatched at their seams.
 """
 
@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-import orchestration.load
+import orchestration.run
 import reconcile.reconcile as rc
 import streaming.dataflow as df
 from lake.land_attributed import land_attributed
@@ -93,7 +93,7 @@ def test_engine_driver_loads_exactly_the_touched_days(monkeypatch, capsys) -> No
     seen: list[set[str]] = []
     monkeypatch.setattr(df, "run_engine", lambda broker: run)
     monkeypatch.setattr(
-        orchestration.load,
+        orchestration.run,
         "materialize_load",
         lambda days: seen.append(set(days)) or {"exposures": 0, "attributed": 0},
     )
@@ -118,7 +118,7 @@ def test_reconcile_driver_loads_exactly_the_days_its_corrections_touched(
     monkeypatch.setattr(rc.metrics, "observe_restatement", lambda v: None)
     monkeypatch.setattr(rc, "_restatement_abs_delta", lambda client: 0.0)
     monkeypatch.setattr(
-        orchestration.load,
+        orchestration.run,
         "materialize_load",
         lambda days: seen.append(set(days)) or {"exposures": 0, "attributed": 0},
     )

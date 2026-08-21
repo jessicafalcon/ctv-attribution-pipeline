@@ -1151,7 +1151,7 @@ Phase 17 sits directly below the fixes.
   runtime grows by the Dagster + DuckDB hop (accepted, spec D5).
 - **Loads are driven by the days a landing TOUCHED (spec D6).** `land()` /
   `land_attributed()` return the set of `event_time` days they wrote (UTC, the
-  Iceberg day transform); `orchestration.load.materialize_load(days)` materializes
+  Iceberg day transform); `orchestration.run.materialize_load(days)` materializes
   exactly those partitions of both load assets. Partition keys stay the Phase-12
   static calendar; which ones run comes from the data, never "today". A late row
   lands in an old day and reloads that day.

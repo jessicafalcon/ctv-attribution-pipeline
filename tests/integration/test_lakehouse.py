@@ -28,8 +28,8 @@ import pytest
 
 from clickhouse.client import connect
 from lake.load_serving import ATTRIBUTED_COLS, EXPOSURE_COLS
-from orchestration.load import materialize_load
 from orchestration.run import main as dagster_main
+from orchestration.run import materialize_load
 from producer.models import Exposure
 from reconcile.reconcile import (
     LONG_WINDOW,
@@ -180,7 +180,7 @@ def test_dagster_pass_writes_the_same_reconciled_rows(oracle_run) -> None:
 
     # Orchestrated, Iceberg-sourced, day-partitioned recovery → lake append →
     # reload of the touched days → finalize (headless).
-    dagster_main(["--profile", "long_delay"])
+    dagster_main(["reconcile", "--profile", "long_delay"])
 
     got = {
         r[0]

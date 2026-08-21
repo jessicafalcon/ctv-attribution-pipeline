@@ -293,7 +293,7 @@ def run(client: Client | None = None) -> dict[str, int]:
     client = client or connect()
 
     # Imported here: the offline suites import this module without Dagster.
-    from orchestration.load import materialize_load
+    from orchestration.run import materialize_load
 
     reconciled_at = reconciled_at_for(_max_ingest(client))
     days = candidate_days()

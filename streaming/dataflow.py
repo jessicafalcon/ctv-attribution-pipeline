@@ -217,7 +217,7 @@ def main(argv: list[str] | None = None) -> None:
     # Imported here, not at module top: the offline oracle suites import this
     # module and must not pay for (or depend on) the Dagster stack.
     from lake.iceberg_catalog import configure
-    from orchestration.load import materialize_load
+    from orchestration.run import materialize_load
 
     configure(args.profile)
 

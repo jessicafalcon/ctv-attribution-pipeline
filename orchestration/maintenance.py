@@ -1,17 +1,17 @@
-"""Dagster job `lake_maintenance` (Phase 17, spec D10) + its headless runner
-(`make lake-maintain`). Two ops, one per raw table, each running
+"""Dagster job `lake_maintenance` (Phase 17, spec D10); run by
+`python -m orchestration.run maintain` (`make lake-maintain`). Two ops, one per
+raw table, each running
 `lake.maintenance.maintain`: compact the day partitions that accumulated small
 files, then expire snapshots older than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7).
 Not part of `make run` — hygiene on a schedule, never on the write path.
 """
 
-import argparse
 import os
 from datetime import UTC, datetime, timedelta
 
 from dagster import OpExecutionContext, job, op
 
-from lake.iceberg_catalog import configure, ensure_attributed, ensure_exposures
+from lake.iceberg_catalog import ensure_attributed, ensure_exposures
 from lake.maintenance import maintain
 
 
@@ -37,21 +37,3 @@ def maintain_attributed(context: OpExecutionContext) -> dict[str, int]:
 def lake_maintenance() -> None:
     maintain_exposures()
     maintain_attributed()
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="lake hygiene (Dagster job)")
-    parser.add_argument(
-        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
-    )
-    args = parser.parse_args(argv)
-    configure(args.profile)
-    result = lake_maintenance.execute_in_process()
-    if not result.success:
-        raise RuntimeError("lake_maintenance job failed")
-    for name in ("maintain_exposures", "maintain_attributed"):
-        print(f"lake-maintain {name}: {result.output_for_node(name)}")
-
-
-if __name__ == "__main__":
-    main()
