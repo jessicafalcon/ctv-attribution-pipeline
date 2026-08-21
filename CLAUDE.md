@@ -374,319 +374,36 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-- Phase 0 (2026-08-17): PR #2 merged.
-- Phase 1 (2026-08-17): merged (PR #3). Models, seeded generator + knobs
-  (incl. unknown-device), schema registration, curated tiny golden fixtures.
-  Fixtures frozen read-only.
-- Phase 2 (2026-08-17): merged (PR #4). Resolve stage (device→household, IP
-  fallback, ambiguous fan-out), stateless map, `ResolvedConversion` +
-  `conversions_resolved-value` schema (per-subject compatibility NONE), offline
-  replay + golden `fixtures/tiny/expected/`, live batch stage (EOF-driven drain)
-  + resolve_ metrics, live integration test.
-- Phase 3 (2026-08-17): built on `phase-3-attribution-engine` — attribution
-  engine. Pure core (`streaming/attribute.py`): household last-touch join +
-  conversion_id-keyed ambiguous reduction as two leaf functions shared by the
-  offline replay and the live Bytewax dataflow. `AttributedConversion` model;
-  golden `fixtures/tiny/expected/attributed.jsonl` (55 rows). ClickHouse serving
-  layer: `attributed_conversions` (ReplacingMergeTree) + `exposures_landed`
-  (RMT), DDL + applier, engine_ metrics, sync sink. `make run` / `make test-int`
-  + CI integration job (SHA-pinned actions, digest-pinned images). Both DONE
-  halves green (71 tests, lint; integration green on a clean compose cycle:
-  FINAL == golden, exposures_landed idempotent). Merged (PR #5).
-- Phase 4 (2026-08-18): built on `phase-4-eval-reporting` — accuracy eval +
-  reporting v1 (CHECKPOINT). Household-grain accuracy (`accuracy/`): precision
-  0.673 (35/52) / recall 1.000, scored from `attributed_conversions` FINAL
-  joined against the truth side file in-harness (never in the DB, N1); exact
-  exposure-id is a labeled diagnostic only. Report v1 (`queries/`): four
-  per-campaign metrics (ROAS, CPA, CVR, site-visit rate) from the raw serving
-  tables, FINAL on both RMT tables, NULL on zero denominators, wrong-household
-  attributions kept in. DONE green (79 tests, lint; `make eval`/`make report`
-  reproduce the pinned numbers; integration `test_eval_report.py` green).
-  Pre-spec doc corrections merged (household grain, N1 side-file join, tiny =
-  organic over-credit not shared-IP). Review gate passed (code-reviewer +
-  functionality-tester + coherence-auditor). Merged (PR #6).
-- Phase 5 (2026-08-18): built on `phase-5-engine-hardening` — engine hardening.
-  Engine moved from `fold_final` to an arrival-ordered, watermark-gated,
-  evicting operator (still a batch drain; continuous follow deferred, no phase
-  owns it). Features, each knob-driven: (1) dedup as a **full seen-set** (not
-  TTL'd — the seeded duplicate is timestamp-identical; TTL is a continuous-mode
-  SCALING note); (2) watermarks + allowed-lateness **release** (a conversion is
-  a pure probe, buffered until `max(event_time) − allowed_lateness ≥ its
-  event_time`, then attributed; EOF flush is the completeness backstop);
-  (3) hot-window **eviction** (`watermark > event_time + 7d`, strict `>`, run
-  after release) + `engine_exposures_evicted_total` / `engine_join_state_size`.
-  `assists`/`processed_at`/`path` were Phase-3 deliverables, regression-guarded
-  here. New `medium` profile (seed 11, 12.5d span, `unknown_device 0.1`).
-  Done-when green: robustness-oracle equality (evicting engine == non-evicting
-  oracle **byte-identical**, 132 rows; precision 92/130, recall 1.0, wrong_hh 0;
-  dedup suppressed 70; eviction fired), gate-0 tiny golden held byte-identical
-  through the rewrite, live proof via isolated `make test-int-medium`. 103
-  offline tests + 2 live; lint clean. Review gate passed (code-reviewer +
-  functionality-tester + coherence-auditor); follow-ups applied. Merged (PR #7).
-- Phase 6 (2026-08-18): built on `phase-6-reconciliation` — reconciliation and
-  restatements. Periodic long-window (≤90d) matcher (`reconcile/`) recovers
-  hot-path misses (conversions whose causal exposure is >7d before them in
-  event-time — evicted from the hot window), reusing the pure `attribute_household`
-  leaf at 90d over models reconstructed from ClickHouse FINAL (serving-only, N1).
-  Candidates are hot-unattributed rows (`attributed=0 AND path='hot'`); corrected
-  rows carry `path=reconciled`, `processed_at = max(ingest_time over fixed state) +
-  1s` (> the hot version, stable across re-runs). `campaign_hourly` (versioned-
-  replace RMT, all keys recomputed per refresh), `report_snapshots` (per-campaign,
-  PRE filters `path='hot'` so the restatement is re-run-safe), `queries/
-  restatement.sql`. `make run` now resolve→engine→reconcile; `make run-hot`
-  (resolve→engine) backs the hot-path oracle suites (tiny golden/accuracy, medium
-  hardening) + CI, since reconcile would over-credit tiny/medium long-tail organics
-  and shift their pins. New `long_delay` profile (seed 6, delay straddles ≤7d and
-  (7d,90d]). Green: gate-0 tiny golden byte-identical; 113 offline + lint; live
-  tiny `make test-int` (5), medium `make test-int-medium` (2, run-hot), long_delay
-  `make test-int-long-delay` (3) — 32 candidates → 29 recovered, recall 0.587→0.973,
-  restatement shows all 3 campaigns' ROAS up. Review gate passed; merged (PR #8).
-  Spec: `specs/phase-6.md`.
-- Phase 7 (2026-08-19): built on `phase-7-benchmark-observability` — benchmark +
-  observability (CHECKPOINT). Four new metrics (each unit-tested): `resolve_input_backlog`
-  (batch consumer-lag proxy), `engine_watermark_lag_seconds` (peak arrival lateness,
-  computed engine-side so the pure core stays untouched), `engine_join_state_current`
-  (post-eviction occupancy, rises AND falls — closes BACKLOG 25), and
-  `reconcile_restatement_roas_abs_delta`. `make bench`: naive full FINAL scan-and-join
-  vs `campaign_hourly` rollup, reporting latency/rows/bytes from `X-ClickHouse-Summary`,
-  asserting identical metric rows (6 dp); long_delay = rollup reads 2.5× fewer rows,
-  1.6× fewer bytes, 2.6× faster (RESULTS.md). Four alert rules (ConsumerLag,
-  WatermarkStall, MatchRateOutOfBand, RestatementMagnitude) proven by `make test-alerts`
-  (promtool from the digest-pinned image) against REAL captured values — `--metrics-out`
-  dumps each stage's own registry, `make metrics-capture` orchestrates a live run,
-  `observability/gen_alert_fixtures.py` bakes the numbers into the fixture (fires on
-  long_delay, silent on tiny). Grafana "Attribution Integrity" dashboard (JSON, file
-  provider). Green: gate-0 tiny golden byte-identical; 117 offline + lint; bench +
-  test-alerts live-green; Grafana provisions. Review gate passed; merged (PR #9).
-  Spec: `specs/phase-7.md`.
-- Phase 8 (2026-08-19): built on `phase-8-fault-harness` — fault harness + signal
-  collectors. Five isolated fault profiles (one anomaly each): `shared_ip_spike`
-  (seed 0 — 11 caused wrong-household misattributions, 0 misses; closes BACKLOG 20),
-  `late_burst` (seed 7 — 5 hot-misses, ~13.8d peak arrival lateness), `co_view_bug`
-  (seed 5 — sports 4× caused-rate, below the `min(1.0, rate)` clamp; BACKLOG 15
-  dispositioned), `real_lift` (seed 3 — clean 2× lift, the near-miss counterpart to
-  shared_ip_spike), `duplicate_flood` (seed 9 — benign CONTROL: dedup absorbs the
-  flood, decision byte-identical dedup on/off, so ClickHouse carries no fingerprint).
-  Deterministic LLM-free collectors (`agent/`, mirrors `accuracy/`: pure `collect.py`
-  + `readers.py` + `run_context.py`) build the full §4.2 `AttributionContext` from
-  ClickHouse only (N1): match rate (+ over time), per-campaign metrics, per-campaign
-  restatement deltas, window-edge lag distribution, shared-IP/ambiguous cluster stats,
-  RAW genre reach (co-view-adjusted factor stays deferred — BACKLOG 26). Context shape
-  FROZEN as the Phase-9 contract (`test_context_schema.py`). `make context` /
-  `make test-int-shared-ip`. Green: gate-0 tiny golden byte-identical; 139 offline +
-  lint; live `make eval`/`make context` on shared_ip_spike (caused_wrong_household=11,
-  ip_resolved_fraction 0.42 — the near-miss discriminator), `make test-int-shared-ip`
-  (2). Review gate (code-reviewer + functionality-tester + coherence-auditor;
-  security-reviewer not triggered — no CI/.env/compose/CH-user/LLM change) passed;
-  merged (PR #10). Spec: `specs/phase-8.md`.
-- Phase 9 (2026-08-19): built on `phase-9-agent-loop` — the agent loop. Hypothesis
-  catalog enum (`agent/hypotheses.py`, the six §4.2 causes); probe registry
-  (`agent/probes.py`, five named parameterized-SQL tools over the SELECT-only
-  `agent_ro` user, server-side-bound params, no free-form SQL); typed
-  `AttributionFinding` (`agent/finding.py`) emitted via a terminal `submit_finding`
-  tool, validation failure → AMBIGUOUS_NEEDS_HUMAN; explicit manual tool-use loop
-  (`agent/loop.py`) with Sonnet-5 / effort=medium / adaptive thinking / a cached
-  system+enum+probe prefix / the ≥1-probe contract; Alertmanager webhook endpoint
-  (`agent/webhook.py`, trigger-only — alert text never reaches the LLM). Config pins in
-  `agent/config.py` (AGENT_MODEL/AGENT_EFFORT/EVAL_REPS=5/MAX_PROBE_ROUNDS). New
-  SELECT-only `agent_ro` (`clickhouse/users.d/agent-ro.xml`, grant-form) backing the
-  WHOLE agent read path via `connect_agent()` (collectors re-pointed, SN2). `make
-  agent-run` (API tokens; ask first) / `make test-int-agent`. Done-when all met:
-  166 offline + lint; gate-0 tiny golden byte-identical (`make test-int` 11); live
-  `make test-int-agent` (6 — write-denied INSERT/ALTER/DROP/CREATE + agent_ro read
-  path + all 5 probes execute typed); live `make agent-run` on shared_ip_spike →
-  valid finding, top_hypothesis device_graph_mismatch, native ranked, CONFIDENT,
-  turn-2 cache_read 2857. Review gate passed (code-reviewer 2 minor → CR-1 rename +
-  CR-2 name-based mapping applied; security-reviewer PASS, 2 notes tracked; func PASS;
-  FT-1 residual materialized live → Fix A strict `submit_finding`, malformed payload
-  committed as a regression fixture). Merged (PR #11). Spec: `specs/phase-9.md`.
-- Phase 10 (2026-08-19): built on `phase-10-agent-eval` — agent eval + near-miss demo
-  (CHECKPOINT). New `no_fault_baseline` profile (seed 1, medium-scale, REALISTIC
-  co-view; offline-clean: truth 90/90 correct, 0 wrong-household, recall 1.0 — nothing
-  to flag). Eval harness (`agent/eval/`): frozen 6-scenario catalog (`scenarios.py`),
-  PURE scoring rubric (`scoring.py`, four buckets — fault_recall / negative_confirmation
-  / capability_boundary / control — with `verdict==AMBIGUOUS_NEEDS_HUMAN` always read as
-  abstention, never the escalation-default hypothesis), PURE Markdown renderers
-  (`tables.py`), and the
-  token-gated `make agent-eval` sweep (`run_eval.py` — clean stack per scenario, EVAL_REPS
-  live invocations, both tables → `docs/RESULTS.md`, FG2 headlines captured). One prompt
-  sentence added for the no-fault abstain path (Ruling E). BACKLOG 26 (co-view adjusted
-  factor) closed as a DECISIONS won't-do (the near-miss is shared-IP/device-graph, not a
-  genre number — hard stop fired); co_view_bug scored as a labeled capability boundary,
-  distinct from the duplicate_flood/no_fault_baseline FP controls. BACKLOG 31 (FG2)
-  resolved via the sweep's live-headline capture. Offline green: 206 tests + lint; gate-0
-  tiny golden byte-identical. Review gate passed (code-reviewer + functionality-tester +
-  coherence-auditor; 2 blockers B1/B2 + drift D1/D2 + CR-2/CR-3 all dispositioned — one
-  offline batch; DECISIONS is a dated trail, ARCHITECTURE the one forward statement, so
-  no consolidation). Live `make agent-eval` DONE (30 invocations, Sonnet-5; ~178k cache_read
-  input, well under $10): **30/30 correct, false-positive rate 0/10 = 0%**; near-miss both
-  halves clean (real_lift → 5× CONFIDENT real_performance_change at ip_resolved_fraction
-  0.061, NEVER device_graph_mismatch; shared_ip_spike → 5× CONFIDENT device_graph_mismatch
-  at 0.420); co_view_bug → 5× AMBIGUOUS (top co_view_inflation — names the suspect, declines
-  to confirm, distinct from the controls' abstention); late_burst → 5× CONFIDENT
-  late_arrival_distortion. Both/three tables in `docs/RESULTS.md`. Done-when all met. Merged
-  (PR #12). Spec: `specs/phase-10.md`.
-- Phase 11 (2026-08-20): built on `phase-11-docs` — docs (final phase, no pipeline
-  code). Root `README.md` as a design doc (problem → scope/honesty → architecture with
-  teaching-level stream-concept explanations → agent → results → run-it-in-two-commands
-  → determinism → repo map → Next-steps/what-was-cut). `docs/SCALING.md` finalized: the
-  hot-window-state constraint (`exposure_rate × window`, the first wall), partition math
-  (join pins equal partition counts on the two household-keyed topics), 50k/500k tiers,
-  state-backend progression (in-memory → RocksDB-sharded → checkpointed), 1:1 Bytewax→Flink
-  operator mapping, ClickHouse tier changes (single node → ReplicatedReplacingMergeTree +
-  Distributed + per-shard refreshable MVs); the two accumulated build notes kept as
-  evidence. `docs/RESULTS.md` finalized with the attribution-accuracy tables (tiny
-  0.673/1.000, medium 92/130=0.708/1.000, long_delay recall 0.587→0.973 via reconciliation)
-  alongside the existing benchmark + agent-eval sections. No new numbers invented — accuracy
-  cites the deterministic integration-test pins; benchmark/eval unchanged from where they
-  were captured. Done-when met: README → `make up` → `make seed && make run` is the lead
-  path; all internal links resolve, every README command is a real Makefile target. Green:
-  206 offline tests + lint (docs-only, no code touched). Review gate PASSED
-  (code-reviewer + functionality-tester + coherence-auditor; security-reviewer not
-  triggered — no CI/.env/compose/CH-user/agent-context change): coherence found a BLOCKER
-  (docs claimed "async inserts on" but the sink inserts synchronously — no `async_insert`
-  anywhere) + a drift (RESULTS mislabeled the 2 long_delay wrong-household attributions as
-  "misses") + code-reviewer flagged an unmeasured "few thousand msgs/sec" throughput claim;
-  all fixed in-branch (async reframed as a SCALING lever in ARCHITECTURE §3.3/§5 + SCALING;
-  residuals reworded to caused_missed=0/recall-capped; throughput dropped to non-numeric;
-  README webhook forward-points to the live-push cut), re-audit clean. Two loose ends filed,
-  not fixed (branch stays docs-only): BACKLOG 35 (stale `sink.py:2` async marker → next
-  streaming/ touch), BACKLOG 36 (a test guarding the docs accuracy table vs the integration
-  pins → next tests/ touch). Merged: PENDING (developer merges). Spec: none (docs phase;
-  Done-when from PHASES.md).
-- Phase 11 follow-on (not in the docs PR): BACKLOG 34 — make the token targets auto-load
-  `.env` via `uv run --env-file` (guarded `AGENT_ENV := $(if $(wildcard .env),--env-file .env,)`,
-  scoped to `agent-run`/`agent-eval`). Own `fix/agent-env-load` branch off main after Phase 11
-  merges; mandatory security-review; proof is a fresh-shell `make agent-run PROFILE=shared_ip_spike`
-  (key only in .env) reaching `messages.create` (~$1.50, ask first); close row 34 when green.
-- Phase 15 (2026-08-20): built on `phase-15-runbook` — runbook + incident log
-  (post-plan extension, NOT in the original PHASES.md 0–11; spec added in PR #17).
-  Docs-only, no pipeline code. `docs/RUNBOOK.md`: two recorded incidents in
-  symptom→detection→root-cause→fix→generalization→would-catch-it-next-time form —
-  (1) the benchmark that lied in CI (`FINAL read_rows` counts un-merged version-parts:
-  CI rollup 1020 rows lost 0.8×, local 340 rows won 2.5×; guard = `queries/bench.py`
-  `_canonicalize` OPTIMIZE + magnitude-free direction assert), (2) the timezone
-  round-trip that quadrupled the snapshots (clickhouse-connect renders DateTime in
-  client-local tz; guard = server-side `reported_at` in `reconcile/rollup.py` +
-  tz-free `toUnixTimestamp64Milli` version read in `reconcile/reconcile.py`) — plus
-  the batch-drain known-limitation (windowing proven on a bounded drain; continuous
-  follow / spill-to-disk state / TTL'd dedup NOT operated → SCALING.md Flink mapping).
-  Would-catch honesty: NEITHER incident is covered by the four `observability/rules/`
-  alerts (FINAL read_rows is offline, not scraped; the tz collapse sits below
-  `RestatementMagnitude`'s >1.0 threshold) — said so, not implied. Elevate-invent-nothing
-  discipline: every number/fix traces to a §8 gotcha / DECISIONS / RESULTS fact.
-  Trace check = standalone `docs/check_runbook.py` (`make check-runbook`), NOT a pytest
-  file (avoids the run-tests-hook full-suite re-trigger, per BACKLOG 36): verifies every
-  RUNBOOK link/anchor resolves and every named guard/alert still exists in source. DONE
-  green: `make test` (206 offline) + `make lint` clean; `make check-runbook` OK. README
-  repo-map pointer added. Review gate: PENDING (developer runs code-reviewer +
-  functionality-tester + coherence-auditor; security-reviewer not triggered — no
-  CI/.env/compose/CH-user/agent change). Merged: PENDING. Spec: `specs/phase-15-runbook.md`.
-- Phase 14 (2026-08-20): built on `phase-14-scaling-curve` — measured scaling curve
-  (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Turns
-  SCALING.md's guessed ~200 B/exposure into ONE measured constant. New reusable volume
-  profile `producer/profiles/scale_curve.json` (seed 20, 100k exposures / 2000 households
-  / ~100h span < 7d window so nothing evicts — occupancy == count; co-view flat, no fault;
-  the top tier, so Phase 13 cost levers can reuse it for granule volume). `streaming/
-  scale_probe.py` (`make scale-curve`, offline, no compose): drains the REAL engine
-  (`build_flow`+`run_main`, EOF) over tiers 1k/10k/100k, measures the STRUCTURAL
-  per-exposure state cost (`deep_sizeof` = recursive sys.getsizeof of the retained
-  hot-window exposures ÷ entry count, id()-dedup so shared category strings count once —
-  deterministic on re-run), reads Phase-7 `engine_join_state_current` (no new metric), and
-  rewrites a marked block in `docs/SCALING.md`. **Measured ~571 B/exposure** (571–573 across
-  the curve, ~2.9× the retired guess) → extrapolation re-derived to **~8.6 TB** at 25k/sec ×
-  7d (labeled extrapolation — only the per-exposure cost moved asserted→measured; the rate
-  and product stay order-of-magnitude sizing). `tracemalloc` peak (~0.75× structural) is a
-  console-only cross-check line, NEVER asserted and never committed to the doc (the
-  determinism trap this phase exists to avoid — same discipline as the Phase-7 FINAL
-  read_rows fix). Households scale with count
-  (fixed per-household density) so the O(n²)-per-key drain stays cheap (100k in ~2.5s) and
-  realistic; `measure_tier` raises if eviction ever fires (retained==input guard). DONE green:
-  `make scale-curve && make test (213 offline) && make lint`; gate-0 tiny golden byte-identical;
-  SCALING.md byte-stable across re-runs. Spec-vs-repo note: spec named `scale_curve.py` but
-  profiles are JSON — followed the real convention, surfaced not silently repaired (DECISIONS
-  Phase 14). BACKLOG 35 (stale `sink.py:2` async marker) done in-branch (trigger fired — in
-  `streaming/`); BACKLOG 36 (docs accuracy-pin test) trigger fired (added a test file) but
-  consciously re-deferred pending developer decision (orthogonal to scaling; would widen the
-  PR). Review gate: PENDING (developer runs code-reviewer + functionality-tester +
-  coherence-auditor; security-reviewer NOT triggered — no CI/.env/compose/CH-user/agent
-  change). Merged: PENDING. Spec: `specs/phase-14-scaling-curve.md`.
-- Phase 13 (2026-08-20): built on `phase-13-query-cost-levers` — query cost levers
-  (post-plan extension, NOT in the original PHASES.md 0–11; spec on main). Three
-  ClickHouse-native cost levers measured before/after on scoped report queries over a
-  new multi-granule `bench_large` profile (seed 13, 55k exposures / 25,168 conversions
-  → attributed_conversions ~3 granules, exposures_landed ~7 granules; sized under
-  librdkafka's ~100k-message producer buffer, BACKLOG). **Spec corrected first (in the
-  open, first commit + DECISIONS Phase 13):** the proposed levers named a `campaign_id`
-  column `attributed_conversions` never had and a skip index on `exposures_landed`'s
-  LEADING sort key (already primary-pruned) — surfaced not silently repaired (workflow
-  rule), developer approved the buildable set. Levers: (1) **projection ordered by
-  `event_time`** on attributed_conversions — WINS (427,856→278,528 bytes on the
-  date-scoped non-FINAL slice; base table is conversion_id-sorted so event_time can't
-  prune today); (2) **FINAL-avoidance / skip index — DOCUMENTED NEGATIVE result** (a
-  first-class landing): argMax GROUP BY reads 3.8× MORE than `FINAL` on merged
-  single-version data, and a bloom index on genre AND the 0.3%-selective ip skips ZERO
-  granules — the blocker is physical clustering, not selectivity; (3) **PREWHERE** —
-  WINS (8,061,895→6,660,392 bytes, wide cols read only for survivors). `queries/
-  cost_levers.sql` + `queries/measure_levers.py` (reuses `bench.py` `_canonicalize`
-  UNCHANGED + `_measure` given a backward-compat `settings=` param; magnitude-free
-  direction asserts — winners read fewer bytes, negatives asserted NOT to help so a
-  silent regression fails loudly — + 6dp row-equality), `make cost-levers` rewrites a
-  marked `docs/RESULTS.md` "Query cost levers" block (byte-stable). Lever DDL runs ONLY
-  inside `make cost-levers` against bench_large, never on `clickhouse/ddl.sql` — gate-0
-  tiny golden byte-identical. ClickHouse 24.8 gotchas logged (ARCHITECTURE §8):
-  projection on a ReplacingMergeTree needs `deduplicate_merge_projection_mode='rebuild'`
-  and can't serve a FINAL query. Green: `make cost-levers` live + 6 offline unit tests
-  (`test_cost_levers.py`, pure parse/predicate/render) + `make test` + `make lint`;
-  `make check-runbook` OK (bench.py `_canonicalize` citation still resolves, BACKLOG 37
-  re-deferred). Review gate: PENDING (developer runs code-reviewer +
-  functionality-tester + coherence-auditor; security-reviewer NOT triggered — no
-  CI/.env/compose/CH-user/agent change; a projection/index DDL is not a user/exposure
-  change). Merged: PENDING. Spec: `specs/phase-13-query-cost-levers.md`.
-- Phase 12 (2026-08-20): built on `phase-12-lakehouse-landing` — lakehouse landing +
-  orchestrated reconciliation (post-plan extension; reverses ARCHITECTURE §3.5's
-  Iceberg out-of-scope, adds 5 packages — BOTH approved before the branch opened).
-  New `lake/`: a local Iceberg exposure lake (SqlCatalog on sqlite + `file://`
-  warehouse under gitignored `data/lake/`; `raw.exposures`, timestamptz-UTC columns,
-  day-partition on event_time). Landing rides `run_engine` behind `--lake-land` (the
-  SOLE landing site — `make run`/CI never land, engine byte-identical), dual-writing
-  the SAME deduped exposures list that feeds ClickHouse → parity by construction.
-  `reconcile/sources.py` factors the exposure read behind an `ExposureSource` interface:
-  ClickHouse impl (Phase-6 query, unchanged → `make run` byte-identical) + Iceberg impl
-  (DuckDB `iceberg_scan`, `distinct`-on-exposure_id reproduces the FINAL collapse, day-
-  partition prune, `SET TimeZone='UTC'` + drop tzinfo → naive-UTC matching
-  clickhouse-connect). `orchestration/`: Dagster day-partitioned `reconciled_conversions`
-  (Iceberg-sourced `recover()`, global stable `reconciled_at`) + `reconciled_report`
-  (`finalize()`); headless `make reconcile-dagster` (ephemeral instance, backfill over
-  candidate days). Two live traps caught + fixed: the DuckDB local-tz render (the §8
-  gotcha, canary-caught) and `DailyPartitionsDefinition`'s wall-clock validation
-  rejecting the sim's future-dated days (→ `StaticPartitionsDefinition`, determinism).
-  UI is local `dagster dev` (loopback), NOT a compose service (spec self-contradiction
-  resolved toward file-scope + minimal-but-scalable; DECISIONS Phase 12). Green: live
-  clean long_delay stack — `make lake-land` (Gate 1: 360 rows, day-partitioned) →
-  `make reconcile-dagster` (Gate 2: 13 day-partitions + finalize) → `make eval` recall
-  0.9733 (unchanged) → `make test-int-lakehouse` 2 passed (source-equivalence byte-
-  identical + Dagster parity); gate-0 tiny golden byte-identical (`make test-int` 11);
-  228 offline + lint; `make check-runbook` OK (BACKLOG 37 trigger fired, cited tz
-  symbols untouched, re-deferred). Spec-vs-reality surfaced not repaired: hook wording
-  (dataflow list, not insert_exposures site), `pyiceberg[sql]`→no extra + pyiceberg-core,
-  Dagster UI compose-vs-dev contradiction, StaticPartitions determinism — all in DECISIONS
-  + spec corrected. Review gate: PASSED. code-reviewer 2 (② load-only extension fix,
-  ④ type hint) + coherence-auditor 1 BLOCKER (PHASES.md:230 bare make eval → PROFILE=
-  long_delay) + 1 drift (stale _read_exposures_for docstring) + notes (SCALING port
-  pointer, determinism carve-out sentence) → all fixed in-branch; security-reviewer
-  PASS then re-PASS 0-findings after the CI-edit re-trigger; functionality-tester WORKS
-  (4/4). 3 findings BACKLOG'd (N-append/count-grain tests; lake accumulation/compaction;
-  test-int-lakehouse-in-CI weighed holistically w/ row 33). Merged: PENDING (developer;
-  not pushed). Spec: `specs/phase-12-lakehouse-landing.md`.
-- Phase 12 follow-on (NOT in the lakehouse PR): `fix/eval-demo-profile` — the pre-existing
-  bare-`make eval` bug in CLAUDE.md's eval prose (":108" "for the last profile") + the
-  long_delay canonical demo (":176"), shipped since Phase 6 (eval defaults to tiny; no
-  last-profile mechanism). Own tiny PR off main after Phase 12 merges: :176 → `make eval
-  PROFILE=long_delay`, prose → "for the given PROFILE (default tiny)". The durable
-  fail-loud guard (error on truth-profile/DB mismatch) is a BACKLOG row (next accuracy/
-  touch). Carved out of Phase 12 per the "phase reveals an earlier-phase change → own fix
-  PR" rule.
-- No API keys in repo.
+All phases **0–15 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
+Phases 12–15 are post-plan extensions (not in the original PHASES.md 0–11).
+Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
+`BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
+the `specs/` file where one was cited.
+
+| Phase | Date | PR | Deliverable (headline result) | Gate | Spec |
+|---|---|---|---|---|---|
+| 0 | 08-17 | #2 | Scaffolding — compose, Makefile, CI skeleton | — | — |
+| 1 | 08-17 | #3 | Event models, seeded generator + knobs (incl. unknown-device), schema registration, tiny golden fixtures (frozen read-only) | — | — |
+| 2 | 08-17 | #4 | Resolve stage: device→household, IP fallback, ambiguous fan-out; `ResolvedConversion` schema (compat NONE); offline replay + golden `fixtures/tiny/expected/`; live batch drain + `resolve_` metrics | — | — |
+| 3 | 08-17 | #5 | Attribution engine — pure last-touch join + conversion_id-keyed ambiguous reduce (shared by replay + Bytewax); `attributed_conversions`/`exposures_landed` RMT + sync sink; CI integration job (SHA-pinned actions, digest-pinned images) | — | — |
+| 4 | 08-18 | #6 | **CHECKPOINT** — household-grain accuracy (precision 0.673 / recall 1.000, N1 side-file join) + report v1 (4 per-campaign metrics: ROAS/CPA/CVR/site-visit) | PASSED | — |
+| 5 | 08-18 | #7 | Engine hardening — arrival-ordered, watermark-gated, evicting operator; dedup seen-set, allowed-lateness release, 7d eviction; `medium` profile; evicting == non-evicting oracle byte-identical (92/130, recall 1.0, wrong_hh 0, dedup suppressed 70) | PASSED | — |
+| 6 | 08-18 | #8 | Reconciliation + restatements — periodic ≤90d matcher (`reconcile/`) recovers hot-misses via the shared leaf; `campaign_hourly` + `report_snapshots`; `long_delay` profile; 32 candidates → 29 recovered, recall 0.587→0.973, all 3 campaigns' ROAS restated up | PASSED | `phase-6` |
+| 7 | 08-19 | #9 | **CHECKPOINT** — benchmark + observability; 4 metrics (incl. `engine_join_state_current`, closes BACKLOG 25); `make bench` (rollup 2.5× fewer rows / 1.6× bytes / 2.6× faster); 4 promtool-proven alert rules (fire on long_delay, silent on tiny); Grafana dashboard | PASSED | `phase-7` |
+| 8 | 08-19 | #10 | Fault harness — 5 isolated fault profiles (one anomaly each: shared_ip_spike, late_burst, co_view_bug, real_lift, duplicate_flood) + LLM-free collectors build §4.2 `AttributionContext` from ClickHouse (N1), shape FROZEN as the Phase-9 contract; shared_ip_spike caused_wrong_household=11 | PASSED | `phase-8` |
+| 9 | 08-19 | #11 | Agent loop — 6-cause hypothesis enum + 5 parameterized-SQL probes over SELECT-only `agent_ro` (no free-form SQL); typed `AttributionFinding` (fail → AMBIGUOUS_NEEDS_HUMAN); manual tool-use loop (Sonnet-5); Alertmanager webhook (trigger-only, alert text never reaches LLM). Live: device_graph_mismatch CONFIDENT | PASSED | `phase-9` |
+| 10 | 08-19 | #12 | **CHECKPOINT** — agent eval + near-miss demo; `no_fault_baseline` profile; frozen 6-scenario catalog + PURE scoring; `make agent-eval` → **30/30 correct, false-positive 0/10 = 0%** (real_lift vs shared_ip_spike both clean; co_view_bug 5× AMBIGUOUS; late_burst 5× CONFIDENT) | PASSED | `phase-10` |
+| 11 | 08-20 | #13 | Docs (final planned phase, no pipeline code) — `README.md` design doc, `docs/SCALING.md` (hot-window-state constraint, partition math, 50k/500k tiers, Bytewax→Flink mapping), `docs/RESULTS.md` accuracy tables (tiny 0.673/1.000, medium 0.708/1.000, long_delay 0.587→0.973); no new numbers invented | PASSED (coherence BLOCKER — false "async inserts on" claim — fixed to a SCALING lever) | none (docs) |
+| 12 | 08-20 | #21 | *post-plan* — lakehouse landing + orchestrated reconciliation: local Iceberg exposure lake (`lake/`) + Dagster day-partitioned assets (`orchestration/`); `--lake-land` dual-write, byte-identical parity (ClickHouse == Iceberg-sourced reconcile); +5 packages (approved) | PASSED | `phase-12-lakehouse-landing` |
+| 13 | 08-20 | #20 | *post-plan* — query cost levers on `bench_large`: projection-by-`event_time` WINS, FINAL-avoidance / skip-index DOCUMENTED NEGATIVE, PREWHERE WINS; lever DDL only inside `make cost-levers`, gate-0 golden untouched | PASSED (BLOCKER + drift cleared on re-check) | `phase-13-query-cost-levers` |
+| 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
+| 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
+
+**Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
+- `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
+- `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
+- `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin stay deferred to BACKLOG 43.
+
+No API keys in repo.
 
 (Update this section at the end of every working day.)
