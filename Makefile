@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse lint
+.PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -36,35 +36,34 @@ seed:
 	uv run python -m producer.seed --profile "$(PROFILE)"
 
 # Offline resolve replay (service-free): device→household, IP fallback, fan-out.
-# Writes data/out/<profile>/conversions_resolved.jsonl.
+# Writes data/out/<profile>/conversions_resolved.jsonl. The unit proof of the
+# resolve step the engine runs in-process (Phase 16).
 resolve:
 	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
 
-# Live pipeline over the seeded stream: resolve stage → attribution engine →
-# reconciliation pass (recovers long-window misses, refreshes the rollup, writes
-# pre/post report snapshots). Run after `make up && make seed`.
+# Live pipeline over the seeded stream: attribution engine (resolve in-process →
+# hot join) → reconciliation pass (recovers long-window misses AND the deferred
+# shared-IP conversions, refreshes the rollup, writes pre/post report snapshots).
+# Run after `make up && make seed`.
 run:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 	uv run python -m reconcile.reconcile
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
-# Hot path only (resolve → engine, NO reconciliation). Used by the hot-path
+# Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
 # and the medium hardening proof — which assert the engine's hot output; a
 # reconciliation pass would over-credit their long-tail organics and shift those
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
-# Phase 12: run the hot path (resolve → engine) and dual-write the SAME deduped
+# Phase 12: run the hot path (engine) and dual-write the SAME deduped
 # exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
 # landing site — make run/CI never land, so the engine path stays byte-identical.
 # Run after make up && make seed.
 lake-land:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow --lake-land
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
@@ -122,9 +121,9 @@ cost-levers:
 # Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
 # needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
 # FINAL, so these two are not producible service-free — like test-int-long-delay.
+# The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
 metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
-	uv run python -m resolve.stage --metrics-out data/out/$(PROFILE)/metrics/resolve.prom
 	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
 	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
@@ -212,17 +211,18 @@ test-int-long-delay:
 	$(MAKE) run PROFILE=long_delay
 	uv run pytest tests/integration/test_reconcile.py
 
-# Phase-8 live fault-harness proof on a CLEAN shared_ip_spike-only stack, isolated
-# by the sanctioned `make down` (profiles share conversion_id space; DECISIONS
-# Phase 5). `make run` (resolve → engine → reconcile) so report_snapshots exists
-# for the context's restatement field; shared_ip_spike keeps delays in the hot
-# window, so reconciliation only touches organics and the caused-side pins hold.
-# Asserts the shared-IP fault is observed live (Row 20) + the context is populated.
+# Phase-8/16 live fault-harness proof on a CLEAN shared_ip_spike-only stack,
+# isolated by the sanctioned `make down` (profiles share conversion_id space;
+# DECISIONS Phase 5). `run-hot` here, NOT `run`: the test pins the hot side first
+# (caused_wrong_household == 0 — ambiguous shared-IP conversions are deferred,
+# Phase 16), then runs the reconcile pass itself and pins the post side (the
+# shared-IP fault observed: 69/80 correct, 11 wrong-household, Row 20) and the
+# populated context (report_snapshots exists once that pass has run).
 test-int-shared-ip:
 	$(MAKE) down
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
-	$(MAKE) run PROFILE=shared_ip_spike
+	$(MAKE) run-hot PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_context.py
 
 # Phase-9 live read-only proof on a CLEAN shared_ip_spike-only stack (same isolation
@@ -252,8 +252,10 @@ test-int-lakehouse:
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
 # validates syntax; `test rules` asserts each alert fires on long_delay's captured
-# numbers and stays silent on tiny's (observability/rules/tests/alerts_test.yml,
-# generated from make metrics-capture). Needs only the image, not the compose stack.
+# numbers and that on tiny's only RestatementMagnitude fires (the Phase-16 deferral
+# landing restates ROAS) while the other three stay silent
+# (observability/rules/tests/alerts_test.yml, generated from make metrics-capture).
+# Needs only the image, not the compose stack.
 test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml

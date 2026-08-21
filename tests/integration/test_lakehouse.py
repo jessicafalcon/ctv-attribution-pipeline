@@ -13,21 +13,28 @@ with only hot rows. Proves the Done-when:
   reconciled rows a single ClickHouse pass would.
 """
 
+import os
+
 from clickhouse.client import connect
 from orchestration.run import main as dagster_main
 from reconcile.reconcile import (
     LONG_WINDOW,
     _max_ingest,
     _read_candidates,
+    expand_candidates,
     reconcile,
     reconciled_at_for,
 )
 from reconcile.sources import ClickHouseExposureSource, IcebergExposureSource
+from resolve.graph_loader import load_graph_index
+
+BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 
 
 def _recovered_via(source, candidates, reconciled_at):
-    exposures = source.read_for(candidates, LONG_WINDOW)
-    return reconcile(candidates, exposures, LONG_WINDOW, reconciled_at)
+    expanded = expand_candidates(candidates, load_graph_index(BROKER))
+    exposures = source.read_for(expanded, LONG_WINDOW)
+    return reconcile(expanded, exposures, LONG_WINDOW, reconciled_at)
 
 
 def test_reconcile_output_is_byte_identical_across_sources() -> None:

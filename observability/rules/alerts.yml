@@ -4,12 +4,17 @@
 # alerts_test.yml, baked by observability/gen_alert_fixtures.py from the
 # make metrics-capture .prom dumps — see specs/phase-7.md).
 #
-# Thresholds sit between a non-firing profile (tiny) and a firing one
-# (long_delay), both real captured runs:
+# Thresholds sit between the clean profile (tiny) and the knobbed one
+# (long_delay), both real captured runs (recaptured Phase 16):
 #   ConsumerLag           backlog   62  → 129   (> 100)
 #   WatermarkStall        lag_s   10367 → 17931 (> 14400 = 4h)
-#   MatchRateOutOfBand    rate    0.945 → 0.722 (outside [0.80, 0.98])
-#   RestatementMagnitude  Δroas     0.0 → 27.03 (> 1.0)
+#   MatchRateOutOfBand    rate    0.854 → 0.696 (outside [0.80, 0.98])
+#   RestatementMagnitude  Δroas   12.86 → 41.42 (> 1.0)
+# RestatementMagnitude fires on tiny too, BY DESIGN since Phase 16: tiny's 5
+# shared-IP conversions are deferred hot and credited by the reconcile pass, a
+# real ROAS restatement. The other three stay silent on tiny (DECISIONS Phase 16;
+# the MatchRate floor now clears by 0.054 — kept, revisit at the Phase-18
+# recapture).
 #
 # No annotations yet: they only surface in an Alertmanager notification, and live
 # firing (a real scrape → notification) is the deferred push path (BACKLOG). Here

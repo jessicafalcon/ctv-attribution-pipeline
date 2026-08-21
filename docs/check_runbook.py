@@ -73,7 +73,10 @@ def _check_traces(errors: list[str]) -> None:
             "docs/ARCHITECTURE.md",
             "renders DateTime columns in the client's local timezone",
         ),
-        ("docs/ARCHITECTURE.md", "Bytewax's Kafka source follows forever"),
+        (
+            "docs/ARCHITECTURE.md",
+            "The engine is a batch drain, not a continuous follow",
+        ),
     ]
     for rel, needle in traces:
         f = ROOT / rel

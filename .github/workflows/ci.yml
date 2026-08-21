@@ -32,7 +32,7 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Hot path against the compose stack: seed → resolve → engine → ClickHouse,
+      # Hot path against the compose stack: seed → engine (resolve in-process) → ClickHouse,
       # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
       # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
       # reconciliation pass would over-credit tiny's long-tail organics and shift
@@ -40,9 +40,10 @@ jobs:
       - run: make up
       # Alert-rule guard (offline w.r.t. the stack — needs only the digest-pinned
       # prometheus image, already pulled by `make up`): promtool check rules +
-      # test rules assert the four alerts still fire on the real captured metric
-      # values. This is what catches a metric rename or rule edit silently breaking
-      # the fixture — the guard that keeps Gate 2 honest.
+      # test rules assert the four alerts still fire on long_delay's real captured
+      # values and that on tiny only RestatementMagnitude fires (Phase-16 deferral
+      # landing). This is what catches a metric rename or rule edit silently
+      # breaking the fixture — the guard that keeps Gate 2 honest.
       - run: make test-alerts
       - run: make seed PROFILE=tiny
       - run: make run-hot
@@ -50,8 +51,9 @@ jobs:
       # Reconciliation coverage: its rollup/restatement/RMT-supersession logic is
       # live-only (no offline oracle), so it must run in CI. Its own clean
       # long_delay stack (the target does down && up && seed && run), which tiny
-      # can't substitute — tiny has no caused hot-misses, so it can't test
-      # recovery at all. Costs a second stack cycle.
+      # can't substitute — tiny's 3 state-misses have no exposure inside 90d and
+      # its 5 shared-IP deferrals (Phase 16) are in-window, so a long-window pass
+      # recovers no state-miss there. Costs a second stack cycle.
       - run: make test-int-long-delay
       # Benchmark equality guard: test-int-long-delay above leaves a populated
       # campaign_hourly on a long_delay stack, so `make bench` runs for free here

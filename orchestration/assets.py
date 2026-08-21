@@ -9,6 +9,7 @@ exposure source is the Iceberg lake. Dagster run ids / wall-clock are
 non-deterministic and are NOT asserted on (DECISIONS Phase 12).
 """
 
+import os
 from datetime import date, timedelta
 
 from dagster import (
@@ -31,6 +32,7 @@ from reconcile.reconcile import (
     recover,
 )
 from reconcile.sources import IcebergExposureSource
+from resolve.graph_loader import load_graph_index
 
 
 def _day_keys(start: date, end: date) -> list[str]:
@@ -77,8 +79,11 @@ def reconciled_conversions(context: AssetExecutionContext) -> MaterializeResult:
     candidates = [
         c for c in _read_candidates(client) if c.event_time.date().isoformat() == day
     ]
+    # Same device graph as `make run`'s pass (compacted topic), so an ambiguous
+    # conversion expands to the same candidate households — byte-identical.
+    graph = load_graph_index(os.environ.get("KAFKA_BROKER", "127.0.0.1:19092"))
     recovered = recover(
-        client, candidates, IcebergExposureSource(), LONG_WINDOW, reconciled_at
+        client, candidates, IcebergExposureSource(), LONG_WINDOW, reconciled_at, graph
     )
     return MaterializeResult(
         metadata={

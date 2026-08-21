@@ -1,7 +1,8 @@
 """Shared Kafka batch-drain: read a topic start→end once, driven by
-end-of-partition. Used by both the resolve stage and the attribution engine —
-each processes a finite seeded stream end-to-end and exits, so both drain a
-topic to the end of its log rather than following forever.
+end-of-partition. Used by the attribution engine (event topics) and the graph
+loader (compacted `device_graph`) — the engine processes a finite seeded stream
+end-to-end and exits, so it drains a topic to the end of its log rather than
+following forever.
 
 Teaching notes (consumer group / offsets): a Kafka consumer reads a partition
 sequentially by *offset*. We assign every partition at offset 0 and read until

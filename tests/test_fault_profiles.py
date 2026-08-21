@@ -1,5 +1,5 @@
 """Phase 8 Done-when 1: the five fault profiles run REPRODUCIBLY and each carries
-its ONE isolated fault, proven OFFLINE through the evicting engine (build_flow) —
+its ONE isolated fault, proven OFFLINE through the evicting engine (run_attribution) —
 no services. Numbers are pinned like the medium-parity counts: re-tuning a profile
 JSON means updating the matching assertion in the SAME change, never silently.
 
@@ -13,18 +13,24 @@ no-fault; Phase 10 scores it as a false-positive control).
 from collections import defaultdict
 
 import pytest
-from bytewax.testing import TestingSink, run_main
 
 from accuracy.score import AccuracyReport, score
 from producer.config import load_profile
 from producer.generate import generate
+from producer.models import Exposure
 from producer.serialize import jsonl
-from reconcile.reconcile import LONG_WINDOW
+from reconcile.reconcile import (
+    LONG_WINDOW,
+    expand_candidates,
+    reconcile,
+    reconciled_at_for,
+)
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, HOT_WINDOW, attribute, dedup_streams
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
+from tests.pins import SHARED_IP_HOT
 
 FAULT_PROFILES = [
     "shared_ip_spike",
@@ -38,12 +44,7 @@ FAULT_PROFILES = [
 def _engine(exps, res):
     metrics.EXPOSURES_EVICTED._value.set(0)
     metrics.reset_join_state_peak()
-    attributed, landed = [], []
-    flow = build_flow(
-        exps, res, TestingSink(attributed), TestingSink(landed), ALLOWED_LATENESS
-    )
-    run_main(flow)
-    return sorted(attributed, key=lambda r: r.conversion_id)
+    return run_attribution(exps, res, ALLOWED_LATENESS)
 
 
 class FaultRun:
@@ -93,15 +94,23 @@ def test_profile_is_reproducible(name: str) -> None:
     assert jsonl(a.truth_links) == jsonl(b.truth_links)
 
 
-def test_shared_ip_spike_misattributes_to_wrong_household(runs) -> None:
-    # BACKLOG 20 (load-bearing): a caused conversion whose wrong-household
-    # shared-IP candidate has a more-recent in-window exposure is misattributed —
-    # observed, not assumed. The entire recall gap is wrong-household (0 misses).
+def test_shared_ip_spike_defers_ambiguous_hot_no_wrong_household(runs) -> None:
+    # Phase 16: the hot path never guesses a shared-IP household, so the 11 caused
+    # wrong-household misattributions the old reduce made (BACKLOG 20) are gone
+    # hot — at the price of 19 caused conversions deferred (ambiguous_ip) to
+    # reconciliation, where the cross-household pick is proven
+    # (tests/test_reconcile.py, live: make test-int-shared-ip).
     r = runs["shared_ip_spike"].score()
-    assert r.caused_wrong_household == 11
-    assert r.caused_missed == 0
-    assert (r.truth_links, r.household_correct) == (80, 69)
+    assert r.caused_wrong_household == 0
+    assert r.caused_missed == 19  # every one an ambiguous_ip deferral, not a loss
+    assert (r.credited, r.truth_links, r.household_correct) == (
+        SHARED_IP_HOT.credited,
+        SHARED_IP_HOT.truth,
+        SHARED_IP_HOT.correct,
+    )
     assert r.recall < 1.0
+    deferred = [c for c in runs["shared_ip_spike"].rows if not c.attributed]
+    assert sum(c.candidate_count > 1 for c in deferred) >= 19
 
 
 def test_real_lift_is_a_clean_lift_no_shared_ip_fault(runs) -> None:
@@ -131,7 +140,9 @@ def test_late_burst_pushes_conversions_past_the_hot_window(runs) -> None:
     # conversions so late that their exposure is evicted before release → hot-miss.
     run = runs["late_burst"]
     r = run.score()
-    assert r.caused_missed == 5  # state-misses (recovered later by reconciliation)
+    # 5 state-misses + 1 ambiguous_ip deferral (all recovered by reconciliation)
+    assert r.caused_missed == 6
+    assert sum(1 for c in run.rows if not c.attributed and c.candidate_count > 1) == 1
     assert r.caused_wrong_household == 0
     peak_lateness = max(
         (c.ingest_time - c.event_time).total_seconds() for c in run.stream.conversions
@@ -192,27 +203,58 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
     assert peak_late < 7 * 86400
 
 
-# --- Phase 10: the full-run sweep injects no spurious restatement ------------
+# --- Phase 10/16: what the full-run sweep restates on the in-window scenarios ---
 # `make agent-eval` runs the FULL pipeline (incl. reconciliation) per scenario so
-# late_burst's restatement exists. Confirm the three IN-WINDOW scenarios (all event-time
-# delays inside the 7d window) recover nothing on the long window — so reconciliation
-# writes no corrected rows, report_snapshots PRE == FINAL, and no spurious roas_delta
-# baits a false late_arrival_distortion. (late_burst is excluded: its misses are arrival
-# lateness / eviction, not event-time, so it genuinely restates.)
+# late_burst's restatement exists. The three IN-WINDOW scenarios (all event-time
+# delays inside the 7d window) have two reconciliation channels, pinned separately
+# through the REAL path (expand_candidates + reconcile, not the hot oracle, which
+# refuses ambiguous rows at any window):
+# - state-miss channel: recovers NOTHING (the long window credits exactly the hot
+#   set) — no late-arrival restatement, the Phase-10 false-positive guard;
+# - ambiguous_ip channel (Phase 16): recovers exactly the deferred shared-IP
+#   conversions. shared_ip_spike has 25 and therefore DOES restate after `make run`
+#   (the deferral landing, not a late-arrival signal); real_lift and
+#   no_fault_baseline have none and do not restate. agent-eval is not re-run in
+#   Phase 16 (API tokens) — BACKLOG 49.
+# (late_burst is excluded: its misses are arrival lateness / eviction, not
+# event-time, so it genuinely restates.)
 
 
-@pytest.mark.parametrize("name", ["shared_ip_spike", "real_lift", "no_fault_baseline"])
-def test_in_window_scenarios_recover_nothing_on_the_long_window(name: str) -> None:
+@pytest.mark.parametrize(
+    "name,deferred",
+    [("shared_ip_spike", 25), ("real_lift", 0), ("no_fault_baseline", 0)],
+)
+def test_in_window_scenarios_restate_only_through_the_deferral_channel(
+    name: str, deferred: int
+) -> None:
     p = load_profile(name)
     s = generate(p, p.seed)
     idx = GraphIndex.from_households(s.graph.households)
     exps, res, _ = dedup_streams(s.exposures, resolve_stream(s.conversions, idx))
+    hot = attribute(exps, res, HOT_WINDOW)
+    by_hh: dict[str, list[Exposure]] = defaultdict(list)
+    for e in exps:
+        by_hh[e.household_id].append(e)
+    at = reconciled_at_for(max(e.ingest_time for e in exps))
+    candidates = [r for r in hot if not r.attributed]
+    state_miss = [r for r in candidates if r.reason == "state_miss"]
+    ambiguous = [r for r in candidates if r.reason == "ambiguous_ip"]
+    assert len(state_miss) + len(ambiguous) == len(candidates)
 
-    def attributed_ids(window):
-        return {r.conversion_id for r in attribute(exps, res, window) if r.attributed}
+    # State-miss channel: nothing to recover on the long window.
+    assert reconcile(state_miss, by_hh, LONG_WINDOW, at) == []
+    # Ambiguous channel: exactly the deferred set, each credited once.
+    recovered = reconcile(expand_candidates(ambiguous, idx), by_hh, LONG_WINDOW, at)
+    assert len(ambiguous) == deferred
+    assert {r.conversion_id for r in recovered} == {r.conversion_id for r in ambiguous}
 
-    hot = attributed_ids(HOT_WINDOW)
-    long = attributed_ids(LONG_WINDOW)
-    # The long window credits exactly the hot set — reconciliation recovers nothing,
-    # so no restatement (roas_delta) is produced on these profiles.
-    assert long == hot
+
+def test_late_burst_single_deferral_is_a_revenue_free_site_visit(runs) -> None:
+    # The premise RESULTS relies on to keep late_burst's max|Δroas| cell (26.604)
+    # unblanked: its ONE ambiguous_ip deferral carries no revenue, so the reconcile
+    # pass crediting it cannot move any campaign's ROAS (ROAS = revenue / spend;
+    # generate.py guarantees site_visit ⇒ revenue 0). late_burst is excluded from
+    # the channel test above because its state-miss channel DOES recover (5 misses).
+    deferred = [r for r in runs["late_burst"].rows if r.reason == "ambiguous_ip"]
+    assert len(deferred) == 1
+    assert deferred[0].conversion_type == "site_visit" and deferred[0].revenue == 0.0

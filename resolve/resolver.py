@@ -2,8 +2,9 @@
 of (conversion, graph) only, so the same input is byte-identical every run.
 
 Priority: device-graph hit beats IP fallback. An IP owned by several
-households fans out to one record per candidate (ambiguous); the engine
-(Phase 3+) breaks the tie by most-recent exposure in the window.
+households fans out to one record per candidate (ambiguous); the hot path
+defers such a conversion unattributed and reconciliation breaks the tie by
+most-recent exposure across the candidates (Phase 16).
 """
 
 from collections.abc import Iterable
@@ -32,7 +33,7 @@ def resolve_stream(
     conversions: Iterable[Conversion], index: GraphIndex
 ) -> list[ResolvedConversion]:
     """Stateless map over the stream — duplicates in, duplicates out. Dedup is
-    the engine's job (Phase 5), not the resolve stage's."""
+    the engine's job (Phase 5), not the resolve step's."""
     out: list[ResolvedConversion] = []
     for conv in conversions:
         out.extend(resolve_one(conv, index))

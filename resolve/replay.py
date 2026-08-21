@@ -3,8 +3,8 @@ broker, writing the canonical resolved jsonl. This is the Phase 2 DONE-command
 path — service-free and deterministic, so the diff against the golden expected
 file has no broker ordering in it.
 
-The live stage (resolve/stage.py) is the real pipeline component; this shares
-the same pure resolver so the two cannot diverge.
+The engine runs the same pure resolver in-process (streaming/dataflow.py,
+Phase 16), so the live path and this replay cannot diverge.
 """
 
 import argparse

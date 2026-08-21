@@ -1,17 +1,18 @@
-"""The Bytewax operator graph, run offline with capturing sinks, produces the
-same attributed rows as the pure core — proving the live path and the golden
-replay cannot diverge (they share the leaf functions; this pins the wiring
-around them). No ClickHouse: sinks capture to lists."""
+"""The engine driver (`run_attribution`: household grouping + the evicting
+watermark-gated pass), run offline, produces the same attributed rows as the
+non-evicting pure oracle on tiny — proving the live path and the golden replay
+cannot diverge (they share the leaf functions; this pins the wiring around
+them). No ClickHouse."""
 
 from pathlib import Path
 
-from bytewax.testing import TestingSink, run_main
+from prometheus_client import REGISTRY
 from pydantic import BaseModel
 
 from producer.models import Exposure, ResolvedConversion
 from producer.serialize import canonical_bytes
 from streaming.attribute import attribute
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "tiny"
 
@@ -23,21 +24,32 @@ def _read[M: BaseModel](name: str, model: type[M]) -> list[M]:
     ]
 
 
-def test_dataflow_matches_pure_core() -> None:
+def test_engine_driver_matches_pure_core() -> None:
     exposures = _read("exposures.jsonl", Exposure)
     resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
 
-    attributed: list = []
-    landed: list = []
-    run_main(
-        build_flow(exposures, resolved, TestingSink(attributed), TestingSink(landed))
-    )
-
-    # Same 55 winners as the pure core, compared canonically (Bytewax emits per
-    # key in an unspecified order; sort both by conversion_id).
-    got = sorted(attributed, key=lambda r: r.conversion_id)
+    got = run_attribution(exposures, resolved)
     expected = attribute(exposures, resolved)
     assert [canonical_bytes(r) for r in got] == [canonical_bytes(r) for r in expected]
+    assert len(got) == 55  # one row per distinct conversion_id
 
-    # Every drained exposure is offered to the landing sink (RMT dedups on read).
-    assert len(landed) == len(exposures)
+
+def test_ambiguous_deferred_counter_increments_by_tiny_shared_ip_set() -> None:
+    # engine_conversions_ambiguous_deferred_total is the only hot-path signal that
+    # ambiguity is being deferred (the Phase-18 dirty-set precursor): tiny's 5
+    # shared-IP conversions, exactly — and they are a subset of unattributed.
+    exposures = _read("exposures.jsonl", Exposure)
+    resolved = _read("expected/conversions_resolved.jsonl", ResolvedConversion)
+
+    def _sample(name: str) -> float:
+        # This test reads through the public registry API; counters are cumulative
+        # across the process, so compare deltas. Older tests and scale_probe.py still
+        # use the private `_value` accessor — migration is a BACKLOG item.
+        return REGISTRY.get_sample_value(name) or 0.0
+
+    deferred0 = _sample("engine_conversions_ambiguous_deferred_total")
+    unattributed0 = _sample("engine_conversions_unattributed_total")
+    run_attribution(exposures, resolved)
+    assert _sample("engine_conversions_ambiguous_deferred_total") - deferred0 == 5
+    # 5 deferred + 3 state-misses
+    assert _sample("engine_conversions_unattributed_total") - unattributed0 == 8

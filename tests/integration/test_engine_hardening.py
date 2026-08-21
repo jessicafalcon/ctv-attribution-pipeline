@@ -7,7 +7,8 @@ Isolation comes from the sanctioned `make down`, not a per-test TRUNCATE.
 
 Asserts the three Done-when clauses live, against the pinned oracle baseline
 that tests/test_medium_parity.py fixes offline:
-- clause 1: FINAL P/R == oracle (precision 92/130, recall 1.0, wrong_hh 0);
+- clause 1: FINAL P/R == oracle (precision 91/129, recall 0.989, wrong_hh 0 —
+  1 caused shared-IP conversion deferred hot, Phase 16);
 - clause 2: eviction ran (join-state gauge > 0 and evictions > 0);
 - clause 3: dedup fired (suppressed 63) AND FINAL row count is unchanged by a
   dedup-off run (transparency).

@@ -11,13 +11,13 @@ tests:
       - series: 'resolve_input_backlog'
         values: '129+0x15'
       - series: 'engine_conversions_attributed_total'
-        values: '83+0x15'
+        values: '80+0x15'
       - series: 'engine_conversions_processed_total'
         values: '115+0x15'
       - series: 'engine_watermark_lag_seconds'
         values: '17930.763+0x15'
       - series: 'reconcile_restatement_roas_abs_delta'
-        values: '27.03373945641988+0x15'
+        values: '41.42086752637753+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag
@@ -39,19 +39,19 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-  # tiny: all silent (real captured values, held across the window)
+  # tiny: fires RestatementMagnitude (real captured values, held across the window)
   - interval: 1m
     input_series:
       - series: 'resolve_input_backlog'
         values: '62+0x15'
       - series: 'engine_conversions_attributed_total'
-        values: '52+0x15'
+        values: '47+0x15'
       - series: 'engine_conversions_processed_total'
         values: '55+0x15'
       - series: 'engine_watermark_lag_seconds'
         values: '10367.277+0x15'
       - series: 'reconcile_restatement_roas_abs_delta'
-        values: '0+0x15'
+        values: '12.864678899082577+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag
@@ -64,4 +64,6 @@ tests:
         exp_alerts: []
       - eval_time: 10m
         alertname: RestatementMagnitude
-        exp_alerts: []
+        exp_alerts:
+          - exp_labels:
+              severity: warning

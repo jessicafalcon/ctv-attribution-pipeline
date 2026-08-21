@@ -3,16 +3,18 @@
 ## What this is
 
 A self-contained streaming data pipeline: a seeded producer emits TV
-ad-exposure and conversion events into Redpanda, a resolve stage maps
-conversions to households through a device graph, a Bytewax engine does a
-windowed, late-tolerant, cross-device stream join, a periodic reconciliation
-job closes the long-window tail, ClickHouse serves ROAS/CPA/CVR/site-visit
-rate with restatements, and a read-only AI agent triages attribution
-integrity from Prometheus/Alertmanager alerts. Ground-truth causal links let
+ad-exposure and conversion events into Redpanda, a deterministic batch
+attributor (plain Python, no stream framework) resolves conversions to
+households through a device graph in-process and does a windowed,
+late-tolerant, cross-device join over a drain of the topics, a periodic
+reconciliation job closes the long-window tail and settles the shared-IP
+ambiguous conversions the hot path refuses to guess, ClickHouse serves
+ROAS/CPA/CVR/site-visit rate with restatements, and a read-only AI agent
+triages attribution integrity from Prometheus/Alertmanager alerts. Ground-truth causal links let
 attribution accuracy and agent accuracy be scored against reality.
 
-Built by a developer who is NEW to Redpanda, stream processing (Bytewax),
-and ClickHouse — see Teaching rule below.
+Built by a developer who is NEW to Redpanda, stream processing (windowing,
+watermarks — Bytewax until Phase 16), and ClickHouse — see Teaching rule below.
 
 `docs/ARCHITECTURE.md` is the spec. `docs/PHASES.md` is the plan. Read both
 before design decisions.
@@ -23,20 +25,22 @@ before design decisions.
 PRODUCER (seeded)  ── device graph (compacted topic) ── truth links (side file, never read)
    │ exposures (key household_id)      │ conversions (key device_id)
    ▼                                   ▼
-REDPANDA  exposures | conversions | conversions_resolved  + schema registry
+REDPANDA  exposures | conversions  + schema registry
                                        │
-                                  RESOLVE STAGE  device → household (IP fallback, fan-out)
-                                       │  → conversions_resolved (key household_id)
    exposures ──────────────────────────┤
                                        ▼
-ATTRIBUTION ENGINE (Bytewax)  hot window (7d) · last-touch + assists · dedup (seen-set)
-                              watermarks + allowed lateness · emits attributed/unattributed
+ATTRIBUTION ENGINE (deterministic batch attributor, no stream framework)
+   resolve step in-process: device → household (IP fallback; shared IP = ambiguous)
+   hot window (7d) · last-touch + assists · dedup (seen-set) · watermarks + allowed lateness
+   ambiguous shared-IP → unattributed (ambiguous_ip), never a hot guess
                                        ▼
 CLICKHOUSE  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
             exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
                                        ▲
-RECONCILIATION JOB (periodic)  unattributed in long window (≤90d) → match vs
-                               exposures_landed → corrected rows → refresh → snapshot
+RECONCILIATION JOB (periodic)  unattributed in long window (≤90d): state-misses → match vs
+                               exposures_landed; ambiguous_ip → candidate households from
+                               device_graph, most-recent exposure wins (the ONE tiebreak)
+                               → corrected rows → refresh → snapshot
                                        │
 REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
 ──── off the critical path ──────────────────────────────────────────────
@@ -53,11 +57,17 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `producer/` — pydantic event models (source of truth for schemas), device
   graph generator, seeded stream generator, `profiles/` (tiny, medium, fault
   scenarios). Truth links written to `data/truth/`, never read by the pipeline.
-- `resolve/` — conversion → household stage. Loads the graph from the
-  compacted topic; emits to `conversions_resolved`.
-- `streaming/` — Bytewax dataflow: join, hot window, dedup, lateness.
-- `reconcile/` — periodic long-window matcher, rollup refresh, snapshot writer;
-  `sources.py` = the ClickHouse / Iceberg exposure-source interface (Phase 12).
+- `resolve/` — conversion → household resolution, called IN-PROCESS by the
+  engine (`resolve_one`, the Phase-2 signature; `graph_loader.py` = the
+  compacted-topic graph loader, was `stage.py`). Offline replay = `make resolve`.
+  No topic.
+- `streaming/` — the engine: `attribute.py` pure core (hot rule, watermark,
+  eviction, dedup) + `dataflow.py` batch-drain driver. No Bytewax (Phase 16).
+- `reconcile/` — periodic long-window matcher (state-misses AND the deferred
+  ambiguous_ip rows: candidates re-enumerated from the device graph,
+  `pick_household` = the one most-recent-exposure tiebreak), rollup refresh,
+  snapshot writer; `sources.py` = the ClickHouse / Iceberg exposure-source
+  interface (Phase 12).
 - `lake/` — local Iceberg exposure lake (Phase 12): catalog + schema, dedup-safe
   landing, DuckDB read. Data under gitignored `data/lake/`.
 - `orchestration/` — Dagster day-partitioned reconciliation assets + headless
@@ -71,7 +81,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `fixtures/tiny/` — golden producer output + expected resolved/attributed
   rows. READ-ONLY ground truth after Phase 1.
 - `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
-  RESULTS.md, demo_checklist.md.
+  RESULTS.md, RUNBOOK.md (+ check_runbook.py).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -86,13 +96,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make seed PROFILE=tiny|medium|<fault>` — run producer (deterministic per
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
-  (service-free): device→household, IP fallback, fan-out → data/out/<profile>/
-- `make run` — resolve stage + engine + reconciliation pass (a single pass, not a
-  daemon); the full pipeline over the seeded stream
-- `make run-hot` — resolve stage + engine only, no reconciliation; backs the
-  hot-path oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
-  reconciliation pass would over-credit long-tail organics and shift the pins
-- `make lake-land` — resolve stage + engine, dual-writing the SAME deduped exposures
+  (service-free): device→household, IP fallback, fan-out → data/out/<profile>/;
+  the unit proof of the resolve step the engine runs in-process
+- `make run` — engine (resolve in-process → hot join) + reconciliation pass (a
+  single pass, not a daemon); the full pipeline over the seeded stream
+- `make run-hot` — engine only, no reconciliation; backs the hot-path oracle
+  suites (tiny golden/accuracy, medium hardening) and CI, where a reconciliation
+  pass would over-credit long-tail organics and shift the pins. Hot numbers
+  exclude the deferred shared-IP conversions by design (Phase 16)
+- `make lake-land` — engine, dual-writing the SAME deduped exposures
   into the Iceberg lake (`raw.exposures`, day-partitioned) alongside ClickHouse. The
   SOLE landing site (`--lake-land` flag; `make run`/CI never land, so the engine path
   stays byte-identical). Run after `make up && make seed` (Phase 12)
@@ -137,8 +149,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
   promtool alert fixtures; live-stack, run after `make up && make seed`)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
-  prometheus image: the four alert rules fire on long_delay's captured values,
-  silent on tiny's (offline; needs the image, not the compose stack)
+  prometheus image: the four alert rules fire on long_delay's captured values;
+  on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
+  ROAS) and the other three stay silent (offline; needs the image, not the stack)
 - `make check-runbook` — standalone trace check for docs/RUNBOOK.md: every
   link/anchor resolves and every named guard/alert still exists in source (offline;
   not a pytest file, to avoid the run-tests-hook full-suite re-trigger)
@@ -148,15 +161,18 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make test` — pytest, no services, no network
 - `make test-int` — pytest against running compose stack (tiny profile)
 - `make test-int-medium` — clean medium-only stack (make down && up && seed
-  medium && run medium) → the Phase-5 live hardening proof; isolated because
+  medium && run-hot) → the Phase-5 live hardening proof (hot engine only — a
+  reconcile pass would shift the pinned hot precision); isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
 - `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
   long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
   for the same shared-conversion_id reason (DECISIONS Phase 5/6)
 - `make test-int-shared-ip` — clean shared_ip_spike-only stack (make down && up &&
-  seed shared_ip_spike && run) → the Phase-8 live fault-harness proof: the shared-IP
-  wrong-household fault is observed (caused_wrong_household=11) and the
-  `AttributionContext` is populated; isolated for the same shared-conversion_id reason
+  seed shared_ip_spike && run-hot; the test runs the reconcile pass itself) → the
+  Phase-8/16 live fault-harness proof: hot `caused_wrong_household=0` (ambiguous
+  deferred), post-reconcile 69/80 correct / 11 wrong-household (the fault observed,
+  same pick the old hot reduce made), and the `AttributionContext` is populated;
+  isolated for the same shared-conversion_id reason
 - `make test-int-agent` — clean shared_ip_spike-only stack (make down && up && seed &&
   run) → the Phase-9 live read-only proof: the SELECT-only `agent_ro` user cannot write
   (INSERT/ALTER/DROP/CREATE → ACCESS_DENIED) and the whole collector+probe read path
@@ -169,8 +185,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make lint` — ruff via pre-commit
 
 Canonical clean-state demos:
-- Hot-path headline (fast, stable pins — tiny has no caused hot-misses, so
-  `run-hot` avoids reconciliation over-crediting its organics):
+- Hot-path headline (fast, stable pins — tiny's only caused hot-misses are the
+  3 deferred shared-IP conversions, so `run-hot` keeps the hot pins and avoids
+  reconciliation over-crediting its organics):
   `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
 - Reconciliation + restatement (where the long tail earns its keep — recall
   0.587→0.973, ROAS restated up):
@@ -185,11 +202,14 @@ Canonical clean-state demos:
 - Resolved conversion adds: household_id, resolution (device | ip),
   ambiguous (bool), candidate_count.
 - Attributed record adds: exposure_id (nullable), assists (list),
-  attributed (bool), processed_at, path (hot | reconciled).
+  attributed (bool), processed_at, path (hot | reconciled), reason
+  (ambiguous_ip | state_miss, null when attributed — Phase 16).
 - Lateness = ingest_time − event_time. Hot path handles minutes–hours;
   reconciliation handles days.
 - Shared IPs across households are the ONLY source of wrong-household
-  matches. Keep it that way so the fault is isolatable.
+  matches. Keep it that way so the fault is isolatable. Since Phase 16 a
+  wrong-household credit can only be made by the reconciliation pass (the hot
+  path emits `candidate_count > 1` unattributed — reason ambiguous_ip).
 
 ## Determinism policy (core design principle)
 
@@ -248,7 +268,7 @@ AI sits at the edge; the pipeline is deterministic.
 
 - Python 3.12. Type hints everywhere. No JVM anywhere.
 - Dependencies: ask before adding ANY new package. Current allowlist:
-  bytewax, confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
+  confluent-kafka, clickhouse-connect, pydantic, prometheus-client,
   anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit,
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
@@ -265,8 +285,8 @@ AI sits at the edge; the pipeline is deterministic.
 
 ## Teaching rule (IMPORTANT)
 
-The developer is learning Redpanda/Kafka, stream processing (Bytewax), and
-ClickHouse. The first time any concept from these tools appears in a
+The developer is learning Redpanda/Kafka, stream processing (windowing,
+watermarks, stateful operators — Bytewax until Phase 16), and ClickHouse. The first time any concept from these tools appears in a
 session (e.g. partitions and keys, consumer groups and offsets, compacted
 topics, watermarks and allowed lateness, stateful operators and eviction,
 ReplacingMergeTree and FINAL, async inserts, refreshable materialized
@@ -287,10 +307,11 @@ standard way over the clever way.
 - Build at tiny scale first (fixtures/tiny), prove correctness, then turn
   up the profile.
 - Fixtures in fixtures/tiny/ are read-only after Phase 1.
-- Stack surprises (Bytewax, ClickHouse, Redpanda): check official docs
+- Stack surprises (ClickHouse, Redpanda, pyiceberg/DuckDB/Dagster): check official docs
   before working around; log the finding under ARCHITECTURE.md "Gotchas".
 - Do not add features outside ARCHITECTURE.md without asking. Out of scope
-  v1: co-viewing inside the engine, Iceberg landing, multi-touch models.
+  v1: co-viewing inside the engine, multi-touch models. (Iceberg landing was
+  out of scope v1 until the approved Phase-12 reversal — ARCHITECTURE §3.5.)
 - Destructive commands (volume removal, DROP, TRUNCATE): only via `make
   down`, or with explicit confirmation.
 - API-token commands (`make agent-run`, `make agent-eval`): ask first.
@@ -375,7 +396,8 @@ never auto-fixed, ignored, or committed around.
 ## Current status
 
 All phases **0–15 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
-Phases 12–15 are post-plan extensions (not in the original PHASES.md 0–11).
+Phases 12–16 are post-plan extensions (not in the original PHASES.md 0–11).
+Phase 16 (simplify the core) is on branch `phase-16-simplify-core`, in review.
 Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
 `BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
 the `specs/` file where one was cited.
@@ -398,6 +420,7 @@ the `specs/` file where one was cited.
 | 13 | 08-20 | #20 | *post-plan* — query cost levers on `bench_large`: projection-by-`event_time` WINS, FINAL-avoidance / skip-index DOCUMENTED NEGATIVE, PREWHERE WINS; lever DDL only inside `make cost-levers`, gate-0 golden untouched | PASSED (BLOCKER + drift cleared on re-check) | `phase-13-query-cost-levers` |
 | 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
 | 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
+| 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | in review | `phase-16-simplify-core` |
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).

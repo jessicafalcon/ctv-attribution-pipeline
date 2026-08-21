@@ -42,12 +42,13 @@ def read_attributed_decisions(client: Client) -> dict[str, tuple]:
     collapses ReplacingMergeTree rows so replays/duplicates read as one."""
     rows = client.query(
         """
-        select conversion_id, household_id, exposure_id, attributed, assists, path
+        select conversion_id, household_id, exposure_id, attributed, assists, path,
+            reason
         from attributed_conversions final
         order by conversion_id
         """
     ).result_rows
-    return {r[0]: (r[1], r[2], bool(r[3]), tuple(r[4]), r[5]) for r in rows}
+    return {r[0]: (r[1], r[2], bool(r[3]), tuple(r[4]), r[5], r[6]) for r in rows}
 
 
 def count_exposures_final(client: Client) -> int:

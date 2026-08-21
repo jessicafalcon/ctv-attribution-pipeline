@@ -1,6 +1,6 @@
 """Offline unit tests for the pure accuracy scorer — synthetic cases for each
-outcome, plus a fixture-pinned case that reproduces the headline numbers
-(household-grain precision 0.673, recall 1.000) with no services."""
+outcome, plus a fixture-pinned case that reproduces the headline hot numbers
+(household-grain precision 0.681, recall 0.914 — tests/pins.py) with no services."""
 
 import json
 from pathlib import Path
@@ -76,16 +76,18 @@ def test_score_pins_tiny_fixture_numbers() -> None:
         TINY_HOT.truth,
         TINY_HOT.correct,
     )
-    assert r.precision == pytest.approx(TINY_HOT.precision)  # 0.673
-    assert r.recall == pytest.approx(TINY_HOT.recall)
-    assert r.caused_missed == 0
+    assert r.precision == pytest.approx(TINY_HOT.precision)  # 0.681
+    assert r.recall == pytest.approx(TINY_HOT.recall)  # 0.914
+    # The 3 caused shared-IP conversions are deferred hot (ambiguous_ip), not
+    # lost — reconciliation recovers them (Phase 16); never a wrong household.
+    assert r.caused_missed == 3
     assert r.caused_wrong_household == 0
     # organic over-credit is the sole driver of tiny's sub-1.0 precision, NOT
-    # shared-IP misattribution (DECISIONS Phase 4)
-    assert r.organic_credited == 17
+    # shared-IP misattribution (DECISIONS Phase 4); 2 organic ambiguous deferred.
+    assert r.organic_credited == 15
     # exact exposure-id is a diagnostic only; expected low for a last-touch engine
     assert r.exact_exposure_correct == 3
-    assert r.exact_exposure_match_rate == pytest.approx(3 / 52)
+    assert r.exact_exposure_match_rate == pytest.approx(3 / 47)
 
 
 def test_format_report_is_printable() -> None:

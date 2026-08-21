@@ -2,19 +2,18 @@
 (exposures, resolved conversions, window) only, so the same input is
 byte-identical every run.
 
-Every attribution DECISION lives in the two leaf functions here; both the
-offline replay (`attribute` below) and the live Bytewax engine
-(`streaming/dataflow.py`) call the SAME leaves, so they cannot diverge
-(DECISIONS Phase 3, "Bytewax owns plumbing, the pure core owns decisions").
+Every attribution DECISION lives in the leaf functions here; the offline
+oracle (`attribute` below), the engine driver (`streaming/dataflow.py`) and the
+reconciliation matcher (`reconcile/reconcile.py`) call the SAME leaves, so they
+cannot diverge (DECISIONS Phase 3, refined Phase 16).
 
-Two stages, in order:
-
-1. `attribute_household` — household-local last-touch. For each resolved
-   conversion, credit the most-recent in-window exposure in its household and
-   record the rest as assists; emit an unattributed row if there is none.
-2. `reduce_conversion` — collapse every candidate row sharing a `conversion_id`
-   (shared-IP fan-out across households, plus byte-identical resend duplicates)
-   to exactly one winner: the most-recent last-touch exposure.
+Hot-path rule (Phase 16): the hot path attributes only when the household is
+CERTAIN — a device-graph hit or a single-owner IP. A shared-IP conversion
+(`candidate_count > 1`) is emitted unattributed (reason: ambiguous_ip) and left
+for reconciliation, which holds every exposure and applies the most-recent-
+exposure tiebreak across the candidate households. The old `conversion_id`-keyed
+reduce that guessed hot is gone; exactly one row per `conversion_id` still
+reaches the sink (`one_row_per_conversion`).
 """
 
 from collections import defaultdict
@@ -44,13 +43,14 @@ def dedup_by_id[M](
     """Drop exact re-sends: keep the first row per `key` in arrival order and
     report how many were suppressed. Pure (order-preserving, no I/O).
 
-    `key` must be a row's full identity, NOT just its event id. A resolved
-    conversion fans out to one row per candidate household under the SAME
-    `conversion_id` (shared-IP resolve fan-out), so keying resolved rows on
-    `conversion_id` alone would drop legitimate candidates, not just duplicates
-    — see `dedup_streams`. Batch mode keeps a full seen-set (no TTL): the seeded
-    duplicate is timestamp-identical to its original, so there is nothing an
-    event-time TTL could measure against (DECISIONS/SCALING Phase 5)."""
+    `key` must be a row's full identity. A resolved conversion fans out to one
+    row per candidate household under the SAME `conversion_id` (shared-IP
+    fan-out), so `dedup_streams` keys resolved rows on `(conversion_id,
+    household_id)` and counts only exact re-sends; the fan-out itself collapses
+    later in `one_row_per_conversion`, which is not dedup and is not counted
+    here. Batch mode keeps a full seen-set (no TTL): the seeded duplicate is
+    timestamp-identical to its original, so there is nothing an event-time TTL
+    could measure against (DECISIONS/SCALING Phase 5)."""
     seen: set[Hashable] = set()
     kept: list[M] = []
     suppressed = 0
@@ -68,10 +68,10 @@ def dedup_streams(
     exposures: Iterable[Exposure], resolved: Iterable[ResolvedConversion]
 ) -> tuple[list[Exposure], list[ResolvedConversion], int]:
     """Drop exact re-sends from both engine input streams before the join.
-    Exposures key on `exposure_id` (globally unique, no fan-out); resolved
-    conversions key on `(conversion_id, household_id)` so shared-IP fan-out
-    candidates survive (same `conversion_id`, different household). Returns the
-    deduped streams and the total suppressed count for the
+    Exposures key on `exposure_id` (globally unique); resolved conversions key
+    on `(conversion_id, household_id)`, so the suppressed count is re-sends only
+    (a shared-IP fan-out is collapsed separately, see `one_row_per_conversion`).
+    Returns the deduped streams and the total suppressed count for the
     `engine_dedup_suppressed` counter. Pure, so the engine and any offline
     oracle dedup identically."""
     exp, exp_n = dedup_by_id(exposures, lambda e: e.exposure_id)
@@ -81,13 +81,59 @@ def dedup_streams(
 
 @dataclass(frozen=True)
 class Candidate:
-    """One per-candidate attribution result. `last_touch_time` is the credited
-    exposure's `event_time` (None if unattributed), carried so the
-    `conversion_id`-keyed reduction can compare recency across households
-    without re-reading exposures. It is not part of the persisted schema."""
+    """One attribution result. `last_touch_time` is the credited exposure's
+    `event_time` (None if unattributed), carried so reconciliation's cross-
+    household tiebreak (`reconcile.pick_household`) can compare recency without
+    re-reading exposures. It is not part of the persisted schema."""
 
     row: AttributedConversion
     last_touch_time: datetime | None
+
+
+def one_row_per_conversion(
+    resolved: Iterable[ResolvedConversion],
+) -> list[ResolvedConversion]:
+    """Exactly one resolved row per `conversion_id`, in first-arrival order. A
+    shared-IP fan-out (N rows, one per candidate household, same
+    `conversion_id`) collapses to its lowest-`household_id` candidate — a
+    PLACEHOLDER the hot path emits unattributed (`candidate_count > 1` →
+    ambiguous_ip); reconciliation re-enumerates the candidates from the device
+    graph, so the placeholder household is never credited. Exact re-sends that
+    survived upstream (dedup off) collapse too (same bytes). This is what keeps
+    `conversion_id` a safe ReplacingMergeTree sort key (DECISIONS Phase 3 (b))
+    now that the `conversion_id`-keyed reduce is gone (Phase 16)."""
+    by_conv: dict[str, ResolvedConversion] = {}
+    for r in resolved:
+        cur = by_conv.get(r.conversion_id)
+        if cur is None or r.household_id < cur.household_id:
+            by_conv[r.conversion_id] = r  # reassign keeps the first-seen slot
+    return list(by_conv.values())
+
+
+def last_touch(
+    exposures: list[Exposure], conv: ResolvedConversion, window: timedelta
+) -> Candidate:
+    """The leaf. `exposures` are the rows of ONE household. Credit the eligible
+    exposure with the latest `event_time` (ties broken by `exposure_id`); the
+    others become assists. An exposure is eligible when `conv.event_time -
+    window <= exp.event_time <= conv.event_time` (in-window and not after the
+    conversion). No eligible exposure → an unattributed row. Household-local and
+    ambiguity-blind: reconciliation scores each candidate household of an
+    ambiguous conversion with this same function."""
+    lo = conv.event_time - window
+    eligible = [e for e in exposures if lo <= e.event_time <= conv.event_time]
+    if not eligible:
+        return Candidate(_attributed(conv, None, [], attributed=False), None)
+    winner = max(eligible, key=lambda e: (e.event_time, e.exposure_id))
+    # Distinct assist ids, and never the credited exposure itself — set
+    # difference by id, so a *resent* last-touch exposure (same id twice in
+    # `eligible`) cannot survive into its own assists. Pure-function set
+    # semantics, distinct from the Phase-5 seen-set stream dedup.
+    assists = sorted({e.exposure_id for e in eligible} - {winner.exposure_id})
+    return Candidate(
+        _attributed(conv, winner.exposure_id, assists, attributed=True),
+        winner.event_time,
+    )
 
 
 def attribute_household(
@@ -95,34 +141,18 @@ def attribute_household(
     resolved: list[ResolvedConversion],
     window: timedelta,
 ) -> list[Candidate]:
-    """Stage 1 (leaf). `exposures` and `resolved` are the rows of ONE household.
-    Credit each conversion's last-touch: the eligible exposure with the latest
-    `event_time` (ties broken by `exposure_id`); the others become assists. An
-    exposure is eligible when `conv.event_time - window <= exp.event_time <=
-    conv.event_time` (in-window and not after the conversion). No eligible
-    exposure → an unattributed row so reconciliation (Phase 6) can retry."""
-    out: list[Candidate] = []
-    for conv in resolved:
-        lo = conv.event_time - window
-        eligible = [e for e in exposures if lo <= e.event_time <= conv.event_time]
-        if eligible:
-            last_touch = max(eligible, key=lambda e: (e.event_time, e.exposure_id))
-            # Distinct assist ids, and never the credited exposure itself — set
-            # difference by id, so a *resent* last-touch exposure (same id twice
-            # in `eligible`) cannot survive into its own assists. Pure-function
-            # set semantics, distinct from the Phase-5 seen-set stream dedup.
-            assists = sorted(
-                {e.exposure_id for e in eligible} - {last_touch.exposure_id}
-            )
-            out.append(
-                Candidate(
-                    _attributed(conv, last_touch.exposure_id, assists, attributed=True),
-                    last_touch.event_time,
-                )
-            )
-        else:
-            out.append(Candidate(_attributed(conv, None, [], attributed=False), None))
-    return out
+    """The HOT-PATH rule over one household's rows. A conversion whose household
+    is certain (`candidate_count == 1`: device hit or single-owner IP) gets
+    `last_touch`. A shared-IP conversion (`candidate_count > 1`, reason
+    ambiguous_ip) is emitted unattributed WITHOUT probing state — the hot path
+    never guesses a household; reconciliation (Phase 6/16) owns it, alongside
+    the state-miss rows (no in-window exposure)."""
+    return [
+        Candidate(_attributed(conv, None, [], attributed=False), None)
+        if conv.candidate_count > 1
+        else last_touch(exposures, conv, window)
+        for conv in resolved
+    ]
 
 
 def _arrival_key(
@@ -226,48 +256,28 @@ def attribute_household_streaming(
     )
 
 
-def reduce_conversion(candidates: list[Candidate]) -> AttributedConversion:
-    """Stage 2 (leaf). Collapse all candidate rows sharing a `conversion_id` to
-    one winner. An attributed candidate always beats an unattributed one; among
-    attributed, keep the most-recent last-touch exposure — `(last_touch_time,
-    exposure_id)` is already a total order (exposure_id is globally unique, so
-    two candidates crediting different exposures never tie), and `household_id`
-    is a vestigial final tiebreak. If every candidate is unattributed, keep the
-    lowest `household_id`. Byte-identical resend duplicates collapse harmlessly
-    (same row either way)."""
-    attributed = [c for c in candidates if c.row.attributed]
-    if attributed:
-        return max(
-            attributed,
-            key=lambda c: (c.last_touch_time, c.row.exposure_id, c.row.household_id),
-        ).row
-    return min(candidates, key=lambda c: c.row.household_id).row
-
-
 def attribute(
     exposures: Iterable[Exposure],
     resolved: Iterable[ResolvedConversion],
     window: timedelta = HOT_WINDOW,
 ) -> list[AttributedConversion]:
-    """Orchestrate the two leaves over in-memory groups (the offline-replay
-    path). Groups exposures and resolved conversions by `household_id`, runs
-    stage 1 per household, regroups candidates by `conversion_id`, runs stage 2,
-    and returns exactly one attributed record per distinct `conversion_id`,
-    sorted by `conversion_id` for byte-identical output."""
+    """The non-evicting hot-path oracle (offline replay; Phase-5 parity
+    baseline for the evicting engine). One row per `conversion_id`
+    (`one_row_per_conversion`), grouped by `household_id`, the hot rule per
+    household, sorted by `conversion_id` for byte-identical output."""
     exp_by_hh: dict[str, list[Exposure]] = defaultdict(list)
     for e in exposures:
         exp_by_hh[e.household_id].append(e)
     res_by_hh: dict[str, list[ResolvedConversion]] = defaultdict(list)
-    for r in resolved:
+    for r in one_row_per_conversion(resolved):
         res_by_hh[r.household_id].append(r)
 
-    by_conv: dict[str, list[Candidate]] = defaultdict(list)
-    for hid, res_rows in res_by_hh.items():
-        for cand in attribute_household(exp_by_hh.get(hid, []), res_rows, window):
-            by_conv[cand.row.conversion_id].append(cand)
-
-    winners = [reduce_conversion(cands) for cands in by_conv.values()]
-    return sorted(winners, key=lambda r: r.conversion_id)
+    rows = [
+        cand.row
+        for hid, res_rows in res_by_hh.items()
+        for cand in attribute_household(exp_by_hh.get(hid, []), res_rows, window)
+    ]
+    return sorted(rows, key=lambda r: r.conversion_id)
 
 
 def _attributed(
@@ -277,11 +287,19 @@ def _attributed(
     *,
     attributed: bool,
 ) -> AttributedConversion:
+    if attributed:
+        reason = None
+    else:
+        reason = "ambiguous_ip" if conv.candidate_count > 1 else "state_miss"
     return AttributedConversion(
-        **conv.model_dump(),
+        # ResolvedConversion fields only: a reconciliation candidate may arrive as
+        # a hot AttributedConversion row (a subclass) — its old decision columns
+        # must not leak through.
+        **conv.model_dump(include=set(ResolvedConversion.model_fields)),
         exposure_id=exposure_id,
         assists=assists,
         attributed=attributed,
         path="hot",
         processed_at=conv.ingest_time,  # event-derived RMT version (DECISIONS Phase 3)
+        reason=reason,
     )

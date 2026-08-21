@@ -28,7 +28,7 @@ throughput benchmark — that needs continuous follow, which is deferred and own
 no phase (SCALING.md, DECISIONS Phase 5).
 
 Offline, no compose: each tier is generated, resolved, deduped, and drained
-through the real engine (`build_flow` + `run_main`, EOF-driven) in-process — the
+through the real engine (`run_attribution`, EOF-driven drain idiom) in-process — the
 same service-free idiom as the oracle suites. The probe only OBSERVES engine state
 (it reads `engine_join_state_current` from Phase 7 and deep-sizes the retained
 exposures); it never alters engine behavior or the state representation, so the
@@ -41,15 +41,13 @@ import tracemalloc
 from dataclasses import dataclass
 from pathlib import Path
 
-from bytewax.testing import TestingSink, run_main
-
 from producer.config import Profile, load_profile
 from producer.generate import generate
 from resolve.index import GraphIndex
 from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, dedup_streams
-from streaming.dataflow import build_flow
+from streaming.dataflow import run_attribution
 
 REPO_ROOT = Path(__file__).parent.parent
 SCALING_MD = REPO_ROOT / "docs" / "SCALING.md"
@@ -145,11 +143,7 @@ def measure_tier(base: Profile, n_exposures: int) -> CurvePoint:
     metrics.EXPOSURES_EVICTED._value.set(0)
     metrics.reset_join_state_peak()
     tracemalloc.start()
-    run_main(
-        build_flow(
-            exposures, resolved_dd, TestingSink([]), TestingSink([]), ALLOWED_LATENESS
-        )
-    )
+    run_attribution(exposures, resolved_dd, ALLOWED_LATENESS)
     _, tm_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
@@ -224,9 +218,11 @@ def render_block(points: list[CurvePoint]) -> str:
         f"Occupancy (entries in window) scales linearly with the event count, and "
         f"the per-exposure cost is flat across the curve — exactly the "
         f"`exposure_rate × window × per-exposure-bytes` shape. `engine_join_state_"
-        f"current` is the Phase-7 per-household occupancy gauge (one household's "
-        f"retained count, shown beside the whole-engine total); it does not feed the "
-        f"extrapolation. A `tracemalloc` allocation peak is printed by "
+        f"current` is the Phase-7 per-household occupancy gauge — ONE ARBITRARY "
+        f"household's retained count, the last the engine processed (last-household-"
+        f"wins; it moves with iteration order — BACKLOG, Phase-18 trigger), shown "
+        f"beside the whole-engine total; it does not feed the extrapolation and is not "
+        f"pinned against this doc. A `tracemalloc` allocation peak is printed by "
         f"`make scale-curve` as an independent cross-check but is allocation-"
         f"nondeterministic, so it is deliberately not committed here.\n\n"
         f"**Extrapolation** (the per-exposure cost is measured; the rate and the "

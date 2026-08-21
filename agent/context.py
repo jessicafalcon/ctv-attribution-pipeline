@@ -93,7 +93,11 @@ class IpClusterStats(BaseModel):
     ambiguous shared-IP fan-outs — the wrong-household signal (§4.1). This is the
     discriminator that tells the near-miss pair apart: a real lift raises match
     rate with `ip_resolved_fraction` flat; a shared-IP spike raises it with this
-    fraction elevated (DECISIONS Phase 8)."""
+    fraction elevated (DECISIONS Phase 8). Counted over ATTRIBUTED rows: since
+    Phase 16 the hot path never credits an ambiguous shared-IP row, so on a
+    hot-only serving DB `ambiguous_attributed` is structurally 0 and the signal
+    appears only after a reconcile pass has credited those rows (DECISIONS Phase
+    16; `make run` / `make agent-eval` reconcile first)."""
 
     attributed: int
     ip_resolved_attributed: int

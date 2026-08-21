@@ -15,7 +15,7 @@
       "id": 1,
       "type": "stat",
       "title": "Consumer lag (resolve input backlog)",
-      "description": "Batch proxy for consumer lag: messages the resolve consumer cleared at drain start. Alert ConsumerLag fires > 100.",
+      "description": "Batch proxy for consumer lag: conversions the engine's in-process resolve step cleared at drain start (series emitted by the engine process since Phase 16). Alert ConsumerLag fires > 100.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 100 } ] } }, "overrides": [] },
@@ -87,8 +87,8 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Resolve — resolved / consumed / ambiguous",
-      "description": "Resolve stage throughput and shared-IP fan-out (ambiguous).",
+      "title": "Resolve step (in engine) — resolved / consumed / ambiguous",
+      "description": "In-process resolve step throughput and shared-IP fan-out (ambiguous). Ambiguous conversions are deferred to reconciliation, not credited hot (Phase 16).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
@@ -111,6 +111,20 @@
       "targets": [
         { "refId": "A", "expr": "engine_dedup_suppressed_total", "legendFormat": "dedup suppressed", "datasource": { "type": "prometheus", "uid": "prometheus" } },
         { "refId": "B", "expr": "engine_exposures_evicted_total", "legendFormat": "exposures evicted", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Engine — ambiguous deferred (shared-IP → reconciliation)",
+      "description": "engine_conversions_ambiguous_deferred_total: shared-IP conversions the hot path emitted unattributed (reason ambiguous_ip) instead of guessing a household (Phase 16). A subset of unattributed; the reconcile pass credits them. The only hot-path signal that ambiguity is being deferred — the Phase-18 dirty-set precursor.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "engine_conversions_ambiguous_deferred_total", "legendFormat": "ambiguous deferred", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "engine_conversions_unattributed_total", "legendFormat": "unattributed (all reasons)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
       ]
     }
   ]

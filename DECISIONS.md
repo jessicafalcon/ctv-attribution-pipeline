@@ -1,6 +1,8 @@
 # DECISIONS.md — why-not-X log
 
-One entry per non-obvious choice. Newest last.
+One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
+"Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
+Phase 16 sits directly below the fixes.
 
 ## Phase 0
 
@@ -155,7 +157,11 @@ One entry per non-obvious choice. Newest last.
   (ignoring group offsets), so residual/duplicate rows collapse to the same
   bytes and the distinct set equals the golden fixture regardless of history.
 - **Ambiguous shared-IP reconciliation (engine, conversion_id-keyed
-  reduction).** An ambiguous shared-IP conversion fans out in the resolve
+  reduction).** (Superseded by Phase 16: the hot reduce is deleted — an ambiguous
+  conversion is emitted unattributed, `reason='ambiguous_ip'`, and the
+  most-recent-exposure rule below now lives in `reconcile.pick_household`;
+  DECISIONS Phase 16 is authoritative. Kept as the record of why the rule exists.)
+  An ambiguous shared-IP conversion fans out in the resolve
   stage to one `ResolvedConversion` per candidate household, each keyed by
   `household_id` (Phase 2). The engine's join is also keyed by `household_id`,
   so it CANNOT compare exposure recency across candidates partition-locally.
@@ -212,6 +218,9 @@ One entry per non-obvious choice. Newest last.
     resend duplicates). This holds because the batch drain sees all candidate
     rows for a `conversion_id` together; continuous mode does not, without
     windowing (Phase 5). Pairs with the existing continuous-mode BACKLOG rows.
+    (Superseded in mechanism by Phase 16: the one-row-per-key guarantee now
+    comes from `one_row_per_conversion` collapsing the fan-out BEFORE the join;
+    the invariant and its batch-drain dependency are unchanged.)
 
 - **`exposures_landed` is ReplacingMergeTree, not plain MergeTree
   (replay-idempotency).** A plain MergeTree never dedups, so re-running the
@@ -453,6 +462,11 @@ One entry per non-obvious choice. Newest last.
   conversion_id), so reconciliation does NOT re-fan-out (ARCHITECTURE §3.3 reads
   "by household"). Rejected a standalone reconcile matcher (a second implementation
   of last-touch that could drift from the leaf's tie-breaks).
+  (Superseded in part by Phase 16: the shared leaf is now `last_touch` — the
+  household-local, ambiguity-blind half of the old `attribute_household` — and
+  ambiguous candidates ARE re-expanded from the device graph (`expand_candidates`)
+  and settled by `pick_household`; the "one implementation" invariant still holds,
+  the "does NOT re-fan-out" clause does not. DECISIONS Phase 16 is authoritative.)
 
 - **Candidates are hot-*unattributed* rows only: `attributed = 0 AND path =
   'hot'`.** Reconciliation must never re-open a hot-*attributed* row — over a 90d
@@ -1039,6 +1053,147 @@ One entry per non-obvious choice. Newest last.
   weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
   test to make it pass).
 
+## Phase 16
+
+- **Deletion-first: three boxes removed, none added.** The Phase-15 architecture
+  review found three components that were neither a seam for another team nor a
+  scale boundary: the Bytewax dataflow (a `TestingSource` + `fold_final` wrapper
+  over the batch drain), the shared-IP fan-out + `conversion_id`-keyed reduce (two
+  operators to make a fast guess reconciliation could make correctly), and the
+  resolve stage as a consumer + topic + subject (for an in-memory dict lookup).
+  Central constraint, held: **same answer after reconciliation, fewer moving parts**
+  — tiny post-reconcile 52/35/35 and medium 130/92/92 equal the pre-Phase-16 hot
+  numbers; long_delay hot→post recall 0.587→0.973 is unchanged; shared_ip_spike
+  post-reconcile is 69/80 correct / 11 wrong-household, the identical pick the old
+  hot reduce made. Hot numbers moved (tiny 47/35/32, medium 129/92/91) and that is
+  the point: the hot path no longer credits a household it cannot be sure of.
+- **Ambiguous → reconciliation, never a hot guess (the hot rule).** In
+  `streaming/attribute.py` a resolved conversion with `candidate_count > 1` is
+  emitted unattributed (reason ambiguous_ip) without probing state. The leaf was
+  split: `last_touch` (household-local, ambiguity-blind) and `attribute_household`
+  (the hot rule over it). Reconciliation scores each candidate household with the
+  same `last_touch`. Hot-path `caused_wrong_household` is 0 by construction on every
+  profile (shared_ip_spike: was 11). Advertisers get a late correct credit instead
+  of a fast wrong one; shared IPs remain the ONLY wrong-household source, now only on
+  the reconciled path.
+- **One row per `conversion_id` still enters the ReplacingMergeTree — via a
+  placeholder, not a reduce.** `one_row_per_conversion` collapses a fan-out to its
+  lowest-`household_id` candidate (the rule the old reduce used when every candidate
+  was unattributed) before the join. That household is a placeholder, never
+  credited; reconciliation re-enumerates the candidates. This keeps DECISIONS Phase
+  3 (b) true (`conversion_id` a safe RMT sort key) with no second keyed stage.
+  Rejected: emitting N per-household unattributed rows (the RMT survivor would
+  depend on write order — exactly the nondeterminism Phase 2 rejected).
+  **The placeholder rule, written down because a reader WILL see it in
+  ClickHouse:** an unattributed `ambiguous_ip` row carries `household_id` = the
+  **minimum `household_id` among the IP's candidate households** (string order,
+  the same sorted order `GraphIndex.owners_of` emits), `resolution='ip'`,
+  `ambiguous=1`, `candidate_count=N`. It is a deterministic stand-in, not a
+  decision: it was never credited and reconciliation ignores it (candidates are
+  re-enumerated from the graph). tiny example: c-000016 (cc=3, owners h-0000 /
+  h-0001 / h-0005) sits on h-0000.
+- **The tiebreak moved, not rewritten, and lives in ONE place.**
+  `reconcile.pick_household` is the old `reduce_conversion` body — most-recent
+  last-touch exposure, ties `exposure_id` then `household_id`, attributed beats
+  unattributed, all-unattributed → no recovery (stays the hot row). No code
+  symbol named `reduce_conversion` remains — the only source hit is the
+  `pick_household` docstring naming its origin. Deterministic: candidate order is
+  the graph's sorted owners; the max key is a total order.
+- **Reconciliation reads the device graph from the compacted topic, not a landed
+  table.** `expand_candidates` re-resolves an ambiguous placeholder with the
+  engine's own `resolve_one` against `load_graph_index(broker)` — the same loader,
+  the same graph, so `make reconcile-dagster` (Dagster asset passes the same
+  loader) stays byte-identical to `make run`'s pass. The loader lives in
+  `resolve/graph_loader.py` (renamed from `stage.py` at the coherence audit — a
+  file called "stage" for something that is no longer a stage). Cost: the reconcile job now
+  needs the broker, which `make run` and the Dagster runner already have up.
+  Rejected: a `device_graph` ClickHouse table landed by the engine — a new DDL
+  table, a new insert, a new read, and a second copy of the graph to keep equal, in
+  a phase whose point is deleting concepts. Phase 17 (lake of record) may revisit if
+  reconciliation is ever meant to run without the broker.
+- **Resolve stays a module with the Phase-2 signature.** `resolve_one(conversion,
+  graph) -> list[ResolvedConversion]`, `GraphIndex`, `resolve_stream`, `make
+  resolve` (offline replay, the unit proof) and the `resolve_` metrics are all
+  unchanged; the engine calls the function in-process and emits the metrics from
+  its registry (`resolve_input_backlog` etc. now land in `engine.prom`). It becomes
+  a separate service again when the device graph is owned by another team or a
+  vendor; the interface is the function, not the topic. Removed: the
+  `conversions_resolved` topic, its `-value` subject, `resolve.stage`'s producer
+  path, `tests/test_resolve_schema.py` and `tests/integration/test_resolve_stage.py`.
+  No compose change was needed — the topic was created by the stage itself.
+- **Remove Bytewax rather than make it real.** `streaming/dataflow.py`
+  `run_attribution` buckets by household and runs `attribute_household_streaming`
+  directly; `streaming/sink.py` keeps only the row builders; inserts are chunked
+  synchronous `client.insert`. The evicting-vs-non-evicting oracle parity (Phase 5)
+  holds byte-for-byte — it was always a property of `attribute.py`. `bytewax` is
+  out of `pyproject.toml`, `uv.lock` and the CLAUDE.md allowlist (the first package
+  removal). Continuous follow is a framework choice (Bytewax proper vs Flink) for
+  Phase 17+, chosen with fresh eyes; SCALING.md's mapping table is retained as the
+  port target, re-headed "Engine construct here".
+- **Fixture re-freeze: the one sanctioned exception, one commit, signed off.**
+  `fixtures/tiny/expected/attributed.jsonl`: every line gains the new `reason`
+  key (null on the 47 attributed rows, `state_miss` on 3, `ambiguous_ip` on 5),
+  and exactly 5 DECISIONS change (c-000014, 16, 25, 41, 42 — the five shared-IP
+  conversions: `attributed` false, `exposure_id` null, `assists` empty,
+  `household_id` the placeholder); the other 50 decisions and
+  `conversions_resolved.jsonl` are byte-identical; producer output is untouched
+  (`test_fixtures.py` reproducibility unchanged). The developer reviewed the diff
+  before it was committed. Fixtures are read-only again from here.
+- **`reason` column added (developer ruling) — the spec's premise was wrong and
+  was reported, then resolved by adding the column.** The spec named "a new
+  `reason` value alongside the existing state-miss reason"; no such field existed.
+  The first cut shipped without it (the implicit contract `attributed=0 and
+  path='hot' and candidate_count>1`) and reported the gap; the developer ruled to
+  make it explicit NOW so reconciliation, the agent's probes and Phase 18's
+  dirty-set never re-derive it, and so tiny is re-frozen once. Shape:
+  `AttributedConversion.reason: Literal["ambiguous_ip", "state_miss"] | None =
+  None` (null when attributed — a reconciled credit clears it), DDL column
+  `reason Nullable(String)` plus an idempotent `alter table … add column if not
+  exists` for volumes created before it, sink column appended, `_attributed` sets
+  it from `candidate_count`. `_read_candidates` reads it and raises if it disagrees
+  with `candidate_count` (a writer bypassing the engine). Zero-diff pin
+  clarified: it covers producer OUTPUT (topics, truth links, profiles);
+  `AttributedConversion` is the engine's table model that happens to live in
+  `producer/models.py`. Schema-registry note: `AttributedConversion` is not a
+  registered subject and `ResolvedConversion` no longer is, so this change
+  re-registers nothing — the `ResolvedConversion` / `schemas.py` docstrings were
+  cleaned in the same commit (the old "Topic: conversions_resolved").
+- **The agent's shared-IP discriminator is now reconciliation-dependent — an
+  accepted consequence, said plainly.** `agent/readers.py` computes
+  `ambiguous_attributed` / `ip_resolved_fraction` over `attributed = 1` rows. Since
+  the hot path never credits an ambiguous row, on a hot-only DB (`make run-hot`
+  then `make context`) `ambiguous_attributed` is **structurally 0** and
+  `device_graph_mismatch` is undetectable until a reconcile pass has run. `make
+  run` and `make agent-eval` reconcile first, so the signal returns there — but its
+  meaning shifted from "a hot fan-out landed here" to "reconciliation credited it
+  here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
+  new field — agent contract pinned); one sentence in `agent/context.py` says it.
+  Trigger to re-validate the agent on this: BACKLOG 49 (`make agent-eval` re-run,
+  API tokens, ask first).
+- **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
+  match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
+  the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the
+  rule still discriminates (long_delay 0.696 fires, tiny stays silent) and a band
+  retuned to a single profile's new number is a worse rule; revisit in Phase 18
+  when the alert rules are recaptured with the cost/ops levers.
+- **The promtool alert fixture was recaptured; tiny now trips `RestatementMagnitude`
+  and the fixture says so.** `make metrics-capture` on clean tiny and long_delay
+  stacks, then `gen_alert_fixtures.py`: long_delay's hot attributed 83 → 80 and
+  restatement 27.0 → 41.4 (three more recoveries), tiny's attributed 52 → 47 and
+  restatement 0 → 12.86 — tiny's reconcile pass now credits its 5 deferred shared-IP
+  conversions, a real ROAS restatement above the 1.0 threshold. The honest fixture
+  claim is therefore "long_delay fires all four; tiny fires RestatementMagnitude
+  only" (the other three still discriminate). Rejected: keeping the pre-Phase-16
+  fixture values (CI green but the provenance would no longer reproduce from a
+  capture) and capturing tiny hot-only (the restatement series comes from the
+  reconcile registry). RESULTS "Observability — alert rules" and the CLAUDE.md
+  `test-alerts` line updated to match.
+- **`make test-int-shared-ip` runs `run-hot` and the test runs the reconcile pass
+  itself.** Pinning both sides (hot 61/19/0 → post 69/11) from one stack is not
+  possible after `make run` — FINAL collapses the hot rows under the reconciled
+  versions — so the target stops at the hot path and `test_context.py` calls
+  `reconcile.run()` between its two assertions. `test-int-agent` keeps `make run`.
+
 ## Phase 15
 
 - **The runbook is a retrospective incident log by choice, not a forward playbook.**
@@ -1251,7 +1406,8 @@ One entry per non-obvious choice. Newest last.
     long_delay DB) — a guard that greenlights its own failure. A marker is unambiguous
     across the shared id space.
   - **Why a marker table, not a field in the sink:** the live stages
-    (`resolve.stage`/`streaming.dataflow`/`reconcile.reconcile`) do not take `--profile`
+    (`streaming.dataflow`/`reconcile.reconcile`; `resolve.stage` too, until Phase 16
+    folded it into the engine) do not take `--profile`
     — the engine reads from topics and never knows the profile name. Threading it in
     would touch the byte-identical path; a standalone `write_marker.py` step in the
     populate targets keeps the engine untouched.

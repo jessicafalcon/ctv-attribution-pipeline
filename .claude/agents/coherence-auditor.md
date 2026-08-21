@@ -28,9 +28,9 @@ docker-compose.yml).
 Pieces built at different times that no longer agree:
 - Pydantic event models vs registered JSON Schemas vs what resolve/engine
   consume vs ClickHouse DDL columns vs reporting SQL vs probe result types.
-- Topic names, keys, and partitioning (exposures/conversions_resolved keyed
-  household_id; conversions keyed device_id) consistent across producer,
-  compose, resolve, engine.
+- Topic names, keys, and partitioning (exposures keyed household_id;
+  conversions keyed device_id; device_graph compacted — two event topics since
+  Phase 16, resolve runs in-process) consistent across producer, compose, engine.
 - Makefile targets vs CI steps vs CLAUDE.md → Commands — same names, same
   behavior?
 - Spec DONE commands that no longer run as written.

@@ -67,22 +67,20 @@ PRODUCER (seeded)
   ├─ conversions keyed device_id ──────┐             │
   └─ truth links (hidden from pipeline)│             │
                                        v             v
-REDPANDA           topics: exposures | conversions | conversions_resolved
+REDPANDA           topics: exposures | conversions
                    + schema registry (JSON Schema per topic)
                    + device_graph (compacted topic, reference data)
                                        │
-                                       v
-RESOLVE STAGE      conversions → device graph lookup → household_id(s)
-                   republish to conversions_resolved, keyed by household_id
-                   ambiguous IP matches fan out (one record per candidate)
-                                       │
           exposures ───────────────────┤
                                        v
-ATTRIBUTION ENGINE (Bytewax)   hot path: stateful join, both sides keyed by household_id
-                   ├─ then a conversion_id-keyed reduction collapses ambiguous
-                   │  shared-IP fan-outs to one most-recent-exposure row
+ATTRIBUTION ENGINE (deterministic batch attributor, Phase 16 — no stream framework)
+                   ├─ resolve step, in-process: conversion → device graph lookup →
+                   │  household_id (device hit, else IP fallback; shared IP = ambiguous)
+                   ├─ hot path: join both sides on household_id
                    ├─ hot window state (configurable, default 7d of exposures)
                    ├─ last-touch match, all candidates recorded as assists
+                   ├─ ambiguous shared-IP conversion → UNATTRIBUTED (reason ambiguous_ip),
+                   │  never a hot guess; reconciliation owns it
                    ├─ dedup on exposure_id / conversion_id (seen-set; TTL'd under continuous follow)
                    ├─ watermarks + allowed lateness (minutes–hours late)
                    └─ emits attributed + unattributed conversion records
@@ -94,8 +92,10 @@ CLICKHOUSE         attributed_conversions  (ReplacingMergeTree, key conversion_i
                    report_snapshots        (reported_at × period → metrics; enables restatements)
                                        ^
 RECONCILIATION JOB (periodic)          │
-                   unattributed conversions still inside long window (up to 90d)
-                   → match against exposures_landed → write corrected rows
+                   unattributed conversions still inside long window (up to 90d):
+                   state-misses → match against exposures_landed;
+                   ambiguous_ip → candidate households from device_graph, most-recent
+                   exposure across them wins (the ONE tiebreak) → write corrected rows
                    → refresh rollups → write new report snapshot
                                        │
 REPORTING          ROAS / CPA / CVR / site-visit rate
@@ -103,7 +103,7 @@ REPORTING          ROAS / CPA / CVR / site-visit rate
                    naive (full-scan) vs optimized (rollup) benchmark
 
 ──── off the critical path ──────────────────────────────────────────────
-PROMETHEUS ← consumer lag, resolve ambiguity rate, join-state size, match rate,
+PROMETHEUS ← input backlog, resolve ambiguity rate, join-state size, match rate,
              watermark lag, insert batch size, reconciliation volume
      │
 GRAFANA (dashboards)      ALERTMANAGER (deterministic thresholds)
@@ -133,41 +133,51 @@ matches. Then emits two streams.
 - **Knobs**: throughput; late-arrival injector (delta between `event_time` and
   `ingest_time`, from minutes to days); duplicate injector; shared-IP fraction;
   unknown-device fraction (conversions from devices the graph never learned —
-  guest/roommate/id churn — forcing the resolve stage's IP fallback);
+  guest/roommate/id churn — forcing the resolve step's IP fallback);
   co-view multiplier per genre; fault profiles (§4.3).
 
 Schemas are pydantic models; JSON Schemas are generated from them and registered.
 
 #### Redpanda
 
-Three event topics plus one reference topic. `exposures` and
-`conversions_resolved` are both partitioned by `household_id` so matchable events
-land in the same partition. `conversions` is partitioned by `device_id`.
-`device_graph` is a compacted topic holding the current graph. Each topic has a
-JSON Schema in the registry; the producer and every consumer validate against it.
-Partition count is a documented scaling lever.
+Two event topics plus one reference topic. `exposures` is partitioned by
+`household_id`; `conversions` by `device_id` (the engine re-keys it to
+`household_id` in-process at the resolve step). `device_graph` is a compacted
+topic holding the current graph. Each topic has a JSON Schema in the registry;
+the producer and every consumer validate against it. Partition count is a
+documented scaling lever (SCALING.md notes the household-keyed re-partition a
+continuous multi-partition engine would need). Until Phase 16 a third topic,
+`conversions_resolved`, carried the resolved records between a separate resolve
+consumer and the engine; it bought nothing for an in-memory dict lookup and was
+removed (DECISIONS Phase 16).
 
-#### Resolve stage
+#### Resolve step (in-process, `resolve/`)
 
-A small consumer. For each conversion, look up `device_id` in the graph; if found,
-emit one record keyed by that household. If not found, fall back to IP; if the IP
-maps to several households, emit one record per candidate with an ambiguity flag
-and candidate count. The engine treats ambiguous candidates as lower priority:
-device-graph match beats IP match; among IP matches, prefer the household with the
-most recent exposure inside the window, else drop. Because each candidate is keyed
-by its own `household_id`, the household-keyed join cannot compare candidates
-partition-locally — the engine applies this "most recent exposure" preference in a
-`conversion_id`-keyed reduction *after* the join (see §3.3 engine and DECISIONS.md).
-The graph is loaded from the compacted topic at startup and refreshed on change. Metrics: resolve rate,
-ambiguity rate, fan-out factor.
+A pure function the engine calls per conversion — `resolve_one(conversion,
+graph) -> list[ResolvedConversion]` — with the device graph loaded once from the
+compacted topic at startup. Look up `device_id` in the graph; if found, one
+record for that household. If not found, fall back to IP; if the IP maps to
+several households, one record per candidate with an ambiguity flag and
+candidate count (the shared-IP fan-out). Device-graph match beats IP match.
+The hot path does **not** pick among ambiguous candidates (Phase 16): a
+`candidate_count > 1` conversion is emitted unattributed (reason ambiguous_ip)
+and reconciliation — which holds every exposure — applies the most-recent-
+exposure rule across the candidate households. `resolve/` stays a module with
+the Phase-2 signature; it becomes a separate service again when the device
+graph is owned by another team or a vendor — the interface is the function,
+not a topic. Metrics (`resolve_`, emitted from the engine process): resolve
+rate, ambiguity rate, fan-out factor, input backlog.
 
-#### Attribution engine (Bytewax, hot path)
+#### Attribution engine (hot path)
 
-Bytewax dataflow joining `exposures` and `conversions_resolved` on `household_id`.
-Read the phrases below ("when a conversion arrives", "kept for the hot window")
-as the semantics of a **batch drain** with event-time windowing, not a live
-continuous follow: the engine drains both topics once and runs an arrival-ordered,
-watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
+A deterministic batch attributor (`streaming/dataflow.py` drives the pure core
+in `streaming/attribute.py` directly; no stream framework since Phase 16 —
+DECISIONS). It drains `exposures` and `conversions`, resolves in-process, and
+joins on `household_id`. Read the phrases below ("when a conversion arrives",
+"kept for the hot window") as the semantics of a **batch drain** with event-time
+windowing, not a live continuous follow: the engine drains both topics once and
+runs an arrival-ordered, watermark-gated, evicting pass per household (§8
+gotcha, DECISIONS Phase 5).
 
 - **Hot window state**: exposures kept for the hot window (default 7 days),
   evicted by watermark. Window-state size is the central scaling constraint.
@@ -175,13 +185,14 @@ watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
   household within the attribution window; credit the last one (**last-touch**),
   record the others as **assists**, emit an attributed record. If none, emit an
   **unattributed** record so reconciliation can retry later.
-- **Ambiguous reduction**: the household-keyed join is followed by a second,
-  `conversion_id`-keyed stage. An ambiguous shared-IP conversion arrives as one
-  candidate row per household (resolve fan-out); this reduction keeps the
-  candidate with the most recent last-touch exposure (ties: `exposure_id` then
-  `household_id`), so exactly one row per `conversion_id` reaches ClickHouse.
-  `processed_at` is the ReplacingMergeTree version, never the candidate
-  tiebreaker (DECISIONS.md, Phase 2).
+- **Ambiguous deferral** (Phase 16): the hot path attributes only when the
+  household is certain — a device hit or a single-owner IP. A shared-IP
+  conversion (`candidate_count > 1`) is collapsed to one placeholder row
+  (lowest `household_id`) and emitted **unattributed, reason ambiguous_ip** —
+  never a hot guess. Exactly one row per `conversion_id` still reaches
+  ClickHouse, so `conversion_id` stays a safe ReplacingMergeTree key;
+  `processed_at` is the version, never a tiebreaker (DECISIONS Phase 2/3/16).
+  The cross-household most-recent-exposure pick lives in reconciliation only.
 - **Dedup**: on `exposure_id` and `conversion_id`. The Phase-5 batch drain keeps
   a full seen-set (it already holds the whole topic in memory); TTL'd eviction
   sized to the max plausible duplicate delay is the continuous-follow target, not
@@ -196,7 +207,10 @@ watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
   which happens when arrival lateness exceeds the tolerance — and is then picked
   up by reconciliation. (Phase-5 `medium` keeps late ≤ `allowed_lateness`, so it
   has no state-misses; the path is exercised by tests and, end to end, Phase 6.)
-- Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`).
+- Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`);
+  an unattributed record also carries `reason` (`ambiguous_ip` | `state_miss`,
+  null once credited) — the explicit contract reconciliation and the agent read
+  instead of re-deriving it from `candidate_count` (Phase 16).
 
 #### ClickHouse (serving layer)
 
@@ -220,10 +234,17 @@ watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
 #### Reconciliation job (periodic)
 
 Selects unattributed conversions whose `event_time` is still within the long
-window (up to 90 days), joins them against `exposures_landed` by household and
-window, writes corrected rows with `path=reconciled`, triggers a rollup refresh,
-and writes a new report snapshot. This is the second attribution path and it is
-what makes a 90-day window possible without 90 days of processor state.
+window (up to 90 days) — two kinds, told apart by `reason`: **state-misses** (certain household, causing
+exposure aged out of the hot window), matched against `exposures_landed` by
+household and window; and **ambiguous_ip** rows (Phase 16), whose candidate
+households are re-enumerated from the compacted `device_graph` with the engine's
+own resolver, scored with the same last-touch leaf per household, and settled by
+the most-recent-exposure rule (ties: `exposure_id`, then `household_id`) — the
+one implementation of that tiebreak (`reconcile.pick_household`). Writes
+corrected rows with `path=reconciled`, triggers a rollup refresh, and writes a
+new report snapshot. This is the second attribution path and it is what makes a
+90-day window possible without 90 days of processor state; advertisers get a
+late correct credit instead of a fast wrong one.
 
 #### Reporting
 
@@ -236,7 +257,7 @@ change worked.
 
 #### Observability
 
-Prometheus metrics from producer, resolve stage, engine, and reconciliation job.
+Prometheus metrics from producer, engine (including the in-process resolve step's `resolve_` series), and reconciliation job.
 Grafana dashboards committed as JSON. Alertmanager rules for the deterministic
 conditions (lag, watermark stall, match rate outside band, restatement magnitude).
 Alerts fire a webhook to the agent, which is the second-stage triage.
@@ -245,13 +266,13 @@ Alerts fire a webhook to the agent, which is the second-stage triage.
 
 | Decision | Chosen | Why |
 |---|---|---|
-| Where device-graph resolution happens | Dedicated stage → third topic | Mirrors real systems; independently observable and testable; makes fan-out explicit |
+| Where device-graph resolution happens | In-process map step inside the engine (`resolve/` module, Phase-2 function signature) — was a dedicated stage + third topic until Phase 16 | A separate consumer/topic/subject bought nothing for an in-memory dict lookup; the seam worth keeping is the function, not the topic. Becomes a service again when the graph is owned by another team or a vendor (DECISIONS Phase 16) |
 | Attribution rule | Last-touch, assists recorded | Industry default; multi-touch becomes a query, not a re-run |
 | Long window | Hot path (7d) + periodic reconciliation | 90d of processor state is infeasible at any real throughput |
 | Write model | ReplacingMergeTree + scheduled rollup refresh | Simplest model that stays correct under replays and corrections |
 | Restatements | `report_snapshots` with `reported_at` | Advertisers care; agent's late-arrival detector needs it |
 | Co-viewing | Read-time multiplier | Keeps the join clean |
-| Stream processor | Bytewax | Pure Python, real state/window primitives, fast iteration; Flink mapping in SCALING.md |
+| Stream processor | None — a deterministic batch attributor in plain Python (Bytewax removed, Phase 16) | The Bytewax dataflow was a `TestingSource` + `fold_final` wrapper over the batch drain; the framework did no work. Continuous follow on a real framework (Bytewax proper vs Flink) is a Phase-17+ decision; SCALING.md keeps the Flink mapping as the port target |
 
 ### 3.5 Out of scope for v1
 
@@ -344,7 +365,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 
 | Capability | Where the project delivers it |
 |---|---|
-| Streaming at scale | Two-stream Redpanda ingestion, resolve stage, stateful Bytewax engine |
+| Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 17+; SCALING.md Flink mapping) |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; local Iceberg exposure lake + DuckDB-over-Iceberg reconcile source + Dagster day-partitioned orchestration (Phase 12). Object store / REST catalog / Spark-Trino compute are the SCALING port |
 | OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
@@ -357,21 +378,21 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 ## 6. Stack and repository
 
 **Stack.** Python 3.12 (uv, ruff, pytest, pydantic). Redpanda (Kafka API, schema
-registry). Bytewax. ClickHouse. Prometheus, Grafana, Alertmanager. Anthropic Python
-SDK. Docker Compose. No JVM.
+registry). ClickHouse. Prometheus, Grafana, Alertmanager. Anthropic Python SDK.
+Docker Compose. No JVM, no stream framework (Bytewax removed in Phase 16).
 
 **Repository shape.**
 
 ```
 producer/        generator, device graph, profiles/, schemas
-resolve/         conversion → household resolution stage
-streaming/       Bytewax attribution dataflow
+resolve/         conversion → household resolution (in-process map step + offline replay)
+streaming/       attribution engine: pure core + batch-drain driver
 reconcile/       periodic long-window matcher, rollup refresh, snapshots
 clickhouse/      DDL, users, migrations
 queries/         reporting SQL + benchmark harness
 observability/   prometheus, grafana dashboards (JSON), alert rules
 agent/           collectors, hypothesis catalog, probe registry, loop, eval
-docs/            ARCHITECTURE.md  PHASES.md  SCALING.md  RESULTS.md
+docs/            ARCHITECTURE.md  PHASES.md  SCALING.md  RESULTS.md  RUNBOOK.md
 tests/           unit; tests/integration/ against compose
 fixtures/        golden tiny-profile data and expected outputs
 README.md        problem → architecture → results, reads like a design doc
@@ -400,17 +421,19 @@ handled.*
   so librdkafka occasionally logs a one-line `Connect to ipv6#[::1]`
   connect-refused before falling back to IPv4. Benign; clients default to
   `127.0.0.1` to minimize it.
-- **Bytewax's Kafka source follows forever; the Phase 3 engine is a batch
-  drain.** `bytewax.connectors.kafka` is an unbounded source (it never signals
-  end-of-input), so a dataflow built on it would not terminate on the finite
-  seeded stream. The engine instead drains both topics to memory once
-  (EOF-driven, the same idiom as the resolve stage) and feeds a bounded
-  `TestingSource`, so `fold_final` flushes at end-of-input and the process
-  exits. This also guarantees every candidate for a `conversion_id` is present
-  when the reduction runs (DECISIONS Phase 3 (b)). Windowing (watermarks,
-  allowed lateness, eviction) lands in Phase 5 **on the batch drain**; moving to
-  continuous Kafka follow remains deferred (no phase owns it yet — the two
-  resolve BACKLOG rows re-defer on exactly that trigger).
+- **The engine is a batch drain, not a continuous follow.** (Phase 3 origin:
+  Bytewax's Kafka source follows forever — `bytewax.connectors.kafka` is an
+  unbounded source that never signals end-of-input, so a dataflow built on it
+  would not terminate on the finite seeded stream. The engine instead drained
+  both topics to memory once and fed a bounded `TestingSource`.) Phase 16 removed
+  Bytewax entirely — the wrapper only regrouped lists — and the engine now drains
+  the two event topics start→end once (EOF-driven, `common.kafka.drain`) and runs
+  the pure core in-process. The drain also guarantees every fan-out row for a
+  `conversion_id` is present when `one_row_per_conversion` collapses it
+  (DECISIONS Phase 3 (b)). Windowing (watermarks, allowed lateness, eviction)
+  landed in Phase 5 **on the batch drain**; continuous Kafka follow and the
+  framework to run it on (Bytewax proper vs Flink) are a Phase-17+ decision — the
+  two resolve BACKLOG rows re-defer on exactly that trigger.
 - **The seeded duplicate is timestamp-identical to its original, so batch dedup
   is a full seen-set, not TTL'd.** The duplicate injector re-appends the *same
   payload* (`producer/generate.py` `_with_duplicates`); the later arrival slot is

@@ -1,4 +1,4 @@
-"""Live round-trip: seed → resolve → engine → ClickHouse, against the compose
+"""Live round-trip: seed → engine (resolve in-process) → ClickHouse, against the compose
 stack. Skipped when the broker or ClickHouse is unreachable, so `make test`
 stays green offline; runs under `make test-int` (CI from Phase 3).
 
@@ -12,6 +12,7 @@ Two assertions:
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -19,11 +20,9 @@ from confluent_kafka import Consumer
 
 from clickhouse.client import connect, count_exposures_final, read_attributed_decisions
 from producer.seed import main as seed_main
-from resolve.stage import run_batch as resolve_batch
 from streaming.dataflow import run_engine
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
-REGISTRY = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
 FIXTURES = Path(__file__).parent.parent.parent / "fixtures" / "tiny"
 EXPECTED = FIXTURES / "expected" / "attributed.jsonl"
 
@@ -53,17 +52,24 @@ def _expected_decisions() -> dict[str, tuple]:
             bool(r["attributed"]),
             tuple(r["assists"]),
             r["path"],
+            r["reason"],
         )
     return out
 
 
 def test_engine_final_matches_expected_fixture() -> None:
     seed_main(["--profile", "tiny"])
-    resolve_batch(BROKER, REGISTRY)
     run_engine(BROKER)
 
     got = read_attributed_decisions(connect())
     assert got == _expected_decisions()
+    # The Phase-16 reason column round-trips: 47 credited (null), 3 state-misses,
+    # 5 shared-IP deferrals — read back live, not only written.
+    assert Counter(d[5] for d in got.values()) == {
+        None: 47,
+        "state_miss": 3,
+        "ambiguous_ip": 5,
+    }
 
 
 def test_exposures_landed_idempotent_over_two_runs() -> None:

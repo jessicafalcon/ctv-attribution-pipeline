@@ -1,11 +1,18 @@
 """Attribution leaves on hand-built input — last-touch, assists, window edge,
-unattributed, the conversion_id-keyed reduction, and the resent-exposure
-dedup of assists. No services."""
+unattributed, the hot-path ambiguous_ip deferral (Phase 16: a shared-IP
+conversion is never guessed hot), one-row-per-conversion collapse, and the
+resent-exposure dedup of assists. No services."""
 
 from datetime import UTC, datetime, timedelta
 
 from producer.models import Exposure, ResolvedConversion
-from streaming.attribute import HOT_WINDOW, attribute, attribute_household
+from streaming.attribute import (
+    HOT_WINDOW,
+    attribute,
+    attribute_household,
+    last_touch,
+    one_row_per_conversion,
+)
 
 T = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 H = timedelta(hours=1)
@@ -61,6 +68,7 @@ def test_last_touch_credits_latest_exposure_rest_assist() -> None:
     ]
     (c,) = attribute_household(exps, [_res("c-1", "h", T)], HOT_WINDOW)
     assert c.row.attributed and c.row.exposure_id == "e-3"
+    assert c.row.reason is None
     assert c.row.assists == ["e-1", "e-2"]
     assert c.last_touch_time == T - H
 
@@ -86,7 +94,7 @@ def test_window_boundaries_inclusive_lower_and_conversion() -> None:
 
 def test_unattributed_when_no_eligible_exposure() -> None:
     (c,) = attribute_household([], [_res("c-1", "h", T)], HOT_WINDOW)
-    assert c.row.attributed is False
+    assert c.row.attributed is False and c.row.reason == "state_miss"
     assert c.row.exposure_id is None and c.row.assists == []
     assert c.last_touch_time is None
 
@@ -111,36 +119,64 @@ def test_resent_last_touch_absent_from_own_assists() -> None:
     assert c.row.assists == ["e-1"] and "e-2" not in c.row.assists
 
 
-# ---- stage 2: the conversion_id-keyed reduction (via attribute) -------------
+# ---- the hot-path ambiguity rule (Phase 16) ----------------------------------
 
 
-def test_reduction_keeps_most_recent_last_touch_across_households() -> None:
+def test_ambiguous_conversion_is_deferred_not_guessed() -> None:
+    # Both candidate households have an in-window exposure; the old reduce would
+    # have credited h-b (most recent). The hot path now emits ONE unattributed
+    # placeholder (lowest household_id) and leaves the pick to reconciliation.
     exps = [_exp("e-a", "h-a", T - 2 * H), _exp("e-b", "h-b", T - H)]
     fanout = [
-        _res("c-1", "h-a", T, ambiguous=True, candidate_count=2),
         _res("c-1", "h-b", T, ambiguous=True, candidate_count=2),
+        _res("c-1", "h-a", T, ambiguous=True, candidate_count=2),
     ]
     (row,) = attribute(exps, fanout)
-    assert row.household_id == "h-b" and row.exposure_id == "e-b"
+    assert row.attributed is False and row.exposure_id is None
+    assert row.household_id == "h-a"  # placeholder: lowest household_id
+    assert row.ambiguous and row.candidate_count == 2
+    assert row.reason == "ambiguous_ip"
+    assert row.path == "hot" and row.processed_at == T
 
 
-def test_reduction_attributed_beats_unattributed() -> None:
-    exps = [_exp("e-a", "h-a", T - H)]  # only h-a has an exposure
-    fanout = [
-        _res("c-1", "h-a", T, ambiguous=True, candidate_count=2),
+def test_ambiguous_never_probes_state_even_with_one_exposure() -> None:
+    exps = [_exp("e-a", "h-a", T - H)]
+    (c,) = attribute_household(
+        exps, [_res("c-1", "h-a", T, ambiguous=True, candidate_count=2)], HOT_WINDOW
+    )
+    assert c.row.attributed is False and c.last_touch_time is None
+
+
+def test_last_touch_leaf_is_ambiguity_blind() -> None:
+    # Reconciliation scores each candidate household with the leaf directly.
+    exps = [_exp("e-a", "h-a", T - H)]
+    c = last_touch(
+        exps, _res("c-1", "h-a", T, ambiguous=True, candidate_count=2), HOT_WINDOW
+    )
+    assert c.row.attributed and c.row.exposure_id == "e-a"
+
+
+def test_single_candidate_ip_fallback_attributes_as_before() -> None:
+    conv = _res("c-1", "h", T)
+    conv = conv.model_copy(update={"resolution": "ip"})  # unique-IP fallback
+    (row,) = attribute([_exp("e-1", "h", T - H)], [conv])
+    assert row.attributed and row.exposure_id == "e-1"
+
+
+def test_one_row_per_conversion_collapses_fanout_to_lowest_household() -> None:
+    rows = [
+        _res("c-2", "h-z", T, ambiguous=True, candidate_count=3),
         _res("c-1", "h-b", T, ambiguous=True, candidate_count=2),
-    ]
-    (row,) = attribute(exps, fanout)
-    assert row.household_id == "h-a" and row.attributed
-
-
-def test_reduction_all_unattributed_keeps_lowest_household() -> None:
-    fanout = [
-        _res("c-1", "h-b", T, ambiguous=True, candidate_count=2),
         _res("c-1", "h-a", T, ambiguous=True, candidate_count=2),
+        _res("c-2", "h-a", T, ambiguous=True, candidate_count=3),
+        _res("c-3", "h-q", T),
     ]
-    (row,) = attribute([], fanout)
-    assert row.household_id == "h-a" and row.attributed is False
+    out = one_row_per_conversion(rows)
+    assert [(r.conversion_id, r.household_id) for r in out] == [
+        ("c-2", "h-a"),  # first-arrival slot kept, lowest household chosen
+        ("c-1", "h-a"),
+        ("c-3", "h-q"),
+    ]
 
 
 def test_duplicate_resolved_row_collapses_to_one() -> None:
