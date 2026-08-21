@@ -81,10 +81,13 @@ def _score(credited: dict[str, tuple[str, str]]):
 
 # Pinned live numbers for long_delay (seed 6), like medium's in test_engine_
 # hardening.py: changing producer/profiles/long_delay.json means updating these in
-# the SAME change, never silently. Hot pass leaves 29 caused misses + 3 organic
-# misses; reconciliation recovers the 29 caused (all to the correct household) and
-# leaves the 3 organics (no in-90d exposure) unmatched.
-_RECONCILED = 29
+# the SAME change, never silently. Hot pass leaves 29 caused state-misses + 3
+# ambiguous_ip deferrals (2 caused, 1 organic — Phase 16) + 3 organic misses;
+# reconciliation recovers the 29 caused (all to the correct household) and picks
+# a household for the 3 ambiguous (the 2 caused land on the wrong shared-IP
+# household, exactly as the old hot reduce did), leaving the 3 organics (no
+# in-90d exposure) unmatched. POST numbers are unchanged from before Phase 16.
+_RECONCILED = 32
 _HOT_CREDITED, _HOT_CORRECT = LONG_DELAY_HOT.credited, LONG_DELAY_HOT.correct  # 44/75
 _POST_CREDITED, _POST_CORRECT = (
     LONG_DELAY_POST.credited,
@@ -102,8 +105,9 @@ def test_recovery_lifts_recall_and_writes_reconciled_rows() -> None:
     hot = _score(_credited("hot"))
     post = _score(_credited(None))
     # Hot pass: genuine misses (recall < 1). Reconciliation recovers the caused
-    # ones to their correct household → recall rises; the only remaining gap is
-    # the 2 pre-existing shared-IP wrong-household hot attributions (not misses).
+    # state-misses to their correct household → recall rises; the only remaining
+    # gap is the 2 shared-IP conversions whose reconcile pick lands on the wrong
+    # household (was a hot guess before Phase 16; same outcome, later).
     assert (hot.credited, hot.household_correct, hot.truth_links) == (
         _HOT_CREDITED,
         _HOT_CORRECT,
@@ -136,8 +140,8 @@ def test_restatement_shows_the_metric_rising_between_snapshots() -> None:
 
 
 def test_second_pass_is_idempotent() -> None:
-    # A fresh reconciliation pass recovers nothing new (the 29 recoverable caused
-    # misses were recovered by `make run`; only the 3 unmatched organics remain
+    # A fresh reconciliation pass recovers nothing new (the 29 caused misses + 3
+    # ambiguous were recovered by `make run`; only the 3 unmatched organics remain
     # candidates), and leaves the reconciled count and the restatement unchanged.
     before_restate = restatement.run()
 
@@ -170,7 +174,7 @@ def test_hot_attributed_rows_are_untouched_by_a_pass() -> None:
     # set is byte-identical across a pass (the direct guard the spec asked for; the
     # idempotence test covers it only indirectly via candidates==3).
     before = _hot_attributed_rows()
-    assert len(before) == _HOT_CREDITED  # 83 hot-attributed rows
+    assert len(before) == _HOT_CREDITED  # 80 hot-attributed rows
     reconcile.run(connect())
     assert _hot_attributed_rows() == before
 

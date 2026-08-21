@@ -2,8 +2,10 @@
 against the frozen tiny fixture. Skipped when services are unreachable, so
 `make test` stays green offline; runs under `make test-int` (CI from Phase 3).
 
-- eval: household-grain precision 0.673 (35/52), recall 1.000 (35/35), scored
-  from ClickHouse FINAL joined against the truth side file in the harness.
+- eval: household-grain precision 0.681 (32/47), recall 0.914 (32/35) on the hot
+  path (tests/pins.py — the 3 caused shared-IP conversions are deferred to
+  reconciliation, Phase 16), scored from ClickHouse FINAL joined against the
+  truth side file in the harness.
 - report: the per-campaign metric grid, VALUES pinned (a wrong-ratio SQL bug
   that still used FINAL + nullIf would pass a shape-only check).
 """
@@ -27,12 +29,16 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 TRUTH = REPO_ROOT / "data" / "truth" / "tiny" / "truth_links.jsonl"
 
 # per-campaign pins (DECISIONS Phase 4 / specs/phase-4.md); FINAL-deduped
-# denominators (150 exposures, not the 164 raw rows)
+# denominators (150 exposures, not the 164 raw rows). HOT grid: since Phase 16
+# the 5 shared-IP conversions (1 + 2 + 2 per campaign) are deferred to
+# reconciliation, so conversions/purchases/revenue here exclude them; the
+# post-reconcile grid (make run) equals the pre-Phase-16 grid
+# (16/24/12 conversions, roas 96.4263/128.9527/74.3440 — see make restate).
 EXPECTED_REPORT = {
     #            spend  exps conv pur revenue  roas      cpa    cvr     svr
-    "camp-00": (4.48, 47, 16, 7, 431.99, 96.4263, 0.6400, 0.3404, 0.1915),
-    "camp-01": (4.86, 56, 24, 9, 626.71, 128.9527, 0.5400, 0.4286, 0.2679),
-    "camp-02": (4.36, 47, 12, 5, 324.14, 74.3440, 0.8720, 0.2553, 0.1489),
+    "camp-00": (4.48, 47, 15, 7, 431.99, 96.4263, 0.6400, 0.3191, 0.1702),
+    "camp-01": (4.86, 56, 22, 8, 592.95, 122.0062, 0.6075, 0.3929, 0.2500),
+    "camp-02": (4.36, 47, 10, 4, 268.05, 61.4794, 1.0900, 0.2128, 0.1277),
 }
 
 
@@ -80,7 +86,7 @@ def test_eval_reproduces_pinned_accuracy() -> None:
     )
     assert report.precision == pytest.approx(TINY_HOT.precision)
     assert report.recall == pytest.approx(TINY_HOT.recall)
-    assert report.organic_credited == 17
+    assert report.organic_credited == 15
     assert report.exact_exposure_correct == 3
 
 
