@@ -3,7 +3,10 @@
 .PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
 
 PROFILE ?= tiny
-SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
+# resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
+# comment on its own line: make keeps the whitespace before an inline `#` as part
+# of the value, which turned `--source "fixtures  "` into an argparse error.
+SOURCE ?= fixtures
 
 # Load ANTHROPIC_API_KEY from .env for the token targets ONLY (agent-run,
 # agent-eval). `uv run --env-file` injects into the child process it spawns, not
@@ -197,7 +200,7 @@ test-int-medium:
 	$(MAKE) down
 	$(MAKE) up
 	$(MAKE) seed PROFILE=medium
-	$(MAKE) run-hot
+	$(MAKE) run-hot PROFILE=medium
 	uv run pytest tests/integration/test_engine_hardening.py
 
 # Phase-6 live reconciliation proof on a CLEAN long_delay-only stack, isolated by
