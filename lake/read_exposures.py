@@ -72,13 +72,17 @@ def _exposure(r: tuple) -> Exposure:
 
 
 def read_exposures_by_household(
-    household_ids: set[str], min_event_time: datetime | None = None
+    household_ids: set[str],
+    min_event_time: datetime | None = None,
+    max_event_time: datetime | None = None,
 ) -> dict[str, list[Exposure]]:
     """Bulk-load the given households' exposures from the lake in one scan,
     deduped on exposure_id, grouped by household — the DuckDB/Iceberg counterpart
-    of reconcile.sources.ClickHouseExposureSource.read_for. `min_event_time`
-    (optional) day-partition
-    prunes exposures provably outside every candidate's window."""
+    of reconcile.sources.ClickHouseExposureSource.read_for. `min_event_time` /
+    `max_event_time` (optional, half-open) day-partition-prune exposures provably
+    outside every candidate's window; with the households all in ONE bucket this
+    is the bucket-aligned partitioned read of the Phase-17 reconcile (DuckDB
+    prunes on both transforms — ARCHITECTURE §8)."""
     if not household_ids:
         return {}
     con = duckdb.connect()
@@ -97,6 +101,9 @@ def read_exposures_by_household(
     if min_event_time is not None:
         predicates.append("event_time >= ?")
         params.append(min_event_time)
+    if max_event_time is not None:
+        predicates.append("event_time < ?")
+        params.append(max_event_time)
     where = " and ".join(predicates)
     rows = con.execute(
         f"select distinct {_SELECT_COLS} "

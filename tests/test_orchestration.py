@@ -52,11 +52,14 @@ def test_load_assets_are_day_partitioned_downstream_of_the_lake() -> None:
         assert raw.partitions_def is None
 
 
-def test_reconcile_reads_loaded_candidates_and_lake_exposures() -> None:
+def test_reconcile_reads_candidates_and_exposures_from_the_lake() -> None:
+    # Day-partitioned (bucket loop inside — DECISIONS Phase 17); both raw tables
+    # are lineage inputs, plus the loaded serving state it stamps its version from.
     assert reconciled_conversions.partitions_def is DAY_PARTITIONS
     deps = reconciled_conversions.asset_deps[reconciled_conversions.key]
-    assert clickhouse_attributed_conversions.key in deps  # candidates (ClickHouse)
+    assert attributed_iceberg.key in deps  # candidates (lake, argMax current)
     assert exposures_iceberg.key in deps  # exposures (lake via DuckDB)
+    assert clickhouse_exposures_landed.key in deps  # reconciled_at base
 
 
 def test_report_finalize_follows_recovery_and_reload() -> None:

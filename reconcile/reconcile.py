@@ -28,8 +28,21 @@ Two kinds of candidate (Phase 16):
   tiebreak, moved here from the deleted hot-path reduce. Reconciliation owns it
   because it holds every exposure; a late correct credit beats a fast wrong one.
 
-Determinism: a pure function of ClickHouse FINAL state, the fixed window, and a
-data-derived `reconciled_at` (no wall clock) — so a replay/re-run converges.
+Phase 17 — the pass reads the LAKE and is bucket-aligned (spec D2): candidates
+are the current hot-unattributed rows of `raw.attributed_conversions` for a day
+(`lake_candidates`); the ambiguous ones are exploded over `candidate_households`
+BEFORE bucketing; each bucket's exploded rows read ONLY `raw.exposures`
+partitions in `[day − 90d, day]` with the same `bucket(household_id)`
+(`recover_day`); the leaf scores every row and `pick_household` reduces by
+`conversion_id` ACROSS buckets — one implementation, unchanged. The
+architecture's claim is no fan-out on the HOT path; batch fan-out with the full
+90-day picture is cheap and correct. Corrections are appended to the lake and the
+touched days reloaded; the snapshots/rollup (serving-derived) stay on ClickHouse.
+
+Determinism: a pure function of the lake's current rows, the fixed window, and a
+data-derived `reconciled_at` (no wall clock) — so a replay/re-run converges. Gate
+(tests/test_bucketed_reconcile.py): the bucketed pass == the single in-memory
+pass, byte for byte, on long_delay and shared_ip_spike.
 """
 
 import argparse
@@ -40,10 +53,12 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
+from lake.iceberg_catalog import bucket_of
 from lake.land_attributed import land_attributed
+from lake.read_attributed import read_current
+from lake.read_exposures import read_exposures_by_household
 from producer.models import AttributedConversion, Exposure, ResolvedConversion
 from reconcile import metrics, rollup
-from reconcile.sources import ClickHouseExposureSource, ExposureSource
 from streaming.attribute import (
     Candidate,
     candidate_households_by_conversion,
@@ -187,17 +202,7 @@ def _read_candidates(client: Client) -> list[AttributedConversion]:
         "where attributed = 0 and path = 'hot' order by conversion_id"
     ).result_rows
     for r in rows:
-        expected = "ambiguous_ip" if r[11] > 1 else "state_miss"
-        if r[17] is not None and r[17] != expected:
-            raise ValueError(
-                f"{r[0]}: reason={r[17]!r} disagrees with candidate_count={r[11]}"
-            )
-        if r[11] > 1 and not r[18]:
-            raise PrePhase17RowError(
-                f"{r[0]}: ambiguous (candidate_count={r[11]}) but "
-                "candidate_households is empty — this DB predates Phase 17; "
-                "re-populate it (make run / make run-hot) before reconciling"
-            )
+        _check_candidate(r[0], r[11], r[17], r[18])
     return [
         AttributedConversion(
             conversion_id=r[0],
@@ -222,6 +227,68 @@ def _read_candidates(client: Client) -> list[AttributedConversion]:
         )
         for r in rows
     ]
+
+
+def _check_candidate(cid: str, candidate_count: int, reason, households) -> None:
+    expected = "ambiguous_ip" if candidate_count > 1 else "state_miss"
+    if reason is not None and reason != expected:
+        raise ValueError(
+            f"{cid}: reason={reason!r} disagrees with candidate_count={candidate_count}"
+        )
+    if candidate_count > 1 and not households:
+        raise PrePhase17RowError(
+            f"{cid}: ambiguous (candidate_count={candidate_count}) but "
+            "candidate_households is empty — this DB predates Phase 17; "
+            "re-populate it (make run / make run-hot) before reconciling"
+        )
+
+
+def lake_candidates(day: str | None = None) -> list[AttributedConversion]:
+    """The current hot-unattributed rows of raw.attributed_conversions
+    (argMax processed_at — a conversion already corrected by an earlier pass is
+    not a candidate), for one event_time `day` or the whole lake. The Phase-17
+    counterpart of `_read_candidates`; same reason/candidate-set checks."""
+    rows = [
+        r
+        for r in read_current(days=[day] if day else None)
+        if not r.attributed and r.path == "hot"
+    ]
+    for r in rows:
+        _check_candidate(
+            r.conversion_id, r.candidate_count, r.reason, r.candidate_households
+        )
+    return rows
+
+
+def candidate_days() -> list[str]:
+    """The event_time days holding reconcile candidates, from the data."""
+    return sorted({c.event_time.date().isoformat() for c in lake_candidates()})
+
+
+def recover_day(
+    day: str, reconciled_at: datetime, window: timedelta = LONG_WINDOW
+) -> list[AttributedConversion]:
+    """The bucket-aligned pass for one day (spec D2). Explode the day's
+    candidates over their persisted candidate households; group the exploded
+    rows by `bucket(household_id)`; for each bucket read ONLY that bucket's
+    raw.exposures partitions in `[day − window, day]` — the state-miss channel is
+    the single-row case of the same read, no explode; then the leaf + the
+    cross-bucket `pick_household` reduce (`reconcile`). Rows are never written
+    here; the caller lands + reloads."""
+    start = datetime.fromisoformat(day).replace(tzinfo=UTC)
+    end = start + timedelta(days=1)
+    expanded = expand_candidates(lake_candidates(day))
+    by_bucket: dict[int, set[str]] = {}
+    for r in expanded:
+        by_bucket.setdefault(bucket_of(r.household_id), set()).add(r.household_id)
+    exposures: dict[str, list[Exposure]] = {}
+    for b in sorted(by_bucket):
+        exposures.update(
+            read_exposures_by_household(
+                by_bucket[b], min_event_time=start - window, max_event_time=end
+            )
+        )
+    return reconcile(expanded, exposures, window, reconciled_at)
 
 
 def _max_ingest(client: Client) -> datetime:
@@ -259,26 +326,6 @@ def _restatement_abs_delta(client: Client) -> float:
     return float(rows[0][0])
 
 
-def recover(
-    candidates: list[AttributedConversion],
-    exposure_source: ExposureSource,
-    window: timedelta,
-    reconciled_at: datetime,
-) -> list[AttributedConversion]:
-    """Recover the given candidates: explode ambiguous ones over their persisted
-    candidate households, read every candidate household's exposures from the
-    source, run the matcher, return the recovered rows — WITHOUT writing them.
-    The caller lands them in the lake (`land_attributed`) and loads the touched
-    days into ClickHouse (Phase 17). The recovery half of a pass, shared by
-    `run` (all candidates, ClickHouse source) and the Dagster day-partitioned
-    asset (one day's candidates, Iceberg source). `reconciled_at` is passed in
-    (not recomputed) so every day of a partitioned run stamps the same version —
-    identical to a single full pass."""
-    expanded = expand_candidates(candidates)
-    exposures = exposure_source.read_for(expanded, window)
-    return reconcile(expanded, exposures, window, reconciled_at)
-
-
 def finalize(client: Client) -> None:
     """Global finalize, run once per reconciliation (not per day): snapshot the
     pre/post reports and refresh the rollup. reported_at is computed server-side
@@ -291,30 +338,23 @@ def finalize(client: Client) -> None:
     rollup.refresh_campaign_hourly(client, RECONCILE_DELTA_MS)
 
 
-def run(
-    client: Client | None = None,
-    exposure_source: ExposureSource | None = None,
-) -> dict[str, int]:
-    """One reconciliation pass: recover ALL hot misses (state-miss and
-    ambiguous_ip) over the long window, land the corrections in the lake, load
-    the touched days into ClickHouse, then finalize (snapshots + rollup refresh).
-    Returns counts for logging/tests.
-
-    `exposure_source` selects where the candidate households' exposures are read
-    from: the default ClickHouse source keeps `make run` byte-identical; the
-    Dagster asset passes an Iceberg/DuckDB source (Phase 12). No broker: the
-    candidate households come from the rows themselves (Phase 17). Everything
-    else — candidates, snapshots, rollup, insert — stays on ClickHouse."""
+def run(client: Client | None = None) -> dict[str, int]:
+    """One reconciliation pass over the lake: for every candidate day run the
+    bucket-aligned `recover_day` (state-miss and ambiguous_ip), append the
+    corrections to raw.attributed_conversions, reload the touched days into
+    ClickHouse, then finalize (snapshots + rollup refresh). No broker. Returns
+    counts for logging/tests. `make reconcile-dagster` runs the same functions
+    one day-partition at a time."""
     apply_ddl()
     client = client or connect()
-    exposure_source = exposure_source or ClickHouseExposureSource(client)
 
     # Imported here: the offline suites import this module without Dagster.
     from orchestration.load import materialize_load
 
     reconciled_at = reconciled_at_for(_max_ingest(client))
-    candidates = _read_candidates(client)
-    recovered = recover(candidates, exposure_source, LONG_WINDOW, reconciled_at)
+    days = candidate_days()
+    candidates = lake_candidates()
+    recovered = [r for day in days for r in recover_day(day, reconciled_at)]
     materialize_load(land_attributed(recovered))
     finalize(client)
 

@@ -30,9 +30,11 @@ from reconcile.reconcile import (
     LONG_WINDOW,
     _max_ingest,
     _read_candidates,
+    candidate_days,
     expand_candidates,
     reconcile,
     reconciled_at_for,
+    recover_day,
 )
 from reconcile.sources import ClickHouseExposureSource, IcebergExposureSource
 from streaming.dataflow import EngineRun, land_run, run_engine
@@ -137,6 +139,12 @@ def test_reconcile_output_is_byte_identical_across_sources() -> None:
     # row-content identical: same recovered set, same order, same processed_at
     # version, same last-touch exposure_id + assists (+ candidate_households).
     assert [r.model_dump() for r in ch] == [r.model_dump() for r in ice]
+    # … and the Phase-17 bucket-aligned lake pass (the product path) equals both.
+    bucketed = sorted(
+        (r for d in candidate_days() for r in recover_day(d, reconciled_at)),
+        key=lambda r: r.conversion_id,
+    )
+    assert [r.model_dump() for r in bucketed] == [r.model_dump() for r in ch]
 
 
 def test_dagster_pass_writes_the_same_reconciled_rows() -> None:

@@ -10,7 +10,6 @@ only orchestrates (DECISIONS Phase 12).
 
 import argparse
 
-from clickhouse_connect.driver.client import Client
 from dagster import DagsterInstance, materialize
 
 from clickhouse.apply import apply as apply_ddl
@@ -22,13 +21,7 @@ from orchestration.assets import (
     reconciled_report,
 )
 from orchestration.load import materialize_load
-from reconcile.reconcile import _read_candidates
-
-
-def _candidate_days(client: Client) -> list[str]:
-    """The distinct conversion-event-time days that hold hot-miss candidates —
-    the only partitions worth materializing."""
-    return sorted({c.event_time.date().isoformat() for c in _read_candidates(client)})
+from reconcile.reconcile import candidate_days
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -40,14 +33,14 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     apply_ddl()
-    client = connect()
+    connect()  # fail early if the serving layer is down
     instance = DagsterInstance.ephemeral()
 
     assert materialize(
         [exposures_iceberg, attributed_iceberg], instance=instance
     ).success
 
-    days = [args.partition] if args.partition else _candidate_days(client)
+    days = [args.partition] if args.partition else candidate_days()
     touched: set[str] = set()
     for day in days:
         result = materialize(

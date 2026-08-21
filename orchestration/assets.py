@@ -13,7 +13,7 @@ Graph:
   exposures_iceberg ─┐                      ┌─ clickhouse_exposures_landed[day]
   attributed_iceberg ┴ (observe the lake) ──┴─ clickhouse_attributed_conversions[day]
                                                 │
-  reconciled_conversions[day]  (candidates from ClickHouse, exposures from the lake,
+  reconciled_conversions[day]  (candidates + exposures from the lake, bucket-aligned,
                                 corrections APPENDED to raw.attributed_conversions)
                                                 │ → reload the touched days
   reconciled_report  (global finalize: snapshots + rollup)
@@ -35,14 +35,12 @@ from lake.iceberg_catalog import ensure_attributed, ensure_exposures
 from lake.land_attributed import land_attributed
 from lake.load_serving import load_attributed_day, load_exposures_day
 from reconcile.reconcile import (
-    LONG_WINDOW,
     _max_ingest,
-    _read_candidates,
     finalize,
+    lake_candidates,
     reconciled_at_for,
-    recover,
+    recover_day,
 )
-from reconcile.sources import IcebergExposureSource
 
 
 def _day_keys(start: date, end: date) -> list[str]:
@@ -102,25 +100,29 @@ def clickhouse_attributed_conversions(
 
 
 @asset(
-    deps=[exposures_iceberg, clickhouse_attributed_conversions],
+    deps=[exposures_iceberg, attributed_iceberg, clickhouse_exposures_landed],
     partitions_def=DAY_PARTITIONS,
 )
 def reconciled_conversions(context: AssetExecutionContext) -> MaterializeResult:
-    """Recover the hot-misses whose conversion event_time falls on this partition
-    day, sourcing their households' exposures from the Iceberg lake via DuckDB,
-    and APPEND the corrections to raw.attributed_conversions (path=reconciled).
-    `reconciled_at` is the global, data-derived version (max ingest_time + 1s,
-    stable across days), so a per-day backfill stamps exactly what a single full
-    pass would — the byte-identical guarantee. The touched days are reported so
-    the runner reloads them into ClickHouse before the finalize."""
+    """The bucket-aligned reconcile for this partition day (spec D2): the day's
+    current hot-unattributed rows from raw.attributed_conversions, exploded over
+    their candidate households, joined bucket-locally against raw.exposures in
+    [day − 90d, day], reduced across buckets by `pick_household` — and the
+    corrections APPENDED to raw.attributed_conversions (path=reconciled).
+    `reconciled_at` is the global, data-derived version (max ingest_time over
+    the loaded serving state + 1s, stable across days), so a per-day backfill
+    stamps exactly what a single full pass would — the byte-identical
+    guarantee. The touched days are reported so the runner reloads them into
+    ClickHouse before the finalize. (Day-partitioned with the bucket loop
+    inside, not day × bucket: the cross-bucket reduce needs every bucket's
+    scores in one place, and an IO manager to carry them between runs is
+    machinery the laptop tier does not need — DECISIONS Phase 17.)"""
     day = context.partition_key
     client = connect()
     apply_ddl()
     reconciled_at = reconciled_at_for(_max_ingest(client))
-    candidates = [
-        c for c in _read_candidates(client) if c.event_time.date().isoformat() == day
-    ]
-    recovered = recover(candidates, IcebergExposureSource(), LONG_WINDOW, reconciled_at)
+    candidates = lake_candidates(day)
+    recovered = recover_day(day, reconciled_at)
     touched = land_attributed(recovered)
     return MaterializeResult(
         metadata={

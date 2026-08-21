@@ -197,6 +197,16 @@ def bucket_count_of(table: Table) -> int:
     return int(table.properties[BUCKET_PROPERTY])
 
 
+_BUCKET = BucketTransform(BUCKET_COUNT).transform(StringType())
+
+
+def bucket_of(household_id: str) -> int:
+    """The partition bucket a household's rows live in — pyiceberg's own
+    `bucket[N]` hash (murmur3 of the UTF-8 string mod N), so Python routes an
+    exploded candidate row to exactly the bucket the writer put its exposures in."""
+    return _BUCKET(household_id)
+
+
 def metadata_path(table: Table) -> str:
     """Local filesystem path to the table's current metadata JSON (strip the
     file:// scheme pyiceberg stores) — what DuckDB's iceberg_scan takes."""
