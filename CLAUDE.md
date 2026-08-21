@@ -403,7 +403,7 @@ the `specs/` file where one was cited.
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
 - `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
 - `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
-- `fix/eval-profile-guard` (PR #NN) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/lake-land/metrics-capture), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
+- `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/lake-land/metrics-capture), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
 
 No API keys in repo.
 
