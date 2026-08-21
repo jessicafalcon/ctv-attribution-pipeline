@@ -26,6 +26,7 @@ from resolve.resolver import resolve_stream
 from streaming import metrics
 from streaming.attribute import ALLOWED_LATENESS, attribute, dedup_streams
 from streaming.dataflow import build_flow
+from tests.pins import MEDIUM_HOT
 
 
 @pytest.fixture(scope="module")
@@ -91,9 +92,13 @@ def test_engine_pr_equals_oracle_pr_clean_baseline(medium) -> None:
     ro = _score(oracle, medium["stream"], medium["exps"])
     re = _score(engine, medium["stream"], medium["exps"])
     assert (re.precision, re.recall) == (ro.precision, ro.recall)  # clause 1
-    assert re.recall == 1.0 and re.caused_wrong_household == 0  # clean, no faults
-    assert re.precision == 92 / 130  # organic last-touch over-credit only
-    assert (re.credited, re.truth_links, re.household_correct) == (130, 92, 92)
+    assert re.recall == MEDIUM_HOT.recall and re.caused_wrong_household == 0  # clean
+    assert re.precision == MEDIUM_HOT.precision  # organic last-touch over-credit only
+    assert (re.credited, re.truth_links, re.household_correct) == (
+        MEDIUM_HOT.credited,
+        MEDIUM_HOT.truth,
+        MEDIUM_HOT.correct,
+    )
 
 
 def test_eviction_runs_on_medium(medium) -> None:
