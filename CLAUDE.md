@@ -395,9 +395,8 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-All phases **0–15 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
+All phases **0–16 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
 Phases 12–16 are post-plan extensions (not in the original PHASES.md 0–11).
-Phase 16 (simplify the core) is on branch `phase-16-simplify-core`, in review.
 Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
 `BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
 the `specs/` file where one was cited.
@@ -420,13 +419,14 @@ the `specs/` file where one was cited.
 | 13 | 08-20 | #20 | *post-plan* — query cost levers on `bench_large`: projection-by-`event_time` WINS, FINAL-avoidance / skip-index DOCUMENTED NEGATIVE, PREWHERE WINS; lever DDL only inside `make cost-levers`, gate-0 golden untouched | PASSED (BLOCKER + drift cleared on re-check) | `phase-13-query-cost-levers` |
 | 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
 | 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
-| 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | in review | `phase-16-simplify-core` |
+| 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
 - `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
 - `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
 - `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/lake-land/metrics-capture), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
+- `fix/make-resolve-source` (PR #29) — two pre-existing Makefile bugs surfaced by the Phase-16 review: bare `make resolve` exited 2 (`SOURCE ?= fixtures  # …` carried trailing spaces into `--source`), and `test-int-medium` stamped `eval_meta=tiny` over a medium DB (ran `run-hot` without `PROFILE=medium`, so the BACKLOG-43 guard could not fire). `tests/test_makefile.py` guards both offline via `make -n`.
 - `fix/docs-accuracy-pin` (PR #26) — single-sourced the household-grain accuracy pins into `tests/pins.py` (tiny/medium/long_delay), referenced by the 5 test suites, plus `tests/test_docs_accuracy_pins.py` asserting the README/RESULTS accuracy TABLE cells equal them; closes BACKLOG 36. Table-scoped — prose citations deferred to a new BACKLOG row.
 
 No API keys in repo.
