@@ -1,8 +1,14 @@
-"""Canonical household-grain accuracy pins — the SINGLE source of truth for the
-precision/recall numbers asserted by the live integration suites AND printed in
-the docs accuracy tables (README.md, docs/RESULTS.md). Change a number here and
-both the live assertion and the docs guard (tests/test_docs_accuracy_pins.py)
-move together, so the docs can never silently drift from the pins (BACKLOG 36).
+"""Canonical household-grain accuracy pins — the single source of truth for the
+precision/recall numbers asserted by the test suites (integration
+`test_eval_report` / `test_engine_hardening` / `test_reconcile`, offline
+`test_accuracy` / `test_medium_parity`) AND printed in the docs accuracy TABLES
+(README.md, docs/RESULTS.md). Change a number here and the live assertions and the
+docs-table guard (tests/test_docs_accuracy_pins.py) move together (BACKLOG 36).
+
+Scope: the docs guard covers the accuracy TABLES only. Numbers restated in doc
+PROSE (the RESULTS "why the numbers moved" section, the lakehouse 0.9733 line,
+PHASES, README run-comments) are NOT reachable by a table parser — keep those in
+sync by hand (a prose-citation guard is a deferred BACKLOG option).
 
 The COUNTS are the pinned facts; precision and recall derive from them exactly as
 `accuracy/score.py` computes them, so the pin and the scored report agree bit for

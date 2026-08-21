@@ -3,7 +3,8 @@ integration numbers. Parses the household-grain accuracy table in README.md and
 docs/RESULTS.md and asserts every cell equals the single source of truth in
 `tests/pins.py` (which the live integration suites also assert against). A pin
 change moves this guard in lockstep; a docs typo or a README/RESULTS drift fails
-here. Pure/offline — no services.
+here. Scope: the accuracy TABLES only — numbers restated in doc prose are not
+covered (see tests/pins.py). Pure/offline — no services.
 """
 
 from pathlib import Path
@@ -28,7 +29,7 @@ ROWS = [
     ),
 ]
 
-_DASHES = {"—", "–", "-"}  # long_delay precision is not reported
+_DASHES = {"—", "–"}  # em / en dash only; long_delay precision is not reported
 
 
 def _table_rows(path: Path) -> list[list[str]]:

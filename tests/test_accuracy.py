@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from accuracy.score import format_report, score
+from tests.pins import TINY_HOT
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "tiny"
 
@@ -70,11 +71,13 @@ def test_score_pins_tiny_fixture_numbers() -> None:
     credited, truth, exposure_household = _fixture_inputs()
     r = score(credited, truth, exposure_household, profile="tiny")
 
-    assert r.credited == 52
-    assert r.truth_links == 35
-    assert r.household_correct == 35
-    assert r.precision == pytest.approx(35 / 52)  # 0.6731
-    assert r.recall == pytest.approx(1.0)
+    assert (r.credited, r.truth_links, r.household_correct) == (
+        TINY_HOT.credited,
+        TINY_HOT.truth,
+        TINY_HOT.correct,
+    )
+    assert r.precision == pytest.approx(TINY_HOT.precision)  # 0.673
+    assert r.recall == pytest.approx(TINY_HOT.recall)
     assert r.caused_missed == 0
     assert r.caused_wrong_household == 0
     # organic over-credit is the sole driver of tiny's sub-1.0 precision, NOT
