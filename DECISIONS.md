@@ -1237,4 +1237,27 @@ One entry per non-obvious choice. Newest last.
   its long_delay canonical demo (:176) — pre-existing since Phase 6, carved into a
   separate `fix/eval-demo-profile` PR (not folded into this lakehouse phase, per the
   "phase reveals an earlier-phase change → its own fix PR" rule); the durable fail-loud
-  guard is a BACKLOG row (next `accuracy/` touch).
+  guard shipped as `fix/eval-profile-guard` (BACKLOG 43 — see the entry below).
+- **Eval profile/DB-mismatch guard: a marker table, not a conversion_id-subset check
+  (`fix/eval-profile-guard`, BACKLOG 43).** `make eval` scored `data/truth/<PROFILE>/`
+  against the ClickHouse serving rows regardless of which profile populated them, so a
+  bare `make eval` after seeding a non-tiny profile printed a meaningless number
+  (~0.17) silently. Guard = a single-row `eval_meta` marker the populate path stamps
+  with its profile, asserted `== --profile` in `accuracy/run.py` (loud
+  `ProfileMismatchError` on mismatch or missing).
+  - **Why not a conversion_id-subset check ("truth ⊆ DB"):** ids are numbered `c-NNNNNN`
+    from 0, so a smaller profile's set is a subset of a larger one's (tiny ⊆ long_delay).
+    A subset check therefore false-passes the exact original bug (tiny truth vs a
+    long_delay DB) — a guard that greenlights its own failure. A marker is unambiguous
+    across the shared id space.
+  - **Why a marker table, not a field in the sink:** the live stages
+    (`resolve.stage`/`streaming.dataflow`/`reconcile.reconcile`) do not take `--profile`
+    — the engine reads from topics and never knows the profile name. Threading it in
+    would touch the byte-identical path; a standalone `write_marker.py` step in the
+    populate targets keeps the engine untouched.
+  - **Why a versionless single-row RMT keyed on a constant, no timestamp:** the marker
+    must be deterministic (off the golden-compared path, so gate-0 stays byte-identical)
+    and replay-idempotent. Constant key `k=0` makes every write replace the one row; no
+    timestamp avoids the §8 clickhouse-connect tz round-trip and keeps re-runs identical.
+  - Stamped by every populate target that leaves a scoreable DB (`run`, `run-hot`,
+    `lake-land`, `metrics-capture`); `reconcile-dagster` inherits `lake-land`'s stamp.
