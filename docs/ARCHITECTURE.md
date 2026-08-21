@@ -210,6 +210,10 @@ watermark-gated, evicting pass in the pure core (§8 gotcha, DECISIONS Phase 5).
   MV), never an insert-triggered summing MV, so corrections cannot double-count.
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
   `reported_at`, which makes restatements queryable.
+- `eval_meta`: a single-row marker (the profile string) the populate path stamps
+  so `make eval` refuses to score a profile whose truth file does not match the
+  populated DB (BACKLOG 43). OFF the golden-compared path — not attribution data,
+  no version/timestamp, so it is deterministic and gate-0 stays byte-identical.
 - Sort keys chosen for the query pattern (`campaign_id`, `hour`).
 - A SELECT-only user exists for the agent.
 

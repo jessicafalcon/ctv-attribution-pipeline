@@ -85,6 +85,12 @@ and byte-identical.
   `assert_profile_marker(marker: str | None, profile: str) -> None` (extracted so
   it needs no DB) — raises on `None` (missing) and on mismatch, returns on match.
   Pins all three cases. Keeps the guard logic offline-testable.
+- **Live integration** (`tests/integration/test_eval_guard_live.py`, under
+  `make test-int`): 4 tests pinning the DB-glue path the unit test bypasses —
+  match passes, long_delay-vs-tiny mismatch exits loud, the no-marker None-path
+  fails loud (points eval at a db without `eval_meta` — no destructive truncate),
+  and `write_marker` idempotency (re-stamp → `count() FINAL == 1`). CI-safe on the
+  shared tiny stack.
 - **Live proof** (acceptance, needs a stack): after `make up && make seed
   PROFILE=tiny && make run`, `make eval PROFILE=tiny` passes and `make eval
   PROFILE=long_delay` exits loudly (marker=tiny). Demonstrates the guard fires on
