@@ -105,7 +105,8 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
-- `make eval` — attribution precision/recall vs truth for the last profile
+- `make eval` — attribution precision/recall vs truth for the given `PROFILE`
+  (default `tiny`)
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
 - `make restate` — restatement: each campaign's metric as reported
   pre-reconciliation vs now (`report_snapshots` FINAL); run after `make run`
@@ -173,7 +174,7 @@ Canonical clean-state demos:
   `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
 - Reconciliation + restatement (where the long tail earns its keep — recall
   0.587→0.973, ROAS restated up):
-  `make down && make up && make seed PROFILE=long_delay && make run && make eval && make report && make restate`
+  `make down && make up && make seed PROFILE=long_delay && make run && make eval PROFILE=long_delay && make report && make restate`
 
 ## Event model facts (from ARCHITECTURE.md; update if empirical findings differ)
 
