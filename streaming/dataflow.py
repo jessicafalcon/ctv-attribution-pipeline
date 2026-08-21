@@ -38,7 +38,10 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from common.kafka import drain
-from producer.models import Exposure, ResolvedConversion
+from producer.models import Conversion, Exposure, ResolvedConversion
+from resolve import metrics as resolve_metrics
+from resolve.resolver import resolve_one
+from resolve.stage import load_graph_index
 from streaming import metrics
 from streaming.attribute import (
     ALLOWED_LATENESS,
@@ -50,7 +53,7 @@ from streaming.attribute import (
 from streaming.sink import ClickHouseSink, insert_attributed, insert_exposures
 
 EXPOSURES_TOPIC = "exposures"
-RESOLVED_TOPIC = "conversions_resolved"
+CONVERSIONS_TOPIC = "conversions"
 _BATCH = 256  # items per source poll → fewer, larger ClickHouse inserts
 
 
@@ -146,9 +149,28 @@ def build_flow(
     return flow
 
 
+def resolve_conversions(
+    broker: str, conversions: list[Conversion]
+) -> list[ResolvedConversion]:
+    """The in-process resolve step (Phase 16): load the graph from the compacted
+    topic, map every conversion through `resolve_one` (device hit, IP fallback,
+    shared-IP fan-out), emit the `resolve_` metrics from this process. Same
+    function, same metrics as the old stage — minus the topic."""
+    index = load_graph_index(broker)
+    # Backlog the consumer started behind by: the whole topic, since the drain
+    # assigns from OFFSET_BEGINNING each pass (batch proxy for consumer lag).
+    resolve_metrics.observe_backlog(len(conversions))
+    resolved: list[ResolvedConversion] = []
+    for conv in conversions:
+        rows = resolve_one(conv, index)
+        resolve_metrics.observe(rows)
+        resolved.extend(rows)
+    return resolved
+
+
 def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
-    """Drain the two topics, apply the DDL, run the engine to completion.
-    Returns row counts for logging/tests.
+    """Drain the two event topics, resolve conversions in-process, apply the
+    DDL, run the engine to completion. Returns row counts for logging/tests.
 
     `lake_land` (make lake-land only; off for make run/CI) dual-writes the SAME
     deduped exposure list this run feeds to ClickHouse into the Iceberg lake, so
@@ -160,10 +182,13 @@ def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
         Exposure.model_validate_json(v)
         for v in _drain_topic(broker, EXPOSURES_TOPIC, "engine-exposures")
     ]
-    resolved_raw = [
-        ResolvedConversion.model_validate_json(v)
-        for v in _drain_topic(broker, RESOLVED_TOPIC, "engine-resolved")
-    ]
+    resolved_raw = resolve_conversions(
+        broker,
+        [
+            Conversion.model_validate_json(v)
+            for v in _drain_topic(broker, CONVERSIONS_TOPIC, "engine-conversions")
+        ],
+    )
     # Dedup (feature 1): drop exact re-sends via a full seen-set before the join
     # and before landing. Full set, not a TTL — the drain holds the whole topic
     # and the seeded duplicate is timestamp-identical (DECISIONS Phase 5).

@@ -2,8 +2,9 @@
 of (conversion, graph) only, so the same input is byte-identical every run.
 
 Priority: device-graph hit beats IP fallback. An IP owned by several
-households fans out to one record per candidate (ambiguous); the engine
-(Phase 3+) breaks the tie by most-recent exposure in the window.
+households fans out to one record per candidate (ambiguous); the hot path
+defers such a conversion unattributed and reconciliation breaks the tie by
+most-recent exposure across the candidates (Phase 16).
 """
 
 from collections.abc import Iterable

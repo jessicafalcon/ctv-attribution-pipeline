@@ -32,7 +32,7 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Hot path against the compose stack: seed → resolve → engine → ClickHouse,
+      # Hot path against the compose stack: seed → engine (resolve in-process) → ClickHouse,
       # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
       # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
       # reconciliation pass would over-credit tiny's long-tail organics and shift

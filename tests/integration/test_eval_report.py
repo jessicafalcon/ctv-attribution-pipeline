@@ -1,4 +1,4 @@
-"""Live: seed → resolve → engine → ClickHouse, then pin BOTH deliverables
+"""Live: seed → engine (resolve in-process) → ClickHouse, then pin BOTH deliverables
 against the frozen tiny fixture. Skipped when services are unreachable, so
 `make test` stays green offline; runs under `make test-int` (CI from Phase 3).
 
@@ -19,12 +19,10 @@ from accuracy.score import score
 from clickhouse.client import connect, read_credited, read_exposure_households
 from producer.seed import main as seed_main
 from queries.report import run as run_report
-from resolve.stage import run_batch as resolve_batch
 from streaming.dataflow import run_engine
 from tests.pins import TINY_HOT
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
-REGISTRY = os.environ.get("SCHEMA_REGISTRY_URL", "http://127.0.0.1:18081")
 REPO_ROOT = Path(__file__).parent.parent.parent
 TRUTH = REPO_ROOT / "data" / "truth" / "tiny" / "truth_links.jsonl"
 
@@ -56,7 +54,6 @@ def _require_services() -> None:
 @pytest.fixture(scope="module", autouse=True)
 def _populate() -> None:
     seed_main(["--profile", "tiny"])
-    resolve_batch(BROKER, REGISTRY)
     run_engine(BROKER)
 
 

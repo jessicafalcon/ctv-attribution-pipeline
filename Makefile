@@ -36,35 +36,34 @@ seed:
 	uv run python -m producer.seed --profile "$(PROFILE)"
 
 # Offline resolve replay (service-free): device→household, IP fallback, fan-out.
-# Writes data/out/<profile>/conversions_resolved.jsonl.
+# Writes data/out/<profile>/conversions_resolved.jsonl. The unit proof of the
+# resolve step the engine runs in-process (Phase 16).
 resolve:
 	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
 
-# Live pipeline over the seeded stream: resolve stage → attribution engine →
-# reconciliation pass (recovers long-window misses, refreshes the rollup, writes
-# pre/post report snapshots). Run after `make up && make seed`.
+# Live pipeline over the seeded stream: attribution engine (resolve in-process →
+# hot join) → reconciliation pass (recovers long-window misses AND the deferred
+# shared-IP conversions, refreshes the rollup, writes pre/post report snapshots).
+# Run after `make up && make seed`.
 run:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 	uv run python -m reconcile.reconcile
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
-# Hot path only (resolve → engine, NO reconciliation). Used by the hot-path
+# Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
 # and the medium hardening proof — which assert the engine's hot output; a
 # reconciliation pass would over-credit their long-tail organics and shift those
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
-# Phase 12: run the hot path (resolve → engine) and dual-write the SAME deduped
+# Phase 12: run the hot path (engine) and dual-write the SAME deduped
 # exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
 # landing site — make run/CI never land, so the engine path stays byte-identical.
 # Run after make up && make seed.
 lake-land:
-	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow --lake-land
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
@@ -122,9 +121,9 @@ cost-levers:
 # Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
 # needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
 # FINAL, so these two are not producible service-free — like test-int-long-delay.
+# The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
 metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
-	uv run python -m resolve.stage --metrics-out data/out/$(PROFILE)/metrics/resolve.prom
 	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
 	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
