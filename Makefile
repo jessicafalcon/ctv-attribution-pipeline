@@ -127,6 +127,7 @@ metrics-capture:
 	uv run python -m resolve.stage --metrics-out data/out/$(PROFILE)/metrics/resolve.prom
 	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
 	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
+	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Attribution accuracy (household grain) vs the truth side file, for the given
 # PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;

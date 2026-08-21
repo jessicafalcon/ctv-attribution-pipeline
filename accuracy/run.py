@@ -21,9 +21,13 @@ REPO_ROOT = Path(__file__).parent.parent
 
 
 def _db_profile_marker(client) -> str | None:
-    """The profile string in `eval_meta` (None if the table is empty). The
-    populate path stamps it so the DB self-describes which profile populated the
-    serving tables (BACKLOG 43)."""
+    """The profile string in `eval_meta` (None if the table is empty OR not yet
+    created — a bare `make up` before any populate target applies the DDL, so the
+    guard gives its friendly "no marker" message instead of a raw UNKNOWN_TABLE).
+    The populate path stamps it so the DB self-describes which profile populated
+    the serving tables (BACKLOG 43)."""
+    if int(client.command("exists table eval_meta")) == 0:
+        return None
     rows = client.query("select profile from eval_meta final").result_rows
     return rows[0][0] if rows else None
 

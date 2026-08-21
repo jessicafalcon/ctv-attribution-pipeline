@@ -49,9 +49,14 @@ and byte-identical.
    a profile string), so it needs no §8 tz-safe epoch-millis handling.
 
 2. **`clickhouse/write_marker.py`** — `--profile P`: `insert into eval_meta values
-   (0, P)`. Idempotent (single-row replace). Invoked as one extra step in the
-   populate make targets (`run`, `run-hot`, `lake-land`) with `--profile
+   (0, P)`. Idempotent (single-row replace). Invoked as one extra step in **every
+   populate make target that leaves a scoreable DB** — `run`, `run-hot`,
+   `lake-land`, AND `metrics-capture` (it runs the same resolve→engine→reconcile
+   sink stages with `--metrics-out`, so an un-stamped `metrics-capture` would
+   leave a stale marker and re-open the silent false-pass) — with `--profile
    $(PROFILE)`. The DB then self-describes which profile it holds.
+   `reconcile-dagster` needs no stamp: it runs after `lake-land` (same PROFILE
+   already stamped) and its reconcile output is byte-identical.
 
 3. **`accuracy/run.py` assertion** — after `connect()`, read the marker
    (`select profile from eval_meta final`) and assert it equals `--profile`:
