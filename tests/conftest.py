@@ -35,7 +35,13 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
-def _unbind_lake_and_scrub_env(monkeypatch):
-    monkeypatch.setattr(cat, "_profile", None)
+def _restore_lake_binding_and_scrub_env(monkeypatch):
+    # Save/restore, not clear: a module-scoped fixture may have bound the
+    # stack's profile (the integration reconcile/context modules); what must not
+    # survive is a binding a single test made (a driver test calling
+    # `main(["--profile", …])`).
+    bound = cat._profile
     for var in ("CONFIRM", "MAKEFLAGS", "DAGSTER_PROFILE"):
         monkeypatch.delenv(var, raising=False)
+    yield
+    cat._profile = bound
