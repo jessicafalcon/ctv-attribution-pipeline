@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent lint
+.PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse lint
 
 PROFILE ?= tiny
 SOURCE ?= fixtures  # resolve replay input: fixtures/<profile> or out (data/out/<profile>)
@@ -55,6 +55,32 @@ run:
 run-hot:
 	uv run python -m resolve.stage
 	uv run python -m streaming.dataflow
+
+# Phase 12: run the hot path (resolve → engine) and dual-write the SAME deduped
+# exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
+# landing site — make run/CI never land, so the engine path stays byte-identical.
+# Run after make up && make seed.
+lake-land:
+	uv run python -m resolve.stage
+	uv run python -m streaming.dataflow --lake-land
+
+# Phase 12: orchestrated reconciliation. Materialize the day-partitioned
+# reconciled_conversions asset (exposures sourced from Iceberg via DuckDB) over
+# the candidate days + the finalize asset, headless (no webserver, ephemeral
+# Dagster instance). PROFILE is informational; PARTITION=<YYYY-MM-DD> materializes
+# a single day. Run after make lake-land.
+reconcile-dagster:
+	uv run python -m orchestration.run --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
+
+# Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
+# controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.
+# DAGSTER_HOME under gitignored data/ so instance sqlite + run logs never touch the
+# repo (carries no secrets). Not needed for make reconcile-dagster (headless,
+# ephemeral instance). A containerized/published webserver is a deployment lever,
+# not built (DECISIONS Phase 12).
+dagster-ui:
+	mkdir -p data/dagster_home
+	DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
 
 # Measured scaling curve (offline, no compose): drain the engine over tiered event
 # counts (1k/10k/100k exposures resident in the hot window), report the STRUCTURAL
@@ -203,6 +229,18 @@ test-int-agent:
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_agent_readonly.py
+
+# Phase-12 live lakehouse proof on a CLEAN long_delay-only stack (same shared-
+# conversion_id isolation as the others). Lands to the lake + ClickHouse, then
+# asserts the reconcile source-equivalence (ClickHouse-sourced == Iceberg-sourced
+# recovered rows, byte-identical) and that the Dagster-orchestrated pass reproduces
+# the long_delay recovery. No API tokens.
+test-int-lakehouse:
+	$(MAKE) down
+	$(MAKE) up
+	$(MAKE) seed PROFILE=long_delay
+	$(MAKE) lake-land PROFILE=long_delay
+	uv run pytest tests/integration/test_lakehouse.py
 
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
