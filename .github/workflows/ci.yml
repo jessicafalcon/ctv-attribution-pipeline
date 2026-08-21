@@ -50,6 +50,11 @@ jobs:
       # landing). This is what catches a metric rename or rule edit silently
       # breaking the fixture — the guard that keeps Gate 2 honest.
       - run: make test-alerts
+      # Clean lake, not just a clean stack (Phase 17): ClickHouse is loaded from
+      # the lake, which outlives `make down`. A fresh runner has no lake, so this is
+      # a no-op here — it is the documented clean-state step, kept so the CI chain
+      # equals the spec's DONE command and the canonical demos.
+      - run: make lake-reset CONFIRM=yes
       - run: make seed PROFILE=tiny
       - run: make run-hot
       - run: make test-int

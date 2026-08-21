@@ -385,7 +385,10 @@ standard way over the clever way.
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
 - CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
-  `make up && make seed PROFILE=tiny && make run && make test-int`.
+  `make up && make test-alerts && make lake-reset CONFIRM=yes && make seed
+  PROFILE=tiny && make run-hot && make test-int && make test-int-long-delay &&
+  make bench` (hot-path oracles on tiny; reconciliation proven on its own
+  long_delay stack).
   A PR is mergeable only when CI is green and code-reviewer +
   functionality-tester have run.
 - The developer merges (squash), never Claude. After merge:
@@ -438,8 +441,9 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-All phases **0–16 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
-Phases 12–16 are post-plan extensions (not in the original PHASES.md 0–11).
+All phases **0–16 merged; 17 built and in review** (the plan, 0–11, is complete).
+CHECKPOINTs: 4, 7, 10. Phases 12–17 are post-plan extensions (not in the original
+PHASES.md 0–11).
 Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
 `BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
 the `specs/` file where one was cited.

@@ -6,7 +6,8 @@ serving-table schema (`AttributedConversion`). The three topic models have JSON
 Schemas generated from them (producer/schemas.py) and registered in the schema
 registry; never hand-edited. `ResolvedConversion` and `AttributedConversion` are
 not registered subjects — the latter is a *table* schema whose columns live in
-clickhouse/ddl.sql and whose insert order lives in streaming/sink.py.
+clickhouse/ddl.sql, whose Iceberg copy is lake/iceberg_catalog.py and whose
+insert order lives in lake/load_serving.py (tests/test_column_contract.py).
 
 Co-located deliberately so the output models can subclass `Conversion` without
 a cross-package import cycle (see DECISIONS Phase 3). Split trigger: move the

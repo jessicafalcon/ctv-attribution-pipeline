@@ -231,11 +231,12 @@ extend the data-platform surface — lakehouse storage + compute, an orchestrato
 real query-cost story, a measured scaling point, a runbook, a simplified core, a
 lake of record, cost/ops levers, and a docs reshape. Each has a spec under
 `specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
-how it was approved, and none opens a branch until approved. Status: **12–15
-merged**, **16 in review** (`phase-16-simplify-core`), **17–19 specs approved,
-not started** (Phase 17's spec needs the Phase-16 follow-up edit recorded in
-BACKLOG before its branch opens). Phase 12 additionally needed dependency sign-off
-and an ARCHITECTURE §3.5 scope reversal.
+how it was approved, and none opens a branch until approved. Status: **12–16
+merged**, **17 built, in review** (`phase-17-lake-of-record`; its spec was amended
+first — D1–D12 — for the Phase-16 follow-up recorded in BACKLOG), **18–19 specs
+approved, not started** (Phase 18's spec needs a Phase-17 follow-up edit before its
+branch opens — BACKLOG). Phase 12 additionally needed dependency sign-off and an
+ARCHITECTURE §3.5 scope reversal.
 
 ## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
 
@@ -322,10 +323,11 @@ ClickHouse a replayable serving projection, with bucket-aligned reconciliation.
 Spec: `specs/phase-17-lake-of-record.md` (amended before the branch opened with
 decisions D1–D12 against the Phase-16 coherence audit's F1–F3).
 
-**Done when.** `make test && make lint && make down && make up && make seed
-PROFILE=tiny && make run-hot && make eval && make test-int && make
-test-int-lakehouse && make test-int-long-delay` — tiny through the lake is the
-gate-0 proof; long_delay is the reconcile-through-lake + 0.587→0.973 proof.
+**Done when.** `make test && make lint && make down && make lake-reset
+CONFIRM=yes && make up && make seed PROFILE=tiny && make run-hot && make eval &&
+make test-int && make test-int-lakehouse && make test-int-long-delay` — tiny
+through the lake is the gate-0 proof (a clean stack is a clean lake); long_delay
+is the reconcile-through-lake + 0.587→0.973 proof.
 
 **Delivered (2026-08-21).** `candidate_households` on the attributed row (the
 engine keeps the full candidate set at deferral time; 19-column contract pinned

@@ -41,7 +41,14 @@ down:
 # profile means a clean lake too, since the lake outlives `make down` and the
 # serving tables are loaded from it (a hot-only proof would otherwise reload an
 # earlier reconcile pass's current rows).
+# Scope guard (security review): the rm target must be exactly data/lake/<profile>,
+# relative to the repo root — no empty PROFILE (would be data/lake/), no `..`, no
+# absolute path. LAKE_ROOT is `override`-protected below so a command-line
+# LAKE_ROOT= cannot retarget it (it would propagate into the test-int-* targets,
+# where CONFIRM=yes is already set).
 lake-reset:
+	@printf '%s' "$(LAKE_ROOT)" | grep -qE '^data/lake/[a-z0-9_]+$$' \
+		|| { echo "lake-reset: refusing to remove '$(LAKE_ROOT)' (must be data/lake/<profile>)"; exit 1; }
 	@if [ "$(CONFIRM)" != "yes" ]; then \
 		printf 'lake-reset deletes %s (the lake of record for PROFILE=%s). Type yes to continue: ' "$(LAKE_ROOT)" "$(PROFILE)"; \
 		read ans; [ "$$ans" = "yes" ] || { echo "aborted"; exit 1; }; \
@@ -65,12 +72,16 @@ resolve:
 # Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
 # its own PROFILE instead of inheriting the parent's exported value (the
 # test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
-# Override on the command line (make run LAKE_ROOT=...); tests use a tmp root.
-# Each clean-stack test-int-* target pins PROFILE target-wide (`target: PROFILE =
-# p`) so its pytest line — which runs in the parent make — sees the same lake as
-# the `$(MAKE) run PROFILE=p` child (seen live: the test otherwise landed into
-# data/lake/tiny while run-hot populated data/lake/long_delay).
-LAKE_ROOT = data/lake/$(PROFILE)
+# `override` + recursive `=`: not settable from the command line or the
+# environment (a `make … LAKE_ROOT=/x` would propagate into the test-int-* targets'
+# `lake-reset … CONFIRM=yes` — security review), yet still re-expanded per target,
+# so each clean-stack test-int-* target's `target: PROFILE = p` pins the lake for
+# its pytest line too (which runs in the parent make; seen live: the test
+# otherwise landed into data/lake/tiny while run-hot populated
+# data/lake/long_delay). `:=` would freeze PROFILE at parse time and undo that.
+# Offline tests point the Python code at a tmp root via the LAKE_ROOT env var
+# (lake/iceberg_catalog.py), which this assignment does not reach.
+override LAKE_ROOT = data/lake/$(PROFILE)
 export LAKE_ROOT
 
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
@@ -287,14 +298,15 @@ test-int-agent:
 	$(MAKE) run PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_agent_readonly.py
 
-# Phase-12/17 live lakehouse proof on a CLEAN long_delay-only stack (same shared-
-# conversion_id isolation as the others), against a FRESH per-profile lake (the
-# test itself points LAKE_ROOT at a tmp dir and re-runs the engine, so the
-# developer's data/lake/long_delay is untouched). Asserts: lake-loaded serving rows
-# == the direct-write oracle's rows; reconcile source-equivalence (ClickHouse-
-# sourced == Iceberg-sourced, byte-identical); the Dagster-orchestrated pass
-# reproduces the recovery; and an ACCUMULATED lake (≥3 appends) loads and
-# reconciles byte-identically. No API tokens.
+# Phase-12/17 live lakehouse proof on a CLEAN long_delay-only stack + lake (same
+# shared-conversion_id isolation as the others; this target DOES `lake-reset` the
+# long_delay lake — it is destructive, like every clean-stack target). The test
+# module itself writes only to a tmp LAKE_ROOT it creates (module fixture), so it
+# is safe to run standalone against a populated stack. Asserts: lake-loaded
+# serving rows == the direct-write oracle's rows; reconcile equivalence
+# (ClickHouse-read exposures == the bucket-aligned lake pass, byte-identical); the
+# Dagster-orchestrated pass reproduces the recovery; and an ACCUMULATED lake (≥3
+# appends) loads and reconciles byte-identically. No API tokens.
 test-int-lakehouse: PROFILE = long_delay
 test-int-lakehouse:
 	$(MAKE) down

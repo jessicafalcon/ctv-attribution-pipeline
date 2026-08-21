@@ -19,6 +19,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parent.parent
 MAKEFILE = REPO_ROOT / "Makefile"
 
@@ -106,6 +108,50 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         assert re.search(pin, MAKEFILE.read_text(), re.M), (
             f"{target}: missing target-specific `PROFILE = {seed}`"
         )
+
+
+def _make_in_sandbox(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run the REAL recipe (not -n) with the repo Makefile but cwd = a sandbox dir,
+    so a guard failure could only ever remove something inside the sandbox."""
+    (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True)
+    (tmp_path / "data" / "x").mkdir()
+    return subprocess.run(
+        ["make", "-f", str(MAKEFILE), "-C", str(tmp_path), "lake-reset", *args],
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        ["PROFILE=", "CONFIRM=yes"],  # → data/lake/  (every profile's lake)
+        ["PROFILE=../x", "CONFIRM=yes"],  # → escapes data/lake
+        ["PROFILE=/abs", "CONFIRM=yes"],
+    ],
+)
+def test_lake_reset_refuses_a_root_outside_data_lake_profile(
+    tmp_path: Path, hostile: list[str]
+) -> None:
+    res = _make_in_sandbox(tmp_path, *hostile)
+    assert res.returncode != 0, res.stdout + res.stderr
+    assert "refusing to remove" in res.stdout
+    assert (tmp_path / "data" / "lake" / "tiny").exists()  # nothing removed
+    assert (tmp_path / "data" / "x").exists()
+
+
+def test_lake_reset_ignores_a_command_line_lake_root_override(tmp_path: Path) -> None:
+    # `override LAKE_ROOT` — a caller cannot retarget the rm (it would propagate
+    # into the test-int-* targets, where CONFIRM=yes is already set).
+    (tmp_path / "elsewhere").mkdir()
+    res = _make_in_sandbox(
+        tmp_path, "LAKE_ROOT=" + str(tmp_path / "elsewhere"), "CONFIRM=yes"
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (tmp_path / "elsewhere").exists()
+    assert not (tmp_path / "data" / "lake" / "tiny").exists()  # the real target went
+    assert "removed data/lake/tiny" in res.stdout
 
 
 def test_lake_reset_prompts_unless_confirmed_and_scopes_to_the_profile() -> None:

@@ -37,10 +37,17 @@ Phase 12 recorded; every asserted check reads row content back.
 
 ```
 make test && make lint \
-  && make down && make up && make seed PROFILE=tiny \
+  && make down && make lake-reset CONFIRM=yes && make up && make seed PROFILE=tiny \
   && make run-hot && make eval && make test-int \
   && make test-int-lakehouse && make test-int-long-delay
 ```
+
+- `make lake-reset CONFIRM=yes` (tiny's lake) after `make down`: a clean stack is a
+  clean lake (D9 + review gate). `make down` does not touch `data/lake/`, and
+  `run-hot` loads the lake's CURRENT rows — so over a lake that already holds a
+  `make run`'s reconciled rows the hot-only pins would shift. Every clean-state
+  chain in the repo (this DONE command, the `test-int-*` targets, CI, the README /
+  CLAUDE.md demos) carries the reset; `tests/test_clean_state_chains.py` pins it.
 
 - tiny through the lake is the gate-0 proof: `make run-hot` is now engine → lake →
   Dagster headless load, and `make eval` + `make test-int` reproduce the tiny golden
@@ -84,8 +91,16 @@ make test && make lint \
      `pick_household` — the one implementation, unchanged. This is why the placeholder
      `household_id` does not matter for recovery: the array is the truth, the
      placeholder is only the RMT key.
-   Dagster asset becomes `MultiPartitionsDefinition(day × bucket)` for the join; the
-   cross-bucket reduce runs once per day after its buckets. The SQL is engine-agnostic
+   The Dagster asset stays **day-partitioned with the bucket loop inside it**
+   (`reconcile.recover_day`: one bucket-local lake read per bucket, then the
+   cross-bucket reduce in the same process). *Amended at the review gate — the
+   D2 draft said `MultiPartitionsDefinition(day × bucket)`; built and recorded as:
+   the bucket is the unit of the READ, not of orchestration; it becomes a
+   partition dimension when a bucket no longer fits one worker. At this scale a
+   day × bucket asset would be 8× the Dagster run overhead for no measured gain
+   (the per-bucket loop has none over one read — it exists to prove the unit), and
+   the reduce would need an IO manager to carry per-bucket scores between runs.*
+   The SQL per (day, bucket) is engine-agnostic
    (DuckDB runs it locally; the same statement is the Spark/Trino target). This closes
    BACKLOG rows "reads ALL candidates per partition" and "global `min_event_time`
    prune". **Gate: one reconcile pass == the Phase-16 output byte-for-byte** (every

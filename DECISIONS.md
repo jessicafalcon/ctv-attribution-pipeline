@@ -1560,7 +1560,8 @@ Phase 17 sits directly below the fixes.
   corrections.
 - **Only the reconcile *source* swaps; everything else stays ClickHouse.** DuckDB is the
   one lake compute engine (Spark/Trino are the SCALING port, not built); `exposures_landed`
-  is KEPT as the serving/benchmark copy (dual-write, not replaced). The pass is factored
+  is KEPT as the serving/benchmark copy (dual-write, not replaced — Phase 17 made the
+  lake the record and `exposures_landed` a derived copy loaded from it). The pass was factored
   into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
   `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
   in the same order, so `make run` is byte-identical.
@@ -1608,3 +1609,5 @@ Phase 17 sits directly below the fixes.
     timestamp avoids the §8 clickhouse-connect tz round-trip and keeps re-runs identical.
   - Stamped by every populate target that leaves a scoreable DB (`run`, `run-hot`,
     `lake-land`, `metrics-capture`); `reconcile-dagster` inherits `lake-land`'s stamp.
+    (Phase 17: `lake-land` is gone; the populate targets are `run`, `run-hot`,
+    `metrics-capture`, `replay-serving`, and `reconcile-dagster` runs after `run-hot`.)
