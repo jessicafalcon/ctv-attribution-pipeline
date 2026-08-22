@@ -5,10 +5,11 @@ in the original `docs/PHASES.md` plan. Origin: the Phase-15 architecture review
 (2026-08-20), finding 8: the process scaffolding outweighs the pipeline in the reader's
 first five minutes — a 314-line README whose first screen is a problem statement, a
 1,263-line DECISIONS.md organised by phase, and several guards that exist only to police
-docs. Depends on Phases 16–18 merged (it documents their end state; reshaping before
-them means reshaping twice). Docs-only — no pipeline code.
+docs. Depends on Phases 16–17 merged — NOT 18: reordered 2026-08-22 to run BEFORE
+18a/18b (DECISIONS "Process" entry — the consolidation removes the drift tax every
+later phase would otherwise pay again). Docs-only — no pipeline code.
 
-**Status: PROPOSED — do not start until Phases 16–18 have merged and this is approved.**
+**Status: PROPOSED — do not start until Phases 16–17 have merged and this is approved.**
 No new dependencies.
 
 ## Why
@@ -115,3 +116,22 @@ make test && make lint && make check-docs
 - A rendered site / diagrams-as-images — Markdown in-repo only.
 - Re-running `make agent-eval` for fresher verdict numbers (API tokens; the Phase-10
   numbers stand, labelled with their date).
+
+## Pre-branch reconciliation required (2026-08-22)
+
+This spec was written assuming Phase 18 had landed. The 2026-08-22 reorder runs it
+BEFORE 18a/18b, so the branch's commit 1 (CLAUDE.md Workflow rules: the
+spec-reconciliation amendment, stop for approval) must resolve the clauses that
+still reference unbuilt Phase-18 deliverables — listed, not resolved, here:
+
+- Central constraint: the `make`-regenerated blocks named include `rollup-bench` and
+  `cost-report` (18a / 18b targets that do not exist yet).
+- Done-when 1: the first-screen cost-lever table lists "incremental rollup, async
+  inserts" (18a / 18b levers) beside the Phase-13 projection / PREWHERE rows.
+- Done-when 3: ARCHITECTURE §3.2–3.4 "describe the post-18 system".
+- `docs/PHASES.md` scope: "rows for 16–19" now means 16, 17, 18a, 18b, 19 in the
+  reordered sequence.
+
+The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:
+Evidence, Record updates, Threat model (`make check-docs` takes no variable and
+deletes nothing — expected to be "None", stated).

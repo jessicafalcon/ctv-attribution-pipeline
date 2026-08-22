@@ -345,6 +345,16 @@ golden re-frozen once for the additive column (0 decision changes — now a rule
 DECISIONS Phase 17). Found live: clickhouse-connect writes naive datetimes as
 local time (ARCHITECTURE §8).
 
+## Phase 19 — Docs reshape (PROPOSED)
+
+**Goal.** Generated blocks or pins, nothing hand-typed, for every number in
+RESULTS; BACKLOG triage (close, not re-defer); rename `streaming/` to reflect the
+batch attributor it is. Reordered 2026-08-22 to run BEFORE 18a/18b (DECISIONS
+"Process" entry): the consolidation removes the drift tax every later phase would
+otherwise pay again. Spec: `specs/phase-19-docs-reshape.md` — carries a
+"Pre-branch reconciliation required" banner for the clauses that assumed
+Phase 18 had landed.
+
 ## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, part-count and merge-lag (PROPOSED)
 
 **Goal.** Incremental rollups from a dirty set (the Phase-16
@@ -363,9 +373,3 @@ compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook
 `groupKey` dedupe, the shard-key note. The other half of the 2026-08-22 split;
 depends on 18a merged. Spec: `specs/phase-18b-cost-and-ops.md` — same
 reconciliation banner, same commit-1 rule.
-
-## Phase 19 — Docs reshape (PROPOSED)
-
-**Goal.** Generated blocks or pins, nothing hand-typed, for every number in
-RESULTS; BACKLOG triage (close, not re-defer); rename `streaming/` to reflect the
-batch attributor it is. Spec: `specs/phase-19-docs-reshape.md`.

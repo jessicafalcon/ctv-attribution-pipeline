@@ -7,7 +7,8 @@ compat `NONE`, un-merged parts as the real `FINAL` cost, no dollar/CPU cost, no 
 alert firing). Split 2026-08-22 from `specs/phase-18-cost-and-ops.md` under the
 CLAUDE.md phase-size rule (≤ ~6 pinned decisions / Done-when items per spec): this is
 the first half — Done-when 1–2 and the pinned decisions they need, moved verbatim.
-The second half is `specs/phase-18b-cost-and-ops.md`. Depends on Phase 17 merged
+The second half is `specs/phase-18b-cost-and-ops.md`. Depends on Phase 19 (docs
+reshape) merged — reordered 2026-08-22, DECISIONS "Process" entry — and on Phase 17
 (the banner below says why the original "Phase 17 is NOT a dependency" is false).
 
 **Status: PROPOSED — do not start until approved.** No new dependencies. Each item is a
