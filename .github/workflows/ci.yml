@@ -22,6 +22,7 @@ jobs:
       # DECISIONS Phase 12).
       - run: uv run python -m lake.install_extension
       - run: make lint
+      - run: make check-docs
       - run: make test
 
   integration:

@@ -97,11 +97,14 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
 - `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
   `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
+- `common/` — `kafka.py`, the shared start→end topic drain (engine + graph loader).
 - `tests/` — pytest unit (no services); `tests/integration/` needs `make up`.
 - `fixtures/tiny/` — golden producer output + expected resolved/attributed
   rows. READ-ONLY ground truth after Phase 1.
 - `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
-  RESULTS.md, RUNBOOK.md (+ check_runbook.py).
+  RESULTS.md, RUNBOOK.md.
+- `scripts/` — `check_docs.py`, the one docs guard (`make check-docs`; was
+  `docs/check_runbook.py`, Phase 19).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -190,14 +193,20 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   promtool alert fixtures; a CLEAN-STACK capture: `make down && make lake-reset
   PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p>` first — over a
   populated lake the reconcile candidates are the lake's current rows and a second
-  capture differs; recaptured in Phase 18)
+  capture differs; recaptured in Phase 18a)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values;
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
   ROAS) and the other three stay silent (offline; needs the image, not the stack)
-- `make check-runbook` — standalone trace check for docs/RUNBOOK.md: every
-  link/anchor resolves and every named guard/alert still exists in source (offline;
-  not a pytest file, to avoid the run-tests-hook full-suite re-trigger)
+- `make check-docs` — the one docs guard (`scripts/check_docs.py`, Phase 19; was
+  `check-runbook`): every link/anchor in README.md + docs/ resolves; each
+  `make`-generated block (`scale-curve`, `cost-levers`) is present under its
+  generator's marker and the README first-screen copies of its numbers match it;
+  every guard/alert/`make` target the docs name exists in source as an EXACT token
+  (offline; a standalone script, not a pytest file, so a docs-only edit does not
+  re-trigger the full suite — `tests/test_check_docs.py` does run the trace/target
+  half under `make test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
+  `tests/test_docs_accuracy_pins.py`
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
@@ -436,7 +445,7 @@ output (item by item, not "done"):
   developer has approved the review verdicts (see review gate above).
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
-- CI (GitHub Actions) runs `make lint`, `make test`, and (on PRs and pushes to main)
+- CI (GitHub Actions) runs `make lint`, `make check-docs`, `make test`, and (on PRs and pushes to main)
   `make up && make test-alerts && make lake-reset CONFIRM=yes && make seed
   PROFILE=tiny && make run-hot && make test-int && make test-int-long-delay &&
   make bench` (hot-path oracles on tiny; reconciliation proven on its own
@@ -496,44 +505,13 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-All phases **0–17 merged** (the plan, 0–11, is complete). Next in order: **Phase 19
-(docs reshape) → 18a → 18b** — reordered 2026-08-22 (DECISIONS "Process"); each spec
-carries a "Pre-branch reconciliation required" banner, and its branch's commit 1 is
-that amendment. CHECKPOINTs: 4, 7, 10. Phases 12–19 are post-plan extensions (not in
-the original PHASES.md 0–11).
-Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
-`BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
-the `specs/` file where one was cited.
-
-| Phase | Date | PR | Deliverable (headline result) | Gate | Spec |
-|---|---|---|---|---|---|
-| 0 | 08-17 | #2 | Scaffolding — compose, Makefile, CI skeleton | — | — |
-| 1 | 08-17 | #3 | Event models, seeded generator + knobs (incl. unknown-device), schema registration, tiny golden fixtures (frozen read-only) | — | — |
-| 2 | 08-17 | #4 | Resolve stage: device→household, IP fallback, ambiguous fan-out; `ResolvedConversion` schema (compat NONE); offline replay + golden `fixtures/tiny/expected/`; live batch drain + `resolve_` metrics | — | — |
-| 3 | 08-17 | #5 | Attribution engine — pure last-touch join + conversion_id-keyed ambiguous reduce (shared by replay + Bytewax); `attributed_conversions`/`exposures_landed` RMT + sync sink; CI integration job (SHA-pinned actions, digest-pinned images) | — | — |
-| 4 | 08-18 | #6 | **CHECKPOINT** — household-grain accuracy (precision 0.673 / recall 1.000, N1 side-file join) + report v1 (4 per-campaign metrics: ROAS/CPA/CVR/site-visit) | PASSED | — |
-| 5 | 08-18 | #7 | Engine hardening — arrival-ordered, watermark-gated, evicting operator; dedup seen-set, allowed-lateness release, 7d eviction; `medium` profile; evicting == non-evicting oracle byte-identical (92/130, recall 1.0, wrong_hh 0, dedup suppressed 70) | PASSED | — |
-| 6 | 08-18 | #8 | Reconciliation + restatements — periodic ≤90d matcher (`reconcile/`) recovers hot-misses via the shared leaf; `campaign_hourly` + `report_snapshots`; `long_delay` profile; 32 candidates → 29 recovered, recall 0.587→0.973, all 3 campaigns' ROAS restated up | PASSED | `phase-6` |
-| 7 | 08-19 | #9 | **CHECKPOINT** — benchmark + observability; 4 metrics (incl. `engine_join_state_current`, closes BACKLOG 25); `make bench` (rollup 2.5× fewer rows / 1.6× bytes / 2.6× faster); 4 promtool-proven alert rules (fire on long_delay, silent on tiny); Grafana dashboard | PASSED | `phase-7` |
-| 8 | 08-19 | #10 | Fault harness — 5 isolated fault profiles (one anomaly each: shared_ip_spike, late_burst, co_view_bug, real_lift, duplicate_flood) + LLM-free collectors build §4.2 `AttributionContext` from ClickHouse (N1), shape FROZEN as the Phase-9 contract; shared_ip_spike caused_wrong_household=11 | PASSED | `phase-8` |
-| 9 | 08-19 | #11 | Agent loop — 6-cause hypothesis enum + 5 parameterized-SQL probes over SELECT-only `agent_ro` (no free-form SQL); typed `AttributionFinding` (fail → AMBIGUOUS_NEEDS_HUMAN); manual tool-use loop (Sonnet-5); Alertmanager webhook (trigger-only, alert text never reaches LLM). Live: device_graph_mismatch CONFIDENT | PASSED | `phase-9` |
-| 10 | 08-19 | #12 | **CHECKPOINT** — agent eval + near-miss demo; `no_fault_baseline` profile; frozen 6-scenario catalog + PURE scoring; `make agent-eval` → **30/30 correct, false-positive 0/10 = 0%** (real_lift vs shared_ip_spike both clean; co_view_bug 5× AMBIGUOUS; late_burst 5× CONFIDENT) | PASSED | `phase-10` |
-| 11 | 08-20 | #13 | Docs (final planned phase, no pipeline code) — `README.md` design doc, `docs/SCALING.md` (hot-window-state constraint, partition math, 50k/500k tiers, Bytewax→Flink mapping), `docs/RESULTS.md` accuracy tables (tiny 0.673/1.000, medium 0.708/1.000, long_delay 0.587→0.973); no new numbers invented | PASSED (coherence BLOCKER — false "async inserts on" claim — fixed to a SCALING lever) | none (docs) |
-| 12 | 08-20 | #21 | *post-plan* — lakehouse landing + orchestrated reconciliation: local Iceberg exposure lake (`lake/`) + Dagster day-partitioned assets (`orchestration/`); an optional dual-write (superseded by Phase 17: the lake is now the record), byte-identical parity (ClickHouse == Iceberg-sourced reconcile); +5 packages (approved) | PASSED | `phase-12-lakehouse-landing` |
-| 13 | 08-20 | #20 | *post-plan* — query cost levers on `bench_large`: projection-by-`event_time` WINS, FINAL-avoidance / skip-index DOCUMENTED NEGATIVE, PREWHERE WINS; lever DDL only inside `make cost-levers`, gate-0 golden untouched | PASSED (BLOCKER + drift cleared on re-check) | `phase-13-query-cost-levers` |
-| 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
-| 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
-| 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
-| 17 | 08-21 | #31 | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (one of the three destructive paths, `lake/destructive.py`), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | PASSED (3 review rounds — see DECISIONS "Process") | `phase-17-lake-of-record` |
-
-**Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
-- `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
-- `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
-- `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
-- `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/metrics-capture; since Phase 17 also replay-serving), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
-- `fix/make-resolve-source` (PR #29) — two pre-existing Makefile bugs surfaced by the Phase-16 review: bare `make resolve` exited 2 (`SOURCE ?= fixtures  # …` carried trailing spaces into `--source`), and `test-int-medium` stamped `eval_meta=tiny` over a medium DB (ran `run-hot` without `PROFILE=medium`, so the BACKLOG-43 guard could not fire). `tests/test_makefile.py` guards both offline via `make -n`.
-- `fix/docs-accuracy-pin` (PR #26) — single-sourced the household-grain accuracy pins into `tests/pins.py` (tiny/medium/long_delay), referenced by the 5 test suites, plus `tests/test_docs_accuracy_pins.py` asserting the README/RESULTS accuracy TABLE cells equal them; closes BACKLOG 36. Table-scoped — prose citations deferred to a new BACKLOG row.
-
-No API keys in repo.
+**Current phase: 19 (docs reshape) — built, in review** on `phase-19-docs-reshape`
+(spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
+(PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
+reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
+"Process"). Open BACKLOG rows: **32** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
+rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
+headline numbers in `docs/RESULTS.md`. No API keys in repo.
 
 (Update this section at the end of every working day.)

@@ -114,8 +114,14 @@ make test && make lint && make test-alerts \
 This spec was written before Phase 17 merged (PR #31) and its body has NOT been
 rewritten — that rewrite is this branch's commit 1 (CLAUDE.md Workflow rules:
 spec-reconciliation amendment first, stop for approval, no implementation before
-it is approved). The amendment must resolve the items of BACKLOG row 56 (Phase-17
-coherence audit D2 + Q3/Q4) that fall in this half:
+it is approved). The amendment must resolve the items of the BACKLOG row "Phase-17
+coherence audit D2 + Q3/Q4 — the loader-owned dirty set" (cited as "row 56" here, in
+18b and in TEMPLATE: BACKLOG rows are cited by LINE NUMBER and that line has since
+shifted — cite it by title; Phase-19 audit D-b) that fall in this half, plus the
+Phase-19 items: Done-when 2 says `make check-runbook` (line ~69) — the target is
+`make check-docs` since Phase 19; Scope must add `scripts/check_docs.py` (it traces
+`queries/bench.py` `_canonicalize`, which this phase graduates, and the four alert
+names, which this phase extends):
 
 - **`streaming/sink.py` → the lake landing step.** Done-when 1 and 3 name the
   hot-path ClickHouse sink, deleted in Phase 17. The engine lands to the lake

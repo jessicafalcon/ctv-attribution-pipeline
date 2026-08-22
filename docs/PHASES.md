@@ -231,12 +231,13 @@ extend the data-platform surface — lakehouse storage + compute, an orchestrato
 real query-cost story, a measured scaling point, a runbook, a simplified core, a
 lake of record, cost/ops levers, and a docs reshape. Each has a spec under
 `specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
-how it was approved, and none opens a branch until approved. Status: **12–16
-merged**, **17 built, in review** (`phase-17-lake-of-record`; its spec was amended
-first — D1–D12 — for the Phase-16 follow-up recorded in BACKLOG), **18–19 specs
-approved, not started** (Phase 18's spec needs a Phase-17 follow-up edit before its
-branch opens — BACKLOG). Phase 12 additionally needed dependency sign-off and an
-ARCHITECTURE §3.5 scope reversal.
+how it was approved (a spec reconciled against main before its branch opened —
+Phase 19 on — is titled "(RECONCILED)"), and none opens a branch until approved.
+Status: **12–17 merged**, **19 built, in review** (`phase-19-docs-reshape`;
+reordered before 18a/18b — DECISIONS "Process"), **18a/18b specs written, not
+reconciled** (each branch's commit 1 is its reconciliation amendment). Phase 12
+additionally needed dependency sign-off and an ARCHITECTURE §3.5 scope reversal.
+The per-phase results table lives in `README.md` → History.
 
 ## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
 
@@ -345,21 +346,41 @@ golden re-frozen once for the additive column (0 decision changes — now a rule
 DECISIONS Phase 17). Found live: clickhouse-connect writes naive datetimes as
 local time (ARCHITECTURE §8).
 
-## Phase 19 — Docs reshape (PROPOSED)
+## Phase 19 — Docs reshape (RECONCILED)
 
-**Goal.** Generated blocks or pins, nothing hand-typed, for every number in
-RESULTS; BACKLOG triage (close, not re-defer); rename `streaming/` to reflect the
-batch attributor it is. Reordered 2026-08-22 to run BEFORE 18a/18b (DECISIONS
-"Process" entry): the consolidation removes the drift tax every later phase would
-otherwise pay again. Spec: `specs/phase-19-docs-reshape.md` — carries a
-"Pre-branch reconciliation required" banner for the clauses that assumed
-Phase 18 had landed.
+**Goal.** Move, merge, delete — never invent. The reader meets the constraint
+equation before the phase history: README first screen (≤ 60 lines) = what it is →
+the measured constraint (~571 B/exposure → ~8.6 TB) → the two-path answer → the
+pinned accuracy/restatement table → the Phase-13 cost-lever table → the 30/30
+agent line → the honesty boundary → one demo command; the phase table moves from
+CLAUDE.md to README `## History`; DECISIONS gains a "Decisions still in force"
+section (≤ 20 entries, grouped by component, superseded entries annotated in place,
+nothing deleted) over the chronological per-phase appendix; ARCHITECTURE §3 is the
+post-17 end state; one docs guard, `make check-docs` (`scripts/check_docs.py` =
+`docs/check_runbook.py` moved + extended: links/anchors, generated blocks, exact-token
+traces). Docs-only. Reordered 2026-08-22 to run BEFORE 18a/18b (DECISIONS "Process"
+entry): the consolidation removes the drift tax every later phase would otherwise
+pay again. Spec: `specs/phase-19-docs-reshape.md` — reconciled against main as its
+branch's commit 1 (the earlier goal text here named a `streaming/` rename and a
+BACKLOG triage the spec never carried; corrected at exit — the spec is authoritative).
+
+**Done when.** `make test && make lint && make check-docs` — plus the three hand-run
+negative tests (a broken anchor, a stale generated block, a renamed guard) each
+failing `make check-docs`, pasted in the PR body.
+
+**Delivered (2026-08-22).** README first screen ≤ 60 lines (`make check-docs` asserts it); `make check-docs` (links /
+anchors across README + docs/, the two generated blocks under their generators'
+markers with the README copies compared, exact-token traces + every `make <target>`
+the docs name); BACKLOG 37 closed (partial-rename failure pinned by
+`tests/test_check_docs.py`), 47 re-deferred (trigger: next `tests/pins.py` change);
+the `check-runbook` target gone (Makefile, CI lint job, CLAUDE.md). No pin, golden or
+pipeline file changed.
 
 ## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, part-count and merge-lag (PROPOSED)
 
 **Goal.** Incremental rollups from a dirty set (the Phase-16
 `engine_conversions_ambiguous_deferred_total` / `reason` column are its
-precursors) with the loader-owned dirty-set gate (BACKLOG row 56), part-count and
+precursors) with the loader-owned dirty-set gate (BACKLOG, the loader-owned dirty-set row), part-count and
 merge-lag metrics + alert rules; the alert rules get recaptured here (revisit the
 `MatchRateOutOfBand` headroom then). Split 2026-08-22 from Phase 18 under the
 phase-size rule (≤ ~6 pinned decisions / Done-when items per spec; CLAUDE.md

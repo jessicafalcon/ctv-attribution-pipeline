@@ -1,9 +1,150 @@
 # DECISIONS.md — why-not-X log
 
-One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
-"Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
-Phase 17 sits directly below the fixes. The "Process" section (2026-08-22, how the
-phases are run — not what they build) sits first.
+One entry per non-obvious choice. **"Decisions still in force"** (first) is the
+binding set — ≤ 20 entries, by component, each linking to the phase entry that
+argued it. **"Process"** records how the phases are run. **"Appendix — by phase"**
+is the full log, oldest first (Phases 0–10, the post-Phase-11 fixes, then 12 → 19);
+an entry a later phase reversed is annotated **Superseded by …** in place and never
+deleted — the record of why a rule existed is the evidence for the rule that
+replaced it.
+
+## Decisions still in force
+
+The binding set, grouped by component — what the code does today and the one
+reason, each linking to the phase entry in the appendix that argued it. A rule a
+later phase reversed is not here; it is annotated **Superseded by …** in place
+below, never deleted.
+
+**Events & topics**
+
+- **Two event topics, keyed for the join; the device graph is a compacted topic;
+  pydantic models are the schema source of truth.** `exposures` keyed `household_id`,
+  `conversions` keyed `device_id`, `device_graph` compacted (latest per key); JSON
+  Schemas are generated from `producer/models.py` and registered (per-subject
+  compatibility `NONE` in single-writer dev), never hand-edited. Single partition at
+  tiny scale — partition count is the documented scaling lever. ([Phase 1](#phase-1),
+  [Phase 2](#phase-2))
+- **The producer is byte-deterministic per seed, and truth never enters the
+  pipeline.** Counter IDs and a fixed `sim_start` (no UUID, no wall clock); emit
+  order = arrival order; a duplicate is the same bytes re-sent with its original
+  `ingest_time`; truth links go to `data/truth/` and `tests/test_truth_isolation.py`
+  forbids the word in every pipeline package. ([Phase 1](#phase-1), [Phase 4](#phase-4))
+
+**Resolve**
+
+- **Resolution is an in-process pure function, not a stage.** `resolve_one(conversion,
+  graph)`: device hit beats IP fallback; a shared IP fans out one candidate per
+  household in `sorted(household_id)` order; stateless (duplicates in, duplicates
+  out). It becomes a service again only when another team owns the graph — the seam
+  is the function, not a topic. ([Phase 2](#phase-2), [Phase 16](#phase-16))
+
+**Engine**
+
+- **A deterministic batch drain, not a continuous follow.** The engine drains both
+  topics once and runs an arrival-ordered (`(ingest_time, kind, id)` re-sort per
+  household), watermark-gated, evicting pass with event-time windowing, allowed
+  lateness and a 7-day hot window — all real, all on the drain, no wall clock. The
+  framework for continuous follow (Bytewax proper vs Flink) is a Phase-18+ choice.
+  ([Phase 5](#phase-5), [Phase 16](#phase-16))
+- **Dedup is a full seen-set, not TTL'd state.** The seeded duplicate is
+  timestamp-identical to its original, so an event-time TTL has nothing to size
+  against; TTL'd eviction is the continuous-follow target (SCALING.md).
+  ([Phase 5](#phase-5))
+- **Ambiguous shared-IP conversions are deferred, never guessed hot.** `candidate_count
+  > 1` → one placeholder row (the minimum `household_id`), `attributed = 0`, `reason =
+  ambiguous_ip`, carrying the full sorted `candidate_households`; hot wrong-household
+  is 0 by construction, a late correct credit beats a fast wrong one. One row per
+  `conversion_id` still enters the ReplacingMergeTree. ([Phase 16](#phase-16),
+  [Phase 17](#phase-17))
+- **`processed_at` is event-derived (the conversion's `ingest_time`), and a
+  reconciled version is deterministically strictly greater.** Never `now()`; the
+  reconciliation-pass stamp is `max(ingest_time) + 1 s` over a fixed input set, so a
+  re-run converges. ([Phase 3](#phase-3), [Phase 6](#phase-6))
+
+**Serving (ClickHouse, derived)**
+
+- **ReplacingMergeTree on both landed tables, `FINAL`/`argMax` at read; the rollup is
+  a versioned-replace refreshed on schedule, never an insert-triggered summing MV;
+  `report_snapshots` carries a server-side `reported_at`.** Replays and corrections
+  are safe by construction; a correction cannot double-count; restatements are
+  queryable. ([Phase 3](#phase-3), [Phase 6](#phase-6))
+- **Money sums in the versioned tables are Decimal (via `toString`), ratios Float64
+  of those exact sums; the benchmark canonicalizes both read sides with `OPTIMIZE …
+  FINAL` before measuring.** Float64 summation order follows part layout (15th-digit
+  flake); `read_rows` on un-merged parts is a measurement artifact.
+  ([Post-Phase-11 fixes](#post-phase-11-fixes))
+- **Four metric definitions; `FINAL` on both tables; `nullIf` on zero denominators;
+  wrong-household credits are never filtered from the report.** ROAS = revenue /
+  spend, CPA = spend / purchases, CVR and site-visit rate per exposure; a
+  subtly-inflated ROAS is the number the agent exists to catch, not a filter to add.
+  ([Phase 4](#phase-4))
+- **Accuracy is scored at household grain, in the eval harness, against the side file,
+  and only on a DB whose `eval_meta` marker matches the profile.** Exact `exposure_id`
+  would measure last-touch-vs-causal coincidence; truth never enters ClickHouse; the
+  marker is stamped in-process by every populate path. ([Phase 4](#phase-4),
+  [Post-Phase-11 fixes](#post-phase-11-fixes), [Phase 17](#phase-17))
+
+**Reconciliation**
+
+- **One leaf, one picker, one reader.** Reconciliation re-runs the hot path's
+  `last_touch` leaf at 90 days over the lake's CURRENT hot-unattributed rows
+  (`attributed = 0 and path = 'hot'`, never re-opening a credited row); ambiguous rows
+  are exploded over `candidate_households` and reduced by `pick_household` — the one
+  most-recent-exposure tiebreak (ties `exposure_id`, then `household_id`). Every
+  datetime is tz-aware UTC at every I/O boundary. ([Phase 6](#phase-6),
+  [Phase 16](#phase-16), [Phase 17](#phase-17))
+- **`make run` reconciles; `make run-hot` backs the hot-path oracles; each live proof
+  runs on its own clean stack + lake.** A reconcile pass over tiny/medium over-credits
+  long-tail organics and shifts the hot pins; profiles share `conversion_id` space, so
+  they never share a stack. ([Phase 5](#phase-5), [Phase 6](#phase-6),
+  [Phase 17](#phase-17))
+
+**Lake of record (Iceberg)**
+
+- **The lake is the record, ClickHouse a derived projection — every path, no flag.**
+  The engine lands `raw.exposures` + `raw.attributed_conversions` and never writes
+  ClickHouse rows; `lake/load_serving.py` is the one writer, driven by Dagster per
+  (table, day) for exactly the days a landing TOUCHED; the lake is append-only and
+  "current row" is `argMax(processed_at)` on every read; one lake per profile, bound
+  by a required `--profile` (no default root). ([Phase 17](#phase-17))
+- **Both raw tables are `day(event_time) × bucket(8, household_id)`, N a guarded table
+  property; reconciliation is bucket-aligned with explode-before-bucket; Iceberg
+  metadata and Dagster run ids are carved out of the byte-identical guarantee; day
+  partitions are a static set.** Every asserted check reads row content back.
+  ([Phase 12](#phase-12), [Phase 17](#phase-17))
+- **The three destructive paths are one Python process each
+  (`lake/destructive.py`: reset | replay | maintain) — validate the profile, derive
+  the root, prompt on a tty, act; one recipe line; the threat model is mistakes, not a
+  hostile environment.** `make down` never touches the lake. ([Phase 17](#phase-17))
+
+**Agent**
+
+- **Read-only at the database, no free-form SQL, typed in and out, off the critical
+  path, non-reproducible by construction.** `agent_ro` (a `users.d` grant) covers the
+  whole read path — collectors and probes; probes are a registry of parameterized SQL;
+  the terminal `submit_finding` tool is strict-schema and a validation failure
+  escalates `AMBIGUOUS_NEEDS_HUMAN`; ≥ 1 probe per run; the webhook payload is a
+  trigger only (alert text never reaches the LLM); temperature is unset on the
+  Claude-5 family, so the eval reps measure stability. ([Phase 8](#phase-8),
+  [Phase 9](#phase-9))
+- **Fault taxonomy: `duplicate_flood` and `no_fault_baseline` are the false-positive
+  controls; `co_view_bug` is a labeled capability boundary (the co-view-adjusted factor
+  is a won't-do); `real_lift` is a negative confirmation; scoring is a pure
+  function.** Abstention is read from the verdict, never the escalation default.
+  ([Phase 8](#phase-8), [Phase 10](#phase-10))
+
+**Ops & docs**
+
+- **Alerts are proven by `promtool test rules` against REAL captured stage registries;
+  `ConsumerLag` is the batch backlog proxy and `WatermarkStall` the peak-lateness
+  proxy; no annotations until the live push path.** ([Phase 7](#phase-7))
+- **The docs' accuracy tables trace to `tests/pins.py` and the scaling / cost-lever
+  numbers to a `make`-regenerated block (`scale-curve`, `cost-levers`) — guarded; the
+  agent-eval and lakehouse tables are dated captures, the benchmark table is
+  reproduced by the command it states;
+  the scaling constant is a structural measure, never `tracemalloc`; the runbook
+  elevates recorded incidents and invents nothing; one docs guard, `make check-docs`.** ([Phase 14](#phase-14), [Phase 15](#phase-15),
+  [Phase 19](#phase-19))
 
 ## Process
 
@@ -25,7 +166,9 @@ phases are run — not what they build) sits first.
   attentional; rejected: reshaping after 18 (the original order) — that is
   reshaping twice.
 
-## Phase 0
+## Appendix — by phase
+
+### Phase 0
 
 - **Redpanda's built-in schema registry, not a separate container.** Redpanda
   ships the registry in the same binary on port 8081. A separate
@@ -56,11 +199,12 @@ phases are run — not what they build) sits first.
   LAN. In-network services are unaffected (compose DNS).
 - **GitHub Actions pinned by tag, not SHA** — accepted for now: this CI
   holds zero secrets. Revisit (SHA-pin) before the Phase 3 integration job.
+  **Superseded by Phase 3** (both actions SHA-pinned; BACKLOG row 1).
 - **`tests/test_smoke.py` instead of a truly empty suite.** Bare `pytest`
   exits 5 on "no tests collected", which would make `make test` red; one
   layout assertion keeps the suite meaningfully green.
 
-## Phase 1
+### Phase 1
 
 - **Schema registration via stdlib urllib, not confluent-kafka's
   schemaregistry extra.** Registration is one POST per subject; the extra
@@ -139,9 +283,12 @@ phases are run — not what they build) sits first.
   `uv sync --locked` in CI, and a structural test that pipeline-stage code
   never mentions truth links.
 
-## Phase 2
+### Phase 2
 
-- **`ResolvedConversion` subclasses `Conversion`.** It carries every conversion
+- **`ResolvedConversion` subclasses `Conversion`.** (The `conversions_resolved`
+  topic/subject it was registered as is gone — **superseded in part by Phase 16**:
+  the model is now an in-process value the engine builds; the subclassing and the
+  single source of truth stand.) It carries every conversion
   field plus `household_id`/`resolution`/`ambiguous`/`candidate_count`, so the
   engine (Phase 3) attributes from one `conversions_resolved` record without
   re-reading `conversions`. Kept in `producer/models.py` so all topic schemas
@@ -157,6 +304,9 @@ phases are run — not what they build) sits first.
   nondeterministic choice in the stage was candidate order; sorting makes the
   emitted record sequence byte-identical across runs.
 - **Offline replay is the DONE-command path; the live stage is a batch pass.**
+  (**Superseded in part by Phase 16**: `resolve/stage.py` and its consumer are
+  gone — the engine calls `resolve_one` in-process; the offline replay `make
+  resolve` and the one-pure-resolver rule stand.)
   `resolve/replay.py` resolves the frozen fixture with no broker, so the golden
   diff has zero stream-ordering nondeterminism. `resolve/stage.py` drains
   `conversions` low→high watermark once and exits (not follow-forever): it
@@ -212,7 +362,7 @@ phases are run — not what they build) sits first.
   the shared-IP fault the project exists to measure. Implemented in Phase 3;
   recorded now because Phase 2's fan-out shape surfaced the constraint.
 
-## Phase 3
+### Phase 3
 
 - **`processed_at` is event-derived (the RMT version).** The
   `attributed_conversions` ReplacingMergeTree version is `processed_at =
@@ -255,7 +405,9 @@ phases are run — not what they build) sits first.
   Rejected plain MergeTree. Guarded by a double-run integration assertion:
   `exposures_landed` FINAL count == distinct exposure count after two runs.
 
-- **Bytewax owns plumbing, the pure core owns decisions.** `streaming/
+- **Bytewax owns plumbing, the pure core owns decisions.** (**Superseded in
+  mechanism by Phase 16**: Bytewax is removed and `streaming/dataflow.py` drives
+  the pure core directly; "one implementation of every decision" stands.) `streaming/
   attribute.py` exposes the leaf decision logic as pure functions —
   `attribute_household(exposures_in_household, resolved_in_household, window)` →
   per-candidate attributed rows, and `reduce_conversion(candidate_rows)` → one
@@ -310,7 +462,7 @@ phases are run — not what they build) sits first.
   by both stages; behavior identical, covered by the relocated offline test
   `tests/test_kafka.py`.
 
-## Phase 4
+### Phase 4
 
 - **Eval accuracy is scored at household grain.** ARCHITECTURE §4.3 read as
   exact `exposure_id` equality; PHASES Phase 3 reads at household. The two
@@ -381,7 +533,7 @@ phases are run — not what they build) sits first.
     "plausible-but-wrong" number the Phase-9 agent will diagnose; a feature to
     preserve, not a filter to add.
 
-## Phase 5
+### Phase 5
 
 - **Batch dedup is a full seen-set, not TTL'd state (why-not-TTL).**
   ARCHITECTURE §3.3 names dedup "TTL'd state sized to the max plausible duplicate
@@ -443,7 +595,8 @@ phases are run — not what they build) sits first.
   the Kafka→ClickHouse path. Spec's test section updated to match.
 
 - **Per-household arrival-order re-sort by `(ingest_time, kind, id)`, not a
-  reliance on Bytewax delivery order.** `streaming/attribute.py`
+  reliance on Bytewax delivery order.** (Bytewax is gone since Phase 16; the
+  re-sort stands — two separately drained topics still carry no global order.) `streaming/attribute.py`
   `attribute_household_streaming` sorts each household's interleaved events by
   `_arrival_key = (ingest_time, kind, id)` before the watermark-gated pass.
   Necessary, not a spec violation: Bytewax's `op.merge` of the two `TestingSource`
@@ -468,7 +621,7 @@ phases are run — not what they build) sits first.
   `tests/test_medium_parity.py`, the integration test, and the spec — the numbers
   live only there (no RESULTS.md consumer yet).
 
-## Phase 6
+### Phase 6
 
 - **Reconciliation reuses the hot last-touch leaf at a 90d window; no second
   matcher.** `reconcile.reconcile` reconstructs `ResolvedConversion` / `Exposure`
@@ -487,7 +640,9 @@ phases are run — not what they build) sits first.
   household-local, ambiguity-blind half of the old `attribute_household` — and
   ambiguous candidates ARE re-expanded from the device graph (`expand_candidates`)
   and settled by `pick_household`; the "one implementation" invariant still holds,
-  the "does NOT re-fan-out" clause does not. DECISIONS Phase 16 is authoritative.)
+  the "does NOT re-fan-out" clause does not. DECISIONS Phase 16 is authoritative;
+  **Phase 17** moved the read from ClickHouse FINAL to the lake, bucket-aligned,
+  and the candidates from the device graph to the row's own `candidate_households`.)
 
 - **Candidates are hot-*unattributed* rows only: `attributed = 0 AND path =
   'hot'`.** Reconciliation must never re-open a hot-*attributed* row — over a 90d
@@ -598,7 +753,7 @@ phases are run — not what they build) sits first.
   note claimed the rollup was "proven live" before any `campaign_hourly` assertion
   existed — overstated; the assertion was added to make it true.)
 
-## Phase 7
+### Phase 7
 
 - **Alerts proven by `promtool test rules`, not a live scrape — but from REAL
   captured registries.** The batch stages exit before a 15s scrape, so a live
@@ -660,7 +815,7 @@ phases are run — not what they build) sits first.
   cleanly (verified: Grafana loads "Attribution Integrity"); a live screenshot needs
   the deferred path. Not oversold as a live dashboard.
 
-## Phase 8
+### Phase 8
 
 - **`duplicate_flood` is a benign CONTROL, not a diagnosable fault (Ruling A).** The
   duplicate injector re-appends a timestamp-identical payload (Phase 5), the engine
@@ -768,7 +923,7 @@ phases are run — not what they build) sits first.
   expected/normalized per-genre reach), that is the one foreseeable back-edit to the
   frozen §4.2 shape — expected there, not a surprise.
 
-## Phase 9
+### Phase 9
 
 - **Agent model / effort / rep count pinned as config constants (Ruling A),
   `agent/config.py`.** `AGENT_MODEL = "claude-sonnet-5"`, `AGENT_EFFORT = "medium"`,
@@ -942,7 +1097,7 @@ phases are run — not what they build) sits first.
   upstream" — otherwise an escalation scores as a wrong diagnosis instead of a
   (correct-to-escalate) abstention, biasing the accuracy/false-positive tables.
 
-## Phase 10
+### Phase 10
 
 - **BACKLOG 26 (co-view adjusted factor) closed as a won't-do (Ruling A).** Row 26
   anchored the trigger to "the Phase-10 near-miss demo (real-lift vs shared-IP)," but
@@ -1045,7 +1200,7 @@ phases are run — not what they build) sits first.
   scenarios — not just the near-miss pair, which the coherence audit caught as an early
   overclaim).
 
-## Post-Phase-11 fixes
+### Post-Phase-11 fixes
 
 - **Monetary aggregates in versioned tables are computed in Decimal; Float64
   summation order is not deterministic across part layouts
@@ -1115,7 +1270,390 @@ phases are run — not what they build) sits first.
   weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
   test to make it pass).
 
-## Phase 17
+### Phase 12
+
+- **ARCHITECTURE §3.5 reversed (approved).** Iceberg landing was listed out of scope
+  for v1; Phase 12 adds it. A committed-spec reversal is a STOP-and-report event
+  (CLAUDE.md workflow) — the developer approved the reversal and the five-package
+  allowlist add (`pyiceberg`, `pyarrow`, `duckdb`, `dagster`, `dagster-webserver`)
+  before the branch opened.
+- **Iceberg metadata is non-deterministic → carved out of the byte-identical
+  guarantee, exactly like the agent.** An Iceberg append stamps a fresh `snapshot_id`
+  + commit timestamp per run, so table *metadata* is not byte-identical across runs
+  even though the *rows* are. Every asserted check reads row content back from the
+  lake; none assert on snapshot ids, commit times, manifest paths, or Dagster run
+  ids/wall-clock. The tiny golden gate keeps reading the deterministic ClickHouse copy.
+- **Dual-write parity-by-construction; spec hook-wording corrected.**
+  (**Superseded by Phase 17**: there is no dual write — the lake is the only
+  engine write path and ClickHouse is loaded from it.) The lake is
+  landed from the SAME in-memory deduped `exposures` list that feeds the ClickHouse
+  sink, at `streaming/dataflow.py` `run_engine` (the list at the `build_flow` call) —
+  NOT the spec's literal "`insert_exposures` call site," which is a per-batch Bytewax
+  sink, not a scalar call. Landing one level up gives lake == ClickHouse input set by
+  construction (and inherits the `ENGINE_DEDUP=off` case). Surfaced, not silently
+  repaired; developer approved. The spec's file-scope wording is corrected to match.
+- **Landing is gated `--lake-land`, the SOLE landing site; off for make run/CI.** So
+  the engine path stays byte-identical, the lake stack stays out of every non-lake
+  run (bounded blast radius, the spec pinned decision), and there is no double-land.
+  A re-land is harmless anyway (dedup-on-read). **Superseded by Phase 17** (the
+  lake is the record; landing is always on and is the ONLY engine write path; the
+  byte-identical guarantee is on row content, which a lake hop cannot change —
+  DECISIONS Phase 17).
+- **Idempotency is on READ, not write (append accumulates).** An Iceberg append only
+  accumulates rows — unlike the ClickHouse ReplacingMergeTree, which collapses re-sends
+  on its sort key at FINAL. The DuckDB read does `select distinct` to collapse the
+  re-sends, chosen over replace-on-write so append semantics stay honest. The spec's
+  "idempotent append" is really idempotent-*on-read*.
+- **Invariant the dedup rests on: `exposure_id` is unique per exposure.** The
+  deterministic producer maps one `exposure_id` to exactly one
+  `(campaign_id, event_time, …)` row, so a distinct-on-`exposure_id` lake read equals
+  ClickHouse's FINAL collapse on the full `(campaign_id, event_time, exposure_id)` sort
+  key. Recorded so a future producer change that made `exposure_id` non-unique would be
+  flagged, not silently diverge the two dedup paths.
+- **Lake read returns NAIVE UTC, matching clickhouse-connect.** clickhouse-connect hands
+  DateTime64(3,'UTC') back as a naive datetime holding the UTC wall-clock (tzinfo=None);
+  the matcher compares candidate (ClickHouse) vs exposure (lake) event_times, so they
+  must be the same representation. The DuckDB read does `SET TimeZone='UTC'` (renders the
+  timestamptz at the correct UTC wall-clock — the §8 defense; a default local session
+  would shift it) then drops tzinfo. Found by the live run (aware-vs-naive TypeError in
+  the matcher); the fidelity canary was corrected from aware to the naive-UTC contract.
+- **Land as TIMESTAMPTZ, ms-truncated.** Columns land as Iceberg `timestamptz` (a UTC
+  instant), never naive; event/ingest times are UTC-normalized and truncated to
+  millisecond so the stored value is bit-for-bit the DateTime64(3) ClickHouse holds
+  (producer times are already tz-aware UTC + ms-granular, so the truncation is a
+  defensive no-op on real data).
+- **Day partitions are a STATIC set, not `DailyPartitionsDefinition`.** The idiomatic
+  daily-partitions construct validates keys against the real wall clock and rejects any
+  day not yet elapsed — but the deterministic producer emits conversion days in the
+  wall-clock future (long_delay trails ~33 days past a 2026-08-01 sim_start, past
+  "today"), so a `DailyPartitionsDefinition` run would accept a *different* partition set
+  depending on when it ran: a determinism violation. Found live (`DagsterUnknownPartitionError`
+  after today's date). A fixed `StaticPartitionsDefinition` of day keys is reproducible
+  on any re-run and still day-granular + backfillable.
+- **Dagster UI is local `dagster dev`, not a compose webserver.** The spec contradicted
+  itself (file-scope said "optional dev server," the Review section said "compose
+  service"); resolved toward the file-scope + the headless DONE, per the minimal-but-
+  scalable rule — a containerized/published Dagster webserver is speculative deployment
+  infra, a SCALING/deployment lever, not built (same posture as async inserts and the
+  Flink port). `make dagster-ui` binds loopback (127.0.0.1) with `DAGSTER_HOME` under
+  gitignored `data/`; the headless `make reconcile-dagster` uses an ephemeral instance
+  (nothing persists). The spec's Review-section wording is corrected.
+- **`pyiceberg[sql]` reality: no `[sql]` extra in 0.11.1; writes need `pyiceberg-core`.**
+  The spec named `pyiceberg[sql]`, but pyiceberg 0.11.1 has no `sql` extra (SqlCatalog's
+  deps are base) and the Rust write engine ships as the `pyiceberg-core` extra. Added
+  the extra (a sub-extra of the approved pyiceberg, not a new top-level package). Another
+  spec-vs-reality precision fix, same class as the earlier phases' `.json`/projection
+  corrections.
+- **Only the reconcile *source* swaps; everything else stays ClickHouse.** DuckDB is the
+  one lake compute engine (Spark/Trino are the SCALING port, not built); `exposures_landed`
+  is KEPT as the serving/benchmark copy (dual-write, not replaced — Phase 17 made the
+  lake the record and `exposures_landed` a derived copy loaded from it). The pass was factored
+  into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
+  `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
+  in the same order, so `make run` is byte-identical.
+- **The DuckDB `iceberg` extension is the ONE dependency not hash-pinned in uv.lock
+  (installed at setup, loaded offline).** DuckDB fetches the `iceberg` extension (a
+  signed binary, tied to the duckdb version) from extensions.duckdb.org — it is not a
+  Python package, so it lives outside `uv.lock`'s hashed supply chain. To keep the
+  offline unit suite (`make test`, run in CI) truly network-free (both code-reviewer
+  and security-reviewer flagged the original runtime `install`): `make setup` and the
+  CI offline job run `python -m lake.install_extension` once (network allowed there),
+  and `lake/read_exposures.py` does `load iceberg` only — so a machine that skipped
+  setup fails loud, never silently fetches. The CI edit re-triggered security-reviewer
+  (accepted). Provenance recorded here as the single non-uv.lock dependency.
+- **DONE-command `make eval` needs an explicit `PROFILE=long_delay` (5th spec-vs-reality
+  fix).** `make eval` is `accuracy.run --profile "$(PROFILE)"` with `PROFILE ?= tiny` and
+  no "last profile" mechanism, so bare `make eval` scores tiny's truth file against the
+  long_delay DB → a meaningless ~0.17, not the Gate's 0.973. The spec's DONE command +
+  Gate note are corrected to `make eval PROFILE=long_delay` (proven: recall 0.9733). The
+  same latent bug lives in CLAUDE.md's `make eval` prose (:108 "for the last profile") and
+  its long_delay canonical demo (:176) — pre-existing since Phase 6, carved into a
+  separate `fix/eval-demo-profile` PR (not folded into this lakehouse phase, per the
+  "phase reveals an earlier-phase change → its own fix PR" rule); the durable fail-loud
+  guard shipped as `fix/eval-profile-guard` (BACKLOG 43 — see the entry below).
+- **Eval profile/DB-mismatch guard: a marker table, not a conversion_id-subset check
+  (`fix/eval-profile-guard`, BACKLOG 43).** `make eval` scored `data/truth/<PROFILE>/`
+  against the ClickHouse serving rows regardless of which profile populated them, so a
+  bare `make eval` after seeding a non-tiny profile printed a meaningless number
+  (~0.17) silently. Guard = a single-row `eval_meta` marker the populate path stamps
+  with its profile, asserted `== --profile` in `accuracy/run.py` (loud
+  `ProfileMismatchError` on mismatch or missing).
+  - **Why not a conversion_id-subset check ("truth ⊆ DB"):** ids are numbered `c-NNNNNN`
+    from 0, so a smaller profile's set is a subset of a larger one's (tiny ⊆ long_delay).
+    A subset check therefore false-passes the exact original bug (tiny truth vs a
+    long_delay DB) — a guard that greenlights its own failure. A marker is unambiguous
+    across the shared id space.
+  - **Why a marker table, not a field in the sink:** the live stages
+    (`streaming.dataflow`/`reconcile.reconcile`; `resolve.stage` too, until Phase 16
+    folded it into the engine) do not take `--profile`
+    — the engine reads from topics and never knows the profile name. Threading it in
+    would touch the byte-identical path; a standalone `write_marker.py` step in the
+    populate targets keeps the engine untouched. *(Superseded in Phase 17: every
+    stage takes a required `--profile` — it binds the lake of record — and stamps
+    the marker in-process after its load; a separate recipe line would be run by
+    `make -i` over a failed step. The marker stays a table off the golden path;
+    only WHO writes it moved.)*
+  - **Why a versionless single-row RMT keyed on a constant, no timestamp:** the marker
+    must be deterministic (off the golden-compared path, so gate-0 stays byte-identical)
+    and replay-idempotent. Constant key `k=0` makes every write replace the one row; no
+    timestamp avoids the §8 clickhouse-connect tz round-trip and keeps re-runs identical.
+  - Stamped by every populate target that leaves a scoreable DB (`run`, `run-hot`,
+    `lake-land`, `metrics-capture`); `reconcile-dagster` inherits `lake-land`'s stamp.
+    (Phase 17: `lake-land` is gone; the populate targets are `run`, `run-hot`,
+    `metrics-capture`, `replay-serving`, and `reconcile-dagster` runs after `run-hot`.)
+### Phase 13
+
+- **Schema-reality correction: the spec's levers named columns/keys the serving schema
+  does not have; corrected in the open before any build.** The `specs/phase-13-query-cost-levers.md`
+  contract, as written, was wrong on two counts, verified against `clickhouse/ddl.sql`:
+  (1) it put a projection `(campaign_id, event_time)` on `attributed_conversions`, but
+  that table has **no `campaign_id` column** — campaign is derived by joining
+  `attributed_conversions.exposure_id → exposures_landed.campaign_id` (`queries/report.sql`),
+  and a projection can only order by columns the table has; (2) it put a bloom
+  data-skipping index on `exposures_landed.campaign_id`, but `exposures_landed` is ordered
+  `(campaign_id, event_time, exposure_id)` — campaign_id is the **leading** primary-key
+  column, so the sparse primary index already prunes a campaign filter and a secondary
+  index on the same column is strictly redundant (before ≈ after, the direction assert
+  would fail). Per the workflow rule (spec seems wrong → STOP and report, never silently
+  repair), this was surfaced to the developer, who approved the corrections and a spec
+  edit as the first commit. Corrected levers: projection ordered by **`event_time`** on
+  `attributed_conversions` (same alternate-ordering mechanism, buildable column) + a
+  **date-scoped report variant** to exercise it; lever 2 **measured** (see below); PREWHERE
+  measured `optimize_move_to_prewhere=0` vs explicit `PREWHERE`.
+- **The all-time per-campaign report is already near-optimal for this schema; the levers
+  win on date-/dimension-scoped access patterns.** Consequence of the two facts above:
+  campaign is primary-key-pruned on `exposures_landed`, and the report has no other
+  selective predicate, so there is nothing left to prune on the all-time report. That is
+  not a gap — it is exactly when a platform reaches for projections/skip indexes/PREWHERE:
+  a scoped access pattern (a date range, one genre) that the base sort key does not serve.
+  Each lever therefore carries the query variant that exercises it; "a lever needs a query
+  that exercises it" is expected, not a fudge.
+- **Lever 2 is measured, not assumed; a documented negative result is a first-class
+  landing.** A secondary skip index wins only when the indexed column is physically
+  clustered (correlated with row order), which on the seeded data depends on the generator,
+  not on wishes; and `SELECT ... FINAL` is often already optimized. So lever 2 is decided
+  by measurement, ranked FINAL-vs-`argMax(...) GROUP BY conversion_id` (the schema-native
+  lever — the serving layer is all ReplacingMergeTree + FINAL, the exact cost RUNBOOK
+  incident #1 is about) > a clustered non-leading skip index (clustering measured) >
+  a documented negative result (stating precisely *why* a secondary skip index does not
+  help on this schema and the condition that would change it). Rejected: adding a
+  denormalized `campaign_id` column to manufacture a projection win — that is schema
+  surgery that trips the golden gate and is the "tuning the setup to inflate the win" the
+  spec's own out-of-scope forbids.
+- **New `bench_large` profile, not `scale_curve` reuse.** Phase 14's `scale_curve`
+  (100k exposures) was sized for an in-process engine drain, not a full pipeline load into
+  ClickHouse; Phase 13 adds `bench_large` sized so `attributed_conversions` and
+  `exposures_landed` cross **several** 8192-row granules through the live stack. Counts are
+  verified above the granule floor before any lever is measured (a sub-granule table is one
+  granule and every lever is a no-op).
+
+### Phase 14
+
+- **The asserted `bytes_per_exposure` is a STRUCTURAL measure; `tracemalloc` is a
+  labeled cross-check only.** `tracemalloc` peak drifts with the Python allocator and
+  GC timing (nondeterministic run to run), so building the SCALING constant on it would
+  break the determinism policy — the same trap as the Phase-7 `FINAL read_rows` fix.
+  The reported number is instead `deep sys.getsizeof(retained hot-window state) ÷ entry
+  count` (`streaming/scale_probe.deep_sizeof`): shared objects (interned category
+  strings) counted once via an id() set, so the total is the real object-graph RAM and
+  is identical on every re-run under a fixed seed and single thread. Measured **~571
+  B/exposure** (571–573 across the 1k/10k/100k curve), replacing the old ~200 B guess;
+  `tracemalloc` (~0.75× the structural total) is printed by `make scale-curve` as an
+  independent console cross-check and is never asserted AND never written into the
+  committed `docs/SCALING.md` — committing it would make the make target non-idempotent
+  (the Phase-14 review-gate blocker: the doc block first shipped a tracemalloc column at
+  0.1 MB precision that drifted on re-run). Rule this locks in: every column in the
+  byte-stable committed doc is a deterministic structural field, each pinned by the
+  `test_scale_probe` determinism assert (`_structural` covers all four table columns +
+  `join_state_peak`; it excludes only `tracemalloc_peak_bytes`, which is console-only).
+- **Only `bytes_per_exposure` moved asserted → measured; the rate and the product stay
+  extrapolation.** SCALING's "order-of-magnitude sizing, not benchmarked capacity"
+  framing still governs everything except the one constant. The 25k/sec rate and the
+  `rate × window × per-exposure` multiplication remain an assumption — the block labels
+  the `~8.6 TB` line "Extrapolation" explicitly. The curve measures event COUNT in-window
+  (state **occupancy**), which models `exposure_rate × window` directly; it is NOT a
+  msgs/sec throughput benchmark (that needs continuous follow, deferred, owned by no
+  phase).
+- **Tiers scale households with the event count (fixed per-household density), not one
+  giant household.** The batch drain's per-household streaming pass is O(exposures²) per
+  key, so 100k exposures in ~20 households (5k each) does not finish; realistic scaling
+  keeps each household seeing few ads and adds households, so the drain stays cheap (100k
+  in ~2.5s) AND the model is realistic (a household seeing 5k ads in 4 days is not). The
+  fixed span (`SPAN_HOURS=100` < 7-day window) means nothing evicts, so the retained
+  state equals the deduped input — `measure_tier` asserts `evicted == 0` so the
+  structural measure stays valid; if a future retune makes eviction fire it raises rather
+  than silently mismeasuring.
+- **Spec-vs-repo file convention: the spec named `producer/profiles/scale_curve.py`, but
+  profiles in this repo are JSON (`producer/profiles/*.json`).** Followed the real
+  convention — a single reusable `scale_curve.json` (the 100k top tier) that
+  `streaming/scale_probe.py` scales down per tier via `Profile.model_copy`. Surfaced, not
+  silently "fixed" in the spec (workflow rule). The base profile is deliberately the full
+  volume tier so Phase 13 (cost levers — skip indexes/projections are no-ops below one
+  8192-row granule) can reuse it directly rather than duplicating a volume profile.
+
+### Phase 15
+
+- **The runbook is a retrospective incident log by choice, not a forward playbook.**
+  Phase 15's "elevate, invent nothing" constraint (spec central constraint) means
+  `docs/RUNBOOK.md` carries only incidents that already happened and trace to an
+  ARCHITECTURE §8 gotcha / DECISIONS / RESULTS fact. The named cost: it cannot carry
+  speculative first-response guidance ("snapshot count doubled → check client tz first")
+  that no recorded gotcha states verbatim — the per-incident *generalization* lines bridge
+  that only partly. This was the right trade for this phase (its whole value was provable
+  traceability and earning the review gate's trust; speculative remediation would have
+  muddied that). A forward-response playbook is a deliberately separate, later artifact
+  that would relax invent-nothing **under human review** — recorded here as a boundary
+  chosen, not a Phase-15 omission.
+
+### Phase 16
+
+- **Deletion-first: three boxes removed, none added.** The Phase-15 architecture
+  review found three components that were neither a seam for another team nor a
+  scale boundary: the Bytewax dataflow (a `TestingSource` + `fold_final` wrapper
+  over the batch drain), the shared-IP fan-out + `conversion_id`-keyed reduce (two
+  operators to make a fast guess reconciliation could make correctly), and the
+  resolve stage as a consumer + topic + subject (for an in-memory dict lookup).
+  Central constraint, held: **same answer after reconciliation, fewer moving parts**
+  — tiny post-reconcile 52/35/35 and medium 130/92/92 equal the pre-Phase-16 hot
+  numbers; long_delay hot→post recall 0.587→0.973 is unchanged; shared_ip_spike
+  post-reconcile is 69/80 correct / 11 wrong-household, the identical pick the old
+  hot reduce made. Hot numbers moved (tiny 47/35/32, medium 129/92/91) and that is
+  the point: the hot path no longer credits a household it cannot be sure of.
+- **Ambiguous → reconciliation, never a hot guess (the hot rule).** In
+  `streaming/attribute.py` a resolved conversion with `candidate_count > 1` is
+  emitted unattributed (reason ambiguous_ip) without probing state. The leaf was
+  split: `last_touch` (household-local, ambiguity-blind) and `attribute_household`
+  (the hot rule over it). Reconciliation scores each candidate household with the
+  same `last_touch`. Hot-path `caused_wrong_household` is 0 by construction on every
+  profile (shared_ip_spike: was 11). Advertisers get a late correct credit instead
+  of a fast wrong one; shared IPs remain the ONLY wrong-household source, now only on
+  the reconciled path.
+- **One row per `conversion_id` still enters the ReplacingMergeTree — via a
+  placeholder, not a reduce.** `one_row_per_conversion` collapses a fan-out to its
+  lowest-`household_id` candidate (the rule the old reduce used when every candidate
+  was unattributed) before the join. That household is a placeholder, never
+  credited; reconciliation re-enumerates the candidates. This keeps DECISIONS Phase
+  3 (b) true (`conversion_id` a safe RMT sort key) with no second keyed stage.
+  Rejected: emitting N per-household unattributed rows (the RMT survivor would
+  depend on write order — exactly the nondeterminism Phase 2 rejected).
+  **The placeholder rule, written down because a reader WILL see it in
+  ClickHouse:** an unattributed `ambiguous_ip` row carries `household_id` = the
+  **minimum `household_id` among the IP's candidate households** (string order,
+  the same sorted order `GraphIndex.owners_of` emits), `resolution='ip'`,
+  `ambiguous=1`, `candidate_count=N`. It is a deterministic stand-in, not a
+  decision: it was never credited and reconciliation ignores it (candidates are
+  re-enumerated from the graph). tiny example: c-000016 (cc=3, owners h-0000 /
+  h-0001 / h-0008) sits on h-0000. (Corrected in Phase 17: this prose said
+  h-0005; the fixture's three c-000016 fan-out rows are h-0000/h-0001/h-0008 and
+  no test ever pinned the owner set, so the wrong value was hand-typed here and
+  nowhere else.)
+- **The tiebreak moved, not rewritten, and lives in ONE place.**
+  `reconcile.pick_household` is the old `reduce_conversion` body — most-recent
+  last-touch exposure, ties `exposure_id` then `household_id`, attributed beats
+  unattributed, all-unattributed → no recovery (stays the hot row). No code
+  symbol named `reduce_conversion` remains — the only source hit is the
+  `pick_household` docstring naming its origin. Deterministic: candidate order is
+  the graph's sorted owners; the max key is a total order.
+- **Reconciliation reads the device graph from the compacted topic, not a landed
+  table.** (**Superseded by Phase 17**: the deferred row persists its own
+  `candidate_households`; `expand_candidates` explodes the array and the reconcile
+  pass needs no graph and no broker — the "may revisit" at the end of this entry
+  is what happened.) `expand_candidates` re-resolves an ambiguous placeholder with the
+  engine's own `resolve_one` against `load_graph_index(broker)` — the same loader,
+  the same graph, so `make reconcile-dagster` (Dagster asset passes the same
+  loader) stays byte-identical to `make run`'s pass. The loader lives in
+  `resolve/graph_loader.py` (renamed from `stage.py` at the coherence audit — a
+  file called "stage" for something that is no longer a stage). Cost: the reconcile job now
+  needs the broker, which `make run` and the Dagster runner already have up.
+  Rejected: a `device_graph` ClickHouse table landed by the engine — a new DDL
+  table, a new insert, a new read, and a second copy of the graph to keep equal, in
+  a phase whose point is deleting concepts. Phase 17 (lake of record) may revisit if
+  reconciliation is ever meant to run without the broker.
+- **Resolve stays a module with the Phase-2 signature.** `resolve_one(conversion,
+  graph) -> list[ResolvedConversion]`, `GraphIndex`, `resolve_stream`, `make
+  resolve` (offline replay, the unit proof) and the `resolve_` metrics are all
+  unchanged; the engine calls the function in-process and emits the metrics from
+  its registry (`resolve_input_backlog` etc. now land in `engine.prom`). It becomes
+  a separate service again when the device graph is owned by another team or a
+  vendor; the interface is the function, not the topic. Removed: the
+  `conversions_resolved` topic, its `-value` subject, `resolve.stage`'s producer
+  path, `tests/test_resolve_schema.py` and `tests/integration/test_resolve_stage.py`.
+  No compose change was needed — the topic was created by the stage itself.
+- **Remove Bytewax rather than make it real.** `streaming/dataflow.py`
+  `run_attribution` buckets by household and runs `attribute_household_streaming`
+  directly; `streaming/sink.py` keeps only the row builders; inserts are chunked
+  synchronous `client.insert`. The evicting-vs-non-evicting oracle parity (Phase 5)
+  holds byte-for-byte — it was always a property of `attribute.py`. `bytewax` is
+  out of `pyproject.toml`, `uv.lock` and the CLAUDE.md allowlist (the first package
+  removal). Continuous follow is a framework choice (Bytewax proper vs Flink) for
+  Phase 18+ ("after 18" — normalized in the Phase-17 review), chosen with fresh
+  eyes; SCALING.md's mapping table is retained as the
+  port target, re-headed "Engine construct here".
+- **Fixture re-freeze: the one sanctioned exception, one commit, signed off.**
+  `fixtures/tiny/expected/attributed.jsonl`: every line gains the new `reason`
+  key (null on the 47 attributed rows, `state_miss` on 3, `ambiguous_ip` on 5),
+  and exactly 5 DECISIONS change (c-000014, 16, 25, 41, 42 — the five shared-IP
+  conversions: `attributed` false, `exposure_id` null, `assists` empty,
+  `household_id` the placeholder); the other 50 decisions and
+  `conversions_resolved.jsonl` are byte-identical; producer output is untouched
+  (`test_fixtures.py` reproducibility unchanged). The developer reviewed the diff
+  before it was committed. Fixtures are read-only again from here.
+- **`reason` column added (developer ruling) — the spec's premise was wrong and
+  was reported, then resolved by adding the column.** The spec named "a new
+  `reason` value alongside the existing state-miss reason"; no such field existed.
+  The first cut shipped without it (the implicit contract `attributed=0 and
+  path='hot' and candidate_count>1`) and reported the gap; the developer ruled to
+  make it explicit NOW so reconciliation, the agent's probes and Phase 18's
+  dirty-set never re-derive it, and so tiny is re-frozen once. Shape:
+  `AttributedConversion.reason: Literal["ambiguous_ip", "state_miss"] | None =
+  None` (null when attributed — a reconciled credit clears it), DDL column
+  `reason Nullable(String)` plus an idempotent `alter table … add column if not
+  exists` for volumes created before it, sink column appended, `_attributed` sets
+  it from `candidate_count`. `_read_candidates` reads it and raises if it disagrees
+  with `candidate_count` (a writer bypassing the engine). Zero-diff pin
+  clarified: it covers producer OUTPUT (topics, truth links, profiles);
+  `AttributedConversion` is the engine's table model that happens to live in
+  `producer/models.py`. Schema-registry note: `AttributedConversion` is not a
+  registered subject and `ResolvedConversion` no longer is, so this change
+  re-registers nothing — the `ResolvedConversion` / `schemas.py` docstrings were
+  cleaned in the same commit (the old "Topic: conversions_resolved").
+- **The agent's shared-IP discriminator is now reconciliation-dependent — an
+  accepted consequence, said plainly.** `agent/readers.py` computes
+  `ambiguous_attributed` / `ip_resolved_fraction` over `attributed = 1` rows. Since
+  the hot path never credits an ambiguous row, on a hot-only DB (`make run-hot`
+  then `make context`) `ambiguous_attributed` is **structurally 0** and
+  `device_graph_mismatch` is undetectable until a reconcile pass has run. `make
+  run` and `make agent-eval` reconcile first, so the signal returns there — but its
+  meaning shifted from "a hot fan-out landed here" to "reconciliation credited it
+  here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
+  new field — agent contract pinned); one sentence in `agent/context.py` says it.
+  Trigger to re-validate the agent on this: BACKLOG 49 (`make agent-eval` re-run,
+  API tokens, ask first).
+- **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
+  match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
+  the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the
+  rule still discriminates (long_delay 0.696 fires, tiny stays silent) and a band
+  retuned to a single profile's new number is a worse rule; revisit in Phase 18a
+  when the alert rules are recaptured with the cost/ops levers.
+- **The promtool alert fixture was recaptured; tiny now trips `RestatementMagnitude`
+  and the fixture says so.** `make metrics-capture` on clean tiny and long_delay
+  stacks, then `gen_alert_fixtures.py`: long_delay's hot attributed 83 → 80 and
+  restatement 27.0 → 41.4 (three more recoveries), tiny's attributed 52 → 47 and
+  restatement 0 → 12.86 — tiny's reconcile pass now credits its 5 deferred shared-IP
+  conversions, a real ROAS restatement above the 1.0 threshold. The honest fixture
+  claim is therefore "long_delay fires all four; tiny fires RestatementMagnitude
+  only" (the other three still discriminate). Rejected: keeping the pre-Phase-16
+  fixture values (CI green but the provenance would no longer reproduce from a
+  capture) and capturing tiny hot-only (the restatement series comes from the
+  reconcile registry). RESULTS "Observability — alert rules" and the CLAUDE.md
+  `test-alerts` line updated to match.
+- **`make test-int-shared-ip` runs `run-hot` and the test runs the reconcile pass
+  itself.** Pinning both sides (hot 61/19/0 → post 69/11) from one stack is not
+  possible after `make run` — FINAL collapses the hot rows under the reconciled
+  versions — so the target stops at the hot path and `test_context.py` calls
+  `reconcile.run()` between its two assertions. `test-int-agent` keeps `make run`.
+
+### Phase 17
 
 - **`candidate_households` on the attributed row (spec D1) — the engine keeps what
   it knew.** At deferral time the engine holds the shared IP's full owner set (the
@@ -1403,381 +1941,59 @@ phases are run — not what they build) sits first.
   data (`lake_days`: distinct event_time days in both raw tables). Live: 360
   exposures + 115 attributed rows reloaded with no broker, recall 0.9733.
 
-## Phase 16
+### Phase 19
 
-- **Deletion-first: three boxes removed, none added.** The Phase-15 architecture
-  review found three components that were neither a seam for another team nor a
-  scale boundary: the Bytewax dataflow (a `TestingSource` + `fold_final` wrapper
-  over the batch drain), the shared-IP fan-out + `conversion_id`-keyed reduce (two
-  operators to make a fast guess reconciliation could make correctly), and the
-  resolve stage as a consumer + topic + subject (for an in-memory dict lookup).
-  Central constraint, held: **same answer after reconciliation, fewer moving parts**
-  — tiny post-reconcile 52/35/35 and medium 130/92/92 equal the pre-Phase-16 hot
-  numbers; long_delay hot→post recall 0.587→0.973 is unchanged; shared_ip_spike
-  post-reconcile is 69/80 correct / 11 wrong-household, the identical pick the old
-  hot reduce made. Hot numbers moved (tiny 47/35/32, medium 129/92/91) and that is
-  the point: the hot path no longer credits a household it cannot be sure of.
-- **Ambiguous → reconciliation, never a hot guess (the hot rule).** In
-  `streaming/attribute.py` a resolved conversion with `candidate_count > 1` is
-  emitted unattributed (reason ambiguous_ip) without probing state. The leaf was
-  split: `last_touch` (household-local, ambiguity-blind) and `attribute_household`
-  (the hot rule over it). Reconciliation scores each candidate household with the
-  same `last_touch`. Hot-path `caused_wrong_household` is 0 by construction on every
-  profile (shared_ip_spike: was 11). Advertisers get a late correct credit instead
-  of a fast wrong one; shared IPs remain the ONLY wrong-household source, now only on
-  the reconciled path.
-- **One row per `conversion_id` still enters the ReplacingMergeTree — via a
-  placeholder, not a reduce.** `one_row_per_conversion` collapses a fan-out to its
-  lowest-`household_id` candidate (the rule the old reduce used when every candidate
-  was unattributed) before the join. That household is a placeholder, never
-  credited; reconciliation re-enumerates the candidates. This keeps DECISIONS Phase
-  3 (b) true (`conversion_id` a safe RMT sort key) with no second keyed stage.
-  Rejected: emitting N per-household unattributed rows (the RMT survivor would
-  depend on write order — exactly the nondeterminism Phase 2 rejected).
-  **The placeholder rule, written down because a reader WILL see it in
-  ClickHouse:** an unattributed `ambiguous_ip` row carries `household_id` = the
-  **minimum `household_id` among the IP's candidate households** (string order,
-  the same sorted order `GraphIndex.owners_of` emits), `resolution='ip'`,
-  `ambiguous=1`, `candidate_count=N`. It is a deterministic stand-in, not a
-  decision: it was never credited and reconciliation ignores it (candidates are
-  re-enumerated from the graph). tiny example: c-000016 (cc=3, owners h-0000 /
-  h-0001 / h-0008) sits on h-0000. (Corrected in Phase 17: this prose said
-  h-0005; the fixture's three c-000016 fan-out rows are h-0000/h-0001/h-0008 and
-  no test ever pinned the owner set, so the wrong value was hand-typed here and
-  nowhere else.)
-- **The tiebreak moved, not rewritten, and lives in ONE place.**
-  `reconcile.pick_household` is the old `reduce_conversion` body — most-recent
-  last-touch exposure, ties `exposure_id` then `household_id`, attributed beats
-  unattributed, all-unattributed → no recovery (stays the hot row). No code
-  symbol named `reduce_conversion` remains — the only source hit is the
-  `pick_household` docstring naming its origin. Deterministic: candidate order is
-  the graph's sorted owners; the max key is a total order.
-- **Reconciliation reads the device graph from the compacted topic, not a landed
-  table.** `expand_candidates` re-resolves an ambiguous placeholder with the
-  engine's own `resolve_one` against `load_graph_index(broker)` — the same loader,
-  the same graph, so `make reconcile-dagster` (Dagster asset passes the same
-  loader) stays byte-identical to `make run`'s pass. The loader lives in
-  `resolve/graph_loader.py` (renamed from `stage.py` at the coherence audit — a
-  file called "stage" for something that is no longer a stage). Cost: the reconcile job now
-  needs the broker, which `make run` and the Dagster runner already have up.
-  Rejected: a `device_graph` ClickHouse table landed by the engine — a new DDL
-  table, a new insert, a new read, and a second copy of the graph to keep equal, in
-  a phase whose point is deleting concepts. Phase 17 (lake of record) may revisit if
-  reconciliation is ever meant to run without the broker.
-- **Resolve stays a module with the Phase-2 signature.** `resolve_one(conversion,
-  graph) -> list[ResolvedConversion]`, `GraphIndex`, `resolve_stream`, `make
-  resolve` (offline replay, the unit proof) and the `resolve_` metrics are all
-  unchanged; the engine calls the function in-process and emits the metrics from
-  its registry (`resolve_input_backlog` etc. now land in `engine.prom`). It becomes
-  a separate service again when the device graph is owned by another team or a
-  vendor; the interface is the function, not the topic. Removed: the
-  `conversions_resolved` topic, its `-value` subject, `resolve.stage`'s producer
-  path, `tests/test_resolve_schema.py` and `tests/integration/test_resolve_stage.py`.
-  No compose change was needed — the topic was created by the stage itself.
-- **Remove Bytewax rather than make it real.** `streaming/dataflow.py`
-  `run_attribution` buckets by household and runs `attribute_household_streaming`
-  directly; `streaming/sink.py` keeps only the row builders; inserts are chunked
-  synchronous `client.insert`. The evicting-vs-non-evicting oracle parity (Phase 5)
-  holds byte-for-byte — it was always a property of `attribute.py`. `bytewax` is
-  out of `pyproject.toml`, `uv.lock` and the CLAUDE.md allowlist (the first package
-  removal). Continuous follow is a framework choice (Bytewax proper vs Flink) for
-  Phase 18+ ("after 18" — normalized in the Phase-17 review), chosen with fresh
-  eyes; SCALING.md's mapping table is retained as the
-  port target, re-headed "Engine construct here".
-- **Fixture re-freeze: the one sanctioned exception, one commit, signed off.**
-  `fixtures/tiny/expected/attributed.jsonl`: every line gains the new `reason`
-  key (null on the 47 attributed rows, `state_miss` on 3, `ambiguous_ip` on 5),
-  and exactly 5 DECISIONS change (c-000014, 16, 25, 41, 42 — the five shared-IP
-  conversions: `attributed` false, `exposure_id` null, `assists` empty,
-  `household_id` the placeholder); the other 50 decisions and
-  `conversions_resolved.jsonl` are byte-identical; producer output is untouched
-  (`test_fixtures.py` reproducibility unchanged). The developer reviewed the diff
-  before it was committed. Fixtures are read-only again from here.
-- **`reason` column added (developer ruling) — the spec's premise was wrong and
-  was reported, then resolved by adding the column.** The spec named "a new
-  `reason` value alongside the existing state-miss reason"; no such field existed.
-  The first cut shipped without it (the implicit contract `attributed=0 and
-  path='hot' and candidate_count>1`) and reported the gap; the developer ruled to
-  make it explicit NOW so reconciliation, the agent's probes and Phase 18's
-  dirty-set never re-derive it, and so tiny is re-frozen once. Shape:
-  `AttributedConversion.reason: Literal["ambiguous_ip", "state_miss"] | None =
-  None` (null when attributed — a reconciled credit clears it), DDL column
-  `reason Nullable(String)` plus an idempotent `alter table … add column if not
-  exists` for volumes created before it, sink column appended, `_attributed` sets
-  it from `candidate_count`. `_read_candidates` reads it and raises if it disagrees
-  with `candidate_count` (a writer bypassing the engine). Zero-diff pin
-  clarified: it covers producer OUTPUT (topics, truth links, profiles);
-  `AttributedConversion` is the engine's table model that happens to live in
-  `producer/models.py`. Schema-registry note: `AttributedConversion` is not a
-  registered subject and `ResolvedConversion` no longer is, so this change
-  re-registers nothing — the `ResolvedConversion` / `schemas.py` docstrings were
-  cleaned in the same commit (the old "Topic: conversions_resolved").
-- **The agent's shared-IP discriminator is now reconciliation-dependent — an
-  accepted consequence, said plainly.** `agent/readers.py` computes
-  `ambiguous_attributed` / `ip_resolved_fraction` over `attributed = 1` rows. Since
-  the hot path never credits an ambiguous row, on a hot-only DB (`make run-hot`
-  then `make context`) `ambiguous_attributed` is **structurally 0** and
-  `device_graph_mismatch` is undetectable until a reconcile pass has run. `make
-  run` and `make agent-eval` reconcile first, so the signal returns there — but its
-  meaning shifted from "a hot fan-out landed here" to "reconciliation credited it
-  here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
-  new field — agent contract pinned); one sentence in `agent/context.py` says it.
-  Trigger to re-validate the agent on this: BACKLOG 49 (`make agent-eval` re-run,
-  API tokens, ask first).
-- **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
-  match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
-  the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the
-  rule still discriminates (long_delay 0.696 fires, tiny stays silent) and a band
-  retuned to a single profile's new number is a worse rule; revisit in Phase 18
-  when the alert rules are recaptured with the cost/ops levers.
-- **The promtool alert fixture was recaptured; tiny now trips `RestatementMagnitude`
-  and the fixture says so.** `make metrics-capture` on clean tiny and long_delay
-  stacks, then `gen_alert_fixtures.py`: long_delay's hot attributed 83 → 80 and
-  restatement 27.0 → 41.4 (three more recoveries), tiny's attributed 52 → 47 and
-  restatement 0 → 12.86 — tiny's reconcile pass now credits its 5 deferred shared-IP
-  conversions, a real ROAS restatement above the 1.0 threshold. The honest fixture
-  claim is therefore "long_delay fires all four; tiny fires RestatementMagnitude
-  only" (the other three still discriminate). Rejected: keeping the pre-Phase-16
-  fixture values (CI green but the provenance would no longer reproduce from a
-  capture) and capturing tiny hot-only (the restatement series comes from the
-  reconcile registry). RESULTS "Observability — alert rules" and the CLAUDE.md
-  `test-alerts` line updated to match.
-- **`make test-int-shared-ip` runs `run-hot` and the test runs the reconcile pass
-  itself.** Pinning both sides (hot 61/19/0 → post 69/11) from one stack is not
-  possible after `make run` — FINAL collapses the hot rows under the reconciled
-  versions — so the target stops at the hot path and `test_context.py` calls
-  `reconcile.run()` between its two assertions. `test-int-agent` keeps `make run`.
-
-## Phase 15
-
-- **The runbook is a retrospective incident log by choice, not a forward playbook.**
-  Phase 15's "elevate, invent nothing" constraint (spec central constraint) means
-  `docs/RUNBOOK.md` carries only incidents that already happened and trace to an
-  ARCHITECTURE §8 gotcha / DECISIONS / RESULTS fact. The named cost: it cannot carry
-  speculative first-response guidance ("snapshot count doubled → check client tz first")
-  that no recorded gotcha states verbatim — the per-incident *generalization* lines bridge
-  that only partly. This was the right trade for this phase (its whole value was provable
-  traceability and earning the review gate's trust; speculative remediation would have
-  muddied that). A forward-response playbook is a deliberately separate, later artifact
-  that would relax invent-nothing **under human review** — recorded here as a boundary
-  chosen, not a Phase-15 omission.
-
-## Phase 14
-
-- **The asserted `bytes_per_exposure` is a STRUCTURAL measure; `tracemalloc` is a
-  labeled cross-check only.** `tracemalloc` peak drifts with the Python allocator and
-  GC timing (nondeterministic run to run), so building the SCALING constant on it would
-  break the determinism policy — the same trap as the Phase-7 `FINAL read_rows` fix.
-  The reported number is instead `deep sys.getsizeof(retained hot-window state) ÷ entry
-  count` (`streaming/scale_probe.deep_sizeof`): shared objects (interned category
-  strings) counted once via an id() set, so the total is the real object-graph RAM and
-  is identical on every re-run under a fixed seed and single thread. Measured **~571
-  B/exposure** (571–573 across the 1k/10k/100k curve), replacing the old ~200 B guess;
-  `tracemalloc` (~0.75× the structural total) is printed by `make scale-curve` as an
-  independent console cross-check and is never asserted AND never written into the
-  committed `docs/SCALING.md` — committing it would make the make target non-idempotent
-  (the Phase-14 review-gate blocker: the doc block first shipped a tracemalloc column at
-  0.1 MB precision that drifted on re-run). Rule this locks in: every column in the
-  byte-stable committed doc is a deterministic structural field, each pinned by the
-  `test_scale_probe` determinism assert (`_structural` covers all four table columns +
-  `join_state_peak`; it excludes only `tracemalloc_peak_bytes`, which is console-only).
-- **Only `bytes_per_exposure` moved asserted → measured; the rate and the product stay
-  extrapolation.** SCALING's "order-of-magnitude sizing, not benchmarked capacity"
-  framing still governs everything except the one constant. The 25k/sec rate and the
-  `rate × window × per-exposure` multiplication remain an assumption — the block labels
-  the `~8.6 TB` line "Extrapolation" explicitly. The curve measures event COUNT in-window
-  (state **occupancy**), which models `exposure_rate × window` directly; it is NOT a
-  msgs/sec throughput benchmark (that needs continuous follow, deferred, owned by no
-  phase).
-- **Tiers scale households with the event count (fixed per-household density), not one
-  giant household.** The batch drain's per-household streaming pass is O(exposures²) per
-  key, so 100k exposures in ~20 households (5k each) does not finish; realistic scaling
-  keeps each household seeing few ads and adds households, so the drain stays cheap (100k
-  in ~2.5s) AND the model is realistic (a household seeing 5k ads in 4 days is not). The
-  fixed span (`SPAN_HOURS=100` < 7-day window) means nothing evicts, so the retained
-  state equals the deduped input — `measure_tier` asserts `evicted == 0` so the
-  structural measure stays valid; if a future retune makes eviction fire it raises rather
-  than silently mismeasuring.
-- **Spec-vs-repo file convention: the spec named `producer/profiles/scale_curve.py`, but
-  profiles in this repo are JSON (`producer/profiles/*.json`).** Followed the real
-  convention — a single reusable `scale_curve.json` (the 100k top tier) that
-  `streaming/scale_probe.py` scales down per tier via `Profile.model_copy`. Surfaced, not
-  silently "fixed" in the spec (workflow rule). The base profile is deliberately the full
-  volume tier so Phase 13 (cost levers — skip indexes/projections are no-ops below one
-  8192-row granule) can reuse it directly rather than duplicating a volume profile.
-
-## Phase 13
-
-- **Schema-reality correction: the spec's levers named columns/keys the serving schema
-  does not have; corrected in the open before any build.** The `specs/phase-13-query-cost-levers.md`
-  contract, as written, was wrong on two counts, verified against `clickhouse/ddl.sql`:
-  (1) it put a projection `(campaign_id, event_time)` on `attributed_conversions`, but
-  that table has **no `campaign_id` column** — campaign is derived by joining
-  `attributed_conversions.exposure_id → exposures_landed.campaign_id` (`queries/report.sql`),
-  and a projection can only order by columns the table has; (2) it put a bloom
-  data-skipping index on `exposures_landed.campaign_id`, but `exposures_landed` is ordered
-  `(campaign_id, event_time, exposure_id)` — campaign_id is the **leading** primary-key
-  column, so the sparse primary index already prunes a campaign filter and a secondary
-  index on the same column is strictly redundant (before ≈ after, the direction assert
-  would fail). Per the workflow rule (spec seems wrong → STOP and report, never silently
-  repair), this was surfaced to the developer, who approved the corrections and a spec
-  edit as the first commit. Corrected levers: projection ordered by **`event_time`** on
-  `attributed_conversions` (same alternate-ordering mechanism, buildable column) + a
-  **date-scoped report variant** to exercise it; lever 2 **measured** (see below); PREWHERE
-  measured `optimize_move_to_prewhere=0` vs explicit `PREWHERE`.
-- **The all-time per-campaign report is already near-optimal for this schema; the levers
-  win on date-/dimension-scoped access patterns.** Consequence of the two facts above:
-  campaign is primary-key-pruned on `exposures_landed`, and the report has no other
-  selective predicate, so there is nothing left to prune on the all-time report. That is
-  not a gap — it is exactly when a platform reaches for projections/skip indexes/PREWHERE:
-  a scoped access pattern (a date range, one genre) that the base sort key does not serve.
-  Each lever therefore carries the query variant that exercises it; "a lever needs a query
-  that exercises it" is expected, not a fudge.
-- **Lever 2 is measured, not assumed; a documented negative result is a first-class
-  landing.** A secondary skip index wins only when the indexed column is physically
-  clustered (correlated with row order), which on the seeded data depends on the generator,
-  not on wishes; and `SELECT ... FINAL` is often already optimized. So lever 2 is decided
-  by measurement, ranked FINAL-vs-`argMax(...) GROUP BY conversion_id` (the schema-native
-  lever — the serving layer is all ReplacingMergeTree + FINAL, the exact cost RUNBOOK
-  incident #1 is about) > a clustered non-leading skip index (clustering measured) >
-  a documented negative result (stating precisely *why* a secondary skip index does not
-  help on this schema and the condition that would change it). Rejected: adding a
-  denormalized `campaign_id` column to manufacture a projection win — that is schema
-  surgery that trips the golden gate and is the "tuning the setup to inflate the win" the
-  spec's own out-of-scope forbids.
-- **New `bench_large` profile, not `scale_curve` reuse.** Phase 14's `scale_curve`
-  (100k exposures) was sized for an in-process engine drain, not a full pipeline load into
-  ClickHouse; Phase 13 adds `bench_large` sized so `attributed_conversions` and
-  `exposures_landed` cross **several** 8192-row granules through the live stack. Counts are
-  verified above the granule floor before any lever is measured (a sub-granule table is one
-  granule and every lever is a no-op).
-
-## Phase 12
-
-- **ARCHITECTURE §3.5 reversed (approved).** Iceberg landing was listed out of scope
-  for v1; Phase 12 adds it. A committed-spec reversal is a STOP-and-report event
-  (CLAUDE.md workflow) — the developer approved the reversal and the five-package
-  allowlist add (`pyiceberg`, `pyarrow`, `duckdb`, `dagster`, `dagster-webserver`)
-  before the branch opened.
-- **Iceberg metadata is non-deterministic → carved out of the byte-identical
-  guarantee, exactly like the agent.** An Iceberg append stamps a fresh `snapshot_id`
-  + commit timestamp per run, so table *metadata* is not byte-identical across runs
-  even though the *rows* are. Every asserted check reads row content back from the
-  lake; none assert on snapshot ids, commit times, manifest paths, or Dagster run
-  ids/wall-clock. The tiny golden gate keeps reading the deterministic ClickHouse copy.
-- **Dual-write parity-by-construction; spec hook-wording corrected.** The lake is
-  landed from the SAME in-memory deduped `exposures` list that feeds the ClickHouse
-  sink, at `streaming/dataflow.py` `run_engine` (the list at the `build_flow` call) —
-  NOT the spec's literal "`insert_exposures` call site," which is a per-batch Bytewax
-  sink, not a scalar call. Landing one level up gives lake == ClickHouse input set by
-  construction (and inherits the `ENGINE_DEDUP=off` case). Surfaced, not silently
-  repaired; developer approved. The spec's file-scope wording is corrected to match.
-- **Landing is gated `--lake-land`, the SOLE landing site; off for make run/CI.** So
-  the engine path stays byte-identical, the lake stack stays out of every non-lake
-  run (bounded blast radius, the spec pinned decision), and there is no double-land.
-  A re-land is harmless anyway (dedup-on-read). **Superseded by Phase 17** (the
-  lake is the record; landing is always on and is the ONLY engine write path; the
-  byte-identical guarantee is on row content, which a lake hop cannot change —
-  DECISIONS Phase 17).
-- **Idempotency is on READ, not write (append accumulates).** An Iceberg append only
-  accumulates rows — unlike the ClickHouse ReplacingMergeTree, which collapses re-sends
-  on its sort key at FINAL. The DuckDB read does `select distinct` to collapse the
-  re-sends, chosen over replace-on-write so append semantics stay honest. The spec's
-  "idempotent append" is really idempotent-*on-read*.
-- **Invariant the dedup rests on: `exposure_id` is unique per exposure.** The
-  deterministic producer maps one `exposure_id` to exactly one
-  `(campaign_id, event_time, …)` row, so a distinct-on-`exposure_id` lake read equals
-  ClickHouse's FINAL collapse on the full `(campaign_id, event_time, exposure_id)` sort
-  key. Recorded so a future producer change that made `exposure_id` non-unique would be
-  flagged, not silently diverge the two dedup paths.
-- **Lake read returns NAIVE UTC, matching clickhouse-connect.** clickhouse-connect hands
-  DateTime64(3,'UTC') back as a naive datetime holding the UTC wall-clock (tzinfo=None);
-  the matcher compares candidate (ClickHouse) vs exposure (lake) event_times, so they
-  must be the same representation. The DuckDB read does `SET TimeZone='UTC'` (renders the
-  timestamptz at the correct UTC wall-clock — the §8 defense; a default local session
-  would shift it) then drops tzinfo. Found by the live run (aware-vs-naive TypeError in
-  the matcher); the fidelity canary was corrected from aware to the naive-UTC contract.
-- **Land as TIMESTAMPTZ, ms-truncated.** Columns land as Iceberg `timestamptz` (a UTC
-  instant), never naive; event/ingest times are UTC-normalized and truncated to
-  millisecond so the stored value is bit-for-bit the DateTime64(3) ClickHouse holds
-  (producer times are already tz-aware UTC + ms-granular, so the truncation is a
-  defensive no-op on real data).
-- **Day partitions are a STATIC set, not `DailyPartitionsDefinition`.** The idiomatic
-  daily-partitions construct validates keys against the real wall clock and rejects any
-  day not yet elapsed — but the deterministic producer emits conversion days in the
-  wall-clock future (long_delay trails ~33 days past a 2026-08-01 sim_start, past
-  "today"), so a `DailyPartitionsDefinition` run would accept a *different* partition set
-  depending on when it ran: a determinism violation. Found live (`DagsterUnknownPartitionError`
-  after today's date). A fixed `StaticPartitionsDefinition` of day keys is reproducible
-  on any re-run and still day-granular + backfillable.
-- **Dagster UI is local `dagster dev`, not a compose webserver.** The spec contradicted
-  itself (file-scope said "optional dev server," the Review section said "compose
-  service"); resolved toward the file-scope + the headless DONE, per the minimal-but-
-  scalable rule — a containerized/published Dagster webserver is speculative deployment
-  infra, a SCALING/deployment lever, not built (same posture as async inserts and the
-  Flink port). `make dagster-ui` binds loopback (127.0.0.1) with `DAGSTER_HOME` under
-  gitignored `data/`; the headless `make reconcile-dagster` uses an ephemeral instance
-  (nothing persists). The spec's Review-section wording is corrected.
-- **`pyiceberg[sql]` reality: no `[sql]` extra in 0.11.1; writes need `pyiceberg-core`.**
-  The spec named `pyiceberg[sql]`, but pyiceberg 0.11.1 has no `sql` extra (SqlCatalog's
-  deps are base) and the Rust write engine ships as the `pyiceberg-core` extra. Added
-  the extra (a sub-extra of the approved pyiceberg, not a new top-level package). Another
-  spec-vs-reality precision fix, same class as the earlier phases' `.json`/projection
-  corrections.
-- **Only the reconcile *source* swaps; everything else stays ClickHouse.** DuckDB is the
-  one lake compute engine (Spark/Trino are the SCALING port, not built); `exposures_landed`
-  is KEPT as the serving/benchmark copy (dual-write, not replaced — Phase 17 made the
-  lake the record and `exposures_landed` a derived copy loaded from it). The pass was factored
-  into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
-  `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
-  in the same order, so `make run` is byte-identical.
-- **The DuckDB `iceberg` extension is the ONE dependency not hash-pinned in uv.lock
-  (installed at setup, loaded offline).** DuckDB fetches the `iceberg` extension (a
-  signed binary, tied to the duckdb version) from extensions.duckdb.org — it is not a
-  Python package, so it lives outside `uv.lock`'s hashed supply chain. To keep the
-  offline unit suite (`make test`, run in CI) truly network-free (both code-reviewer
-  and security-reviewer flagged the original runtime `install`): `make setup` and the
-  CI offline job run `python -m lake.install_extension` once (network allowed there),
-  and `lake/read_exposures.py` does `load iceberg` only — so a machine that skipped
-  setup fails loud, never silently fetches. The CI edit re-triggered security-reviewer
-  (accepted). Provenance recorded here as the single non-uv.lock dependency.
-- **DONE-command `make eval` needs an explicit `PROFILE=long_delay` (5th spec-vs-reality
-  fix).** `make eval` is `accuracy.run --profile "$(PROFILE)"` with `PROFILE ?= tiny` and
-  no "last profile" mechanism, so bare `make eval` scores tiny's truth file against the
-  long_delay DB → a meaningless ~0.17, not the Gate's 0.973. The spec's DONE command +
-  Gate note are corrected to `make eval PROFILE=long_delay` (proven: recall 0.9733). The
-  same latent bug lives in CLAUDE.md's `make eval` prose (:108 "for the last profile") and
-  its long_delay canonical demo (:176) — pre-existing since Phase 6, carved into a
-  separate `fix/eval-demo-profile` PR (not folded into this lakehouse phase, per the
-  "phase reveals an earlier-phase change → its own fix PR" rule); the durable fail-loud
-  guard shipped as `fix/eval-profile-guard` (BACKLOG 43 — see the entry below).
-- **Eval profile/DB-mismatch guard: a marker table, not a conversion_id-subset check
-  (`fix/eval-profile-guard`, BACKLOG 43).** `make eval` scored `data/truth/<PROFILE>/`
-  against the ClickHouse serving rows regardless of which profile populated them, so a
-  bare `make eval` after seeding a non-tiny profile printed a meaningless number
-  (~0.17) silently. Guard = a single-row `eval_meta` marker the populate path stamps
-  with its profile, asserted `== --profile` in `accuracy/run.py` (loud
-  `ProfileMismatchError` on mismatch or missing).
-  - **Why not a conversion_id-subset check ("truth ⊆ DB"):** ids are numbered `c-NNNNNN`
-    from 0, so a smaller profile's set is a subset of a larger one's (tiny ⊆ long_delay).
-    A subset check therefore false-passes the exact original bug (tiny truth vs a
-    long_delay DB) — a guard that greenlights its own failure. A marker is unambiguous
-    across the shared id space.
-  - **Why a marker table, not a field in the sink:** the live stages
-    (`streaming.dataflow`/`reconcile.reconcile`; `resolve.stage` too, until Phase 16
-    folded it into the engine) do not take `--profile`
-    — the engine reads from topics and never knows the profile name. Threading it in
-    would touch the byte-identical path; a standalone `write_marker.py` step in the
-    populate targets keeps the engine untouched. *(Superseded in Phase 17: every
-    stage takes a required `--profile` — it binds the lake of record — and stamps
-    the marker in-process after its load; a separate recipe line would be run by
-    `make -i` over a failed step. The marker stays a table off the golden path;
-    only WHO writes it moved.)*
-  - **Why a versionless single-row RMT keyed on a constant, no timestamp:** the marker
-    must be deterministic (off the golden-compared path, so gate-0 stays byte-identical)
-    and replay-idempotent. Constant key `k=0` makes every write replace the one row; no
-    timestamp avoids the §8 clickhouse-connect tz round-trip and keeps re-runs identical.
-  - Stamped by every populate target that leaves a scoreable DB (`run`, `run-hot`,
-    `lake-land`, `metrics-capture`); `reconcile-dagster` inherits `lake-land`'s stamp.
-    (Phase 17: `lake-land` is gone; the populate targets are `run`, `run-hot`,
-    `metrics-capture`, `replay-serving`, and `reconcile-dagster` runs after `run-hot`.)
+- **The reader meets the constraint before the history (docs reshape, docs-only).**
+  README's first screen (≤ 60 lines before the first `##`; `make check-docs`
+  asserts it) is: what it is → the
+  measured constraint (~571 B/exposure → ~8.6 TB) → the two-path answer → the pinned
+  accuracy/restatement table → the Phase-13 cost-lever table → the 30/30 agent line →
+  the honesty boundary → one demo command. Everything below the fold was moved or
+  merged, nothing invented: the phase table left CLAUDE.md "Current status" (which now
+  holds the current phase, last merged PR and pointers) for README `## History`; the
+  problem/scope/agent/results/determinism sections folded into `## Architecture` and
+  `## How it's proven`. Rejected: shrinking the table on the move (every row's result,
+  gate and spec survive); a rendered site (Markdown in-repo only).
+- **DECISIONS is binding-first: "Decisions still in force" (20 entries, by component,
+  each linking its phase) over a chronological appendix; superseded entries are
+  annotated in place, never deleted.** The per-phase log was newest-first for the
+  post-plan phases (17 above 12) — re-ordered 0 → 19 under `## Appendix — by phase`
+  with the entries' text unchanged except six added `Superseded …` pointers (Phase 0
+  tag-pinning, Phase 2 `ResolvedConversion` and resolve-stage ×2, Phase 3 Bytewax,
+  Phase 12 dual-write, Phase 16 graph-from-topic — the Phase-3 "Bytewax delivery
+  order" and Phase-6 leaf-read pointers were Phase 16's), one extended pointer (Phase
+  6 leaf read: + the Phase-17 lake read) and one
+  content edit (Phase 16 MatchRate "revisit in Phase 18" → 18a, the split's new name). Rejected: deleting
+  superseded entries (the record of why a rule exists is the rule's evidence).
+- **One docs guard, `scripts/check_docs.py`, is `docs/check_runbook.py` moved with
+  `git mv` and extended — history preserved, never a second script.** Three checks
+  over README + every `docs/*.md`: links/anchors (code spans ignored — the old
+  checker would have read `bucket[8](household_id)` as a link); the two generated
+  blocks present exactly once under the marker strings read (via `ast`, no import)
+  from their generators, with the README first-screen copies of their numbers compared
+  to the block; exact-token traces (`(?<!\w)needle(?!\w)`) plus every `make <target>`
+  named in backticks or a fence must exist in the Makefile. It found two real drifts
+  on main the first time it ran (the pseudo-link above; RESULTS naming the removed
+  `make lake-land`). BACKLOG 37 closes on the partial-rename pin
+  (`tests/test_check_docs.py`); BACKLOG 47 is re-deferred — the exact-token check does
+  not cover every accuracy number in README/RESULTS prose against `tests/pins.py`
+  (a prose scan needs a per-site allowlist to tell a pinned recall from an
+  `ip_resolved_fraction`), trigger "next change to `tests/pins.py`". Rejected: making
+  the guard itself a pytest file (the run-tests hook would re-run the full suite on
+  every docs edit — the same reason as Phase 15); `tests/test_check_docs.py` does run
+  the trace/target half under `make test`, deliberately — a renamed guard then fails
+  both gates, not only the lint job. Historical mentions of a removed target are
+  allowed inside `~~…~~` or on a line tagged `<!-- historical -->` (review gate);
+  links may not resolve outside the repo root (security review). Rejected: importing the generators for their markers (pulls
+  clickhouse-connect and the engine into a docs check).
+- **ARCHITECTURE §3 describes the post-17 system as it runs on main today; "Phase N
+  added…" parentheticals in §3.2–3.4 became DECISIONS links; §7 points at README
+  `## History`.** 18a/18b edit §3.4 when they land (the reconciliation amendment
+  struck the "post-18" wording, the 18a/18b lever rows and the `rollup-bench` /
+  `cost-report` generators that do not exist). §8 Gotchas is untouched — it is the raw
+  incident record the runbook elevates, and four of its sentences are `check-docs`
+  traces.
+- **PHASES.md corrected at exit, the spec authoritative.** Its Phase-19 goal named a
+  `streaming/` rename and a BACKLOG triage the spec never carried; replaced with the
+  spec's Done-when and a Delivered paragraph. The intro status paragraph (still "17
+  built, in review") updated.

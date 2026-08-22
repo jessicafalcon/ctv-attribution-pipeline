@@ -73,7 +73,7 @@ REDPANDA           topics: exposures | conversions
                                        │
           exposures ───────────────────┤
                                        v
-ATTRIBUTION ENGINE (deterministic batch attributor, Phase 16 — no stream framework)
+ATTRIBUTION ENGINE (deterministic batch attributor — no stream framework)
                    ├─ resolve step, in-process: conversion → device graph lookup →
                    │  household_id (device hit, else IP fallback; shared IP = ambiguous)
                    ├─ hot path: join both sides on household_id
@@ -84,10 +84,10 @@ ATTRIBUTION ENGINE (deterministic batch attributor, Phase 16 — no stream frame
                    ├─ dedup on exposure_id / conversion_id (seen-set; TTL'd under continuous follow)
                    ├─ watermarks + allowed lateness (minutes–hours late)
                    └─ emits attributed + unattributed conversion records; a deferred row
-                      carries its full candidate_households (Phase 17)
+                      carries its full candidate_households
                                        │  lands (append) — never writes ClickHouse rows
                                        v
-ICEBERG LAKE (system of record, Phase 17)   raw.exposures · raw.attributed_conversions
+ICEBERG LAKE (system of record)   raw.exposures · raw.attributed_conversions
                    both partitioned day(event_time) × bucket(N, household_id), N a table
                    property; append-only logs (hot row, later the reconciled row);
                    "current row" = argMax(processed_at) in SQL (DuckDB here; Spark/Trino at scale)
@@ -155,10 +155,9 @@ Two event topics plus one reference topic. `exposures` is partitioned by
 topic holding the current graph. Each topic has a JSON Schema in the registry;
 the producer and every consumer validate against it. Partition count is a
 documented scaling lever (SCALING.md notes the household-keyed re-partition a
-continuous multi-partition engine would need). Until Phase 16 a third topic,
-`conversions_resolved`, carried the resolved records between a separate resolve
-consumer and the engine; it bought nothing for an in-memory dict lookup and was
-removed (DECISIONS Phase 16).
+continuous multi-partition engine would need). There is no intermediate
+resolved-conversions topic: the resolve step is in-process (why: DECISIONS
+"Decisions still in force" → resolve; history: DECISIONS Phase 16).
 
 #### Resolve step (in-process, `resolve/`)
 
@@ -168,25 +167,25 @@ compacted topic at startup. Look up `device_id` in the graph; if found, one
 record for that household. If not found, fall back to IP; if the IP maps to
 several households, one record per candidate with an ambiguity flag and
 candidate count (the shared-IP fan-out). Device-graph match beats IP match.
-The hot path does **not** pick among ambiguous candidates (Phase 16): a
+The hot path does **not** pick among ambiguous candidates: a
 `candidate_count > 1` conversion is emitted unattributed (reason ambiguous_ip)
 and reconciliation — which holds every exposure — applies the most-recent-
-exposure rule across the candidate households. `resolve/` stays a module with
-the Phase-2 signature; it becomes a separate service again when the device
-graph is owned by another team or a vendor — the interface is the function,
-not a topic. Metrics (`resolve_`, emitted from the engine process): resolve
+exposure rule across the candidate households. `resolve/` is a module, not a
+service; it becomes a separate service again when the device graph is owned by
+another team or a vendor — the interface is the function, not a topic
+(DECISIONS Phase 16). Metrics (`resolve_`, emitted from the engine process): resolve
 rate, ambiguity rate, fan-out factor, input backlog.
 
 #### Attribution engine (hot path)
 
 A deterministic batch attributor (`streaming/dataflow.py` drives the pure core
-in `streaming/attribute.py` directly; no stream framework since Phase 16 —
-DECISIONS). It drains `exposures` and `conversions`, resolves in-process, and
+in `streaming/attribute.py` directly; no stream framework — DECISIONS
+"Decisions still in force" → engine). It drains `exposures` and `conversions`, resolves in-process, and
 joins on `household_id`. Read the phrases below ("when a conversion arrives",
 "kept for the hot window") as the semantics of a **batch drain** with event-time
 windowing, not a live continuous follow: the engine drains both topics once and
 runs an arrival-ordered, watermark-gated, evicting pass per household (§8
-gotcha, DECISIONS Phase 5).
+gotcha; DECISIONS Phase 5).
 
 - **Hot window state**: exposures kept for the hot window (default 7 days),
   evicted by watermark. Window-state size is the central scaling constraint.
@@ -194,15 +193,16 @@ gotcha, DECISIONS Phase 5).
   household within the attribution window; credit the last one (**last-touch**),
   record the others as **assists**, emit an attributed record. If none, emit an
   **unattributed** record so reconciliation can retry later.
-- **Ambiguous deferral** (Phase 16): the hot path attributes only when the
+- **Ambiguous deferral**: the hot path attributes only when the
   household is certain — a device hit or a single-owner IP. A shared-IP
   conversion (`candidate_count > 1`) is collapsed to one placeholder row
   (lowest `household_id`) and emitted **unattributed, reason ambiguous_ip** —
   never a hot guess. Exactly one row per `conversion_id` still reaches
   ClickHouse, so `conversion_id` stays a safe ReplacingMergeTree key;
-  `processed_at` is the version, never a tiebreaker (DECISIONS Phase 2/3/16).
+  `processed_at` is the version, never a tiebreaker (DECISIONS "still in force"
+  → serving; history Phase 2/3/16).
   The cross-household most-recent-exposure pick lives in reconciliation only.
-- **Dedup**: on `exposure_id` and `conversion_id`. The Phase-5 batch drain keeps
+- **Dedup**: on `exposure_id` and `conversion_id`. The batch drain keeps
   a full seen-set (it already holds the whole topic in memory); TTL'd eviction
   sized to the max plausible duplicate delay is the continuous-follow target, not
   the batch mechanism — the seeded duplicate is timestamp-identical to its
@@ -214,18 +214,18 @@ gotcha, DECISIONS Phase 5).
   *when* an exposure is evicted. A conversion becomes **unattributed** for one
   reason — its matching exposure has aged out of the hot window (a state-miss),
   which happens when arrival lateness exceeds the tolerance — and is then picked
-  up by reconciliation. (Phase-5 `medium` keeps late ≤ `allowed_lateness`, so it
-  has no state-misses; the path is exercised by tests and, end to end, Phase 6.)
+  up by reconciliation. (The `medium` profile keeps late ≤ `allowed_lateness`, so
+  it has no state-misses; `long_delay` exercises the path end to end.)
 - Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`);
   an unattributed record also carries `reason` (`ambiguous_ip` | `state_miss`,
   null once credited) — the explicit contract reconciliation and the agent read
-  instead of re-deriving it from `candidate_count` (Phase 16) — and a deferred
-  record carries `candidate_households`, the full sorted owner set of the shared
-  IP (Phase 17): the array is the truth, the placeholder `household_id` is the
-  key. The engine never writes ClickHouse rows: it lands its output in the lake
+  instead of re-deriving it from `candidate_count` — and a deferred record
+  carries `candidate_households`, the full sorted owner set of the shared IP:
+  the array is the truth, the placeholder `household_id` is the key (DECISIONS
+  Phase 16 / 17). The engine never writes ClickHouse rows: it lands its output in the lake
   (below) and the Dagster load carries it to the serving tables.
 
-#### Lake of record (`lake/`, Phase 17)
+#### Lake of record (`lake/`)
 
 A local **Iceberg** lake (SqlCatalog on SQLite, `file://` warehouse under
 gitignored `data/lake/<profile>/`) is the system of record; ClickHouse is derived
@@ -256,8 +256,8 @@ DuckDB is the laptop compute; the SQL is the contract and Spark/Trino the port.
 #### ClickHouse (serving layer — a derived projection)
 
 Loaded from the lake by the Dagster load assets (`lake/load_serving.py` is the
-one writer of the two landed tables; the pre-Phase-17 direct engine sink lives
-on only as the test oracle, `tests/oracle.py`).
+one writer of the two landed tables; the direct engine sink lives on only as the
+test oracle, `tests/oracle.py` — DECISIONS Phase 17).
 
 - `attributed_conversions`: **ReplacingMergeTree** keyed on `conversion_id` with
   `processed_at` as version, so a replay or a reconciliation correction supersedes
@@ -280,7 +280,7 @@ on only as the test oracle, `tests/oracle.py`).
 
 Per event-time day, selects the CURRENT hot-unattributed rows of
 `raw.attributed_conversions` whose `event_time` is still within the long window
-(up to 90 days) — two channels, told apart by `reason` (Phase 17, spec D2):
+(up to 90 days) — two channels, told apart by `reason` (DECISIONS Phase 17):
 **state-misses** (certain household, causing exposure aged out of the hot
 window) join bucket-locally — only the `raw.exposures` partitions in `[day −
 90d, day]` with the same `bucket(household_id)`; **ambiguous_ip** rows are
@@ -317,26 +317,25 @@ Alerts fire a webhook to the agent, which is the second-stage triage.
 
 | Decision | Chosen | Why |
 |---|---|---|
-| Where device-graph resolution happens | In-process map step inside the engine (`resolve/` module, Phase-2 function signature) — was a dedicated stage + third topic until Phase 16 | A separate consumer/topic/subject bought nothing for an in-memory dict lookup; the seam worth keeping is the function, not the topic. Becomes a service again when the graph is owned by another team or a vendor (DECISIONS Phase 16) |
+| Where device-graph resolution happens | In-process map step inside the engine (`resolve/` module, `resolve_one`) | A separate consumer/topic/subject bought nothing for an in-memory dict lookup; the seam worth keeping is the function, not the topic. Becomes a service again when the graph is owned by another team or a vendor (DECISIONS Phase 16) |
 | Attribution rule | Last-touch, assists recorded | Industry default; multi-touch becomes a query, not a re-run |
 | Long window | Hot path (7d) + periodic reconciliation | 90d of processor state is infeasible at any real throughput |
 | Write model | ReplacingMergeTree + scheduled rollup refresh | Simplest model that stays correct under replays and corrections |
 | Restatements | `report_snapshots` with `reported_at` | Advertisers care; agent's late-arrival detector needs it |
 | Co-viewing | Read-time multiplier | Keeps the join clean |
-| Stream processor | None — a deterministic batch attributor in plain Python (Bytewax removed, Phase 16) | The Bytewax dataflow was a `TestingSource` + `fold_final` wrapper over the batch drain; the framework did no work. Continuous follow on a real framework (Bytewax proper vs Flink) is a Phase-18+ decision; SCALING.md keeps the Flink mapping as the port target |
-| System of record | The Iceberg lake; ClickHouse a derived, replayable projection loaded from it (Phase 17) | A dual-write with no transactional boundary is a drift generator, and an optional lake leaves ClickHouse as the record. Replay/backfill come from the lake, never Kafka retention; the 90-day reconcile is a partition-pruned (`day × bucket(household_id)`) join, not a scan (DECISIONS Phase 17) |
-| Ambiguous rows under bucketing | Persist `candidate_households` on the deferred row; explode per candidate → bucket-local join → cross-bucket reduce (Phase 17) | The placeholder sits in one bucket while its true candidates hash to others; the engine knew the set at deferral time and keeps it. No fan-out on the HOT path; batch fan-out is cheap and correct |
+| Stream processor | None — a deterministic batch attributor in plain Python | A stream framework over a bounded drain did no work (DECISIONS Phase 16). Continuous follow on a real framework (Bytewax proper vs Flink) is a Phase-18+ decision; SCALING.md keeps the Flink mapping as the port target |
+| System of record | The Iceberg lake; ClickHouse a derived, replayable projection loaded from it | A dual-write with no transactional boundary is a drift generator, and an optional lake leaves ClickHouse as the record. Replay/backfill come from the lake, never Kafka retention; the 90-day reconcile is a partition-pruned (`day × bucket(household_id)`) join, not a scan (DECISIONS Phase 17) |
+| Ambiguous rows under bucketing | Persist `candidate_households` on the deferred row; explode per candidate → bucket-local join → cross-bucket reduce | The placeholder sits in one bucket while its true candidates hash to others; the engine knew the set at deferral time and keeps it. No fan-out on the HOT path; batch fan-out is cheap and correct |
 
 ### 3.5 Out of scope for v1
 
 Co-viewing inside the engine, multi-touch attribution models, schema evolution
 beyond v1. Listed in README "Next steps".
 
-(Iceberg landing was originally out of scope here; Phase 12 added it as an
-optional dual-write, and Phase 17 made the lake the system of record with
-ClickHouse derived from it. See §3.3 "Lake of record", §5, DECISIONS Phase
-12/17. Still out of scope: an object store + REST catalog, Spark/Trino
-execution, continuous follow — the SCALING.md tier notes.)
+(Iceberg landing was originally out of scope here; the reversal and its two
+steps are DECISIONS Phase 12 / 17 — see §3.3 "Lake of record" and §5. Still out
+of scope: an object store + REST catalog, Spark/Trino execution, continuous
+follow — the SCALING.md tier notes.)
 
 ## 4. The agent: attribution-integrity guardian
 
@@ -456,9 +455,11 @@ CLAUDE.md        invariants, commands, conventions
 
 ## 7. Build order
 
-See `PHASES.md`. Each phase stands on its own, so the project degrades gracefully:
-even without the agent, a clean two-stream attribution spine with reconciliation,
-benchmark, and ground-truth accuracy stands on its own.
+The plan is `PHASES.md`; what each phase delivered, with its gate and PR, is the
+table in [`README.md` → History](../README.md#history); the reasons are
+`DECISIONS.md` (per-phase appendix). Each phase stands on its own, so the project
+degrades gracefully: even without the agent, a clean two-stream attribution spine
+with reconciliation, benchmark, and ground-truth accuracy stands on its own.
 
 ## 8. Gotchas
 
