@@ -110,7 +110,7 @@ def test_replay_refuses_an_empty_lake_before_touching_clickhouse(monkeypatch) ->
 
 def _dry_run(*args: str) -> str:
     return subprocess.run(
-        ["make", "-n", "replay-serving", *args],
+        ["make", "-n", "--no-print-directory", "replay-serving", *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

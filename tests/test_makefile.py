@@ -33,14 +33,14 @@ _ENV = clean_env()
 
 def _dry_run(target: str, *args: str) -> list[str]:
     out = subprocess.run(
-        ["make", "-n", target, *args],
+        ["make", "-n", "--no-print-directory", target, *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
         env=_ENV,
     ).stdout
-    return out.splitlines()
+    return [ln for ln in out.splitlines() if not ln.startswith("make[")]
 
 
 def _profile_tokens(line: str) -> set[str]:

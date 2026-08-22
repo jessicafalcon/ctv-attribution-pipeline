@@ -13,6 +13,8 @@ SCRUBBED = frozenset(
         "PYTEST_CURRENT_TEST",  # … and is honoured only under pytest
         "CONFIRM",
         "MAKEFLAGS",
+        "MFLAGS",
+        "MAKELEVEL",  # a sub-make (CI: `make test` → `make -n`) prints Entering/Leaving
         "SOURCE",
         "PROFILE",
     }
