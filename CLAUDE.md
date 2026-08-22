@@ -394,6 +394,26 @@ standard way over the clever way.
 - End each loop with a summary: what changed + decisions the spec didn't
   cover, listed explicitly for human review.
 
+### Before reporting DONE
+
+Run this self-review before the review gate; the phase report must include its
+output (item by item, not "done"):
+
+1. For every symbol deleted or renamed: grep the whole repo (docs, comments,
+   specs, Makefile, CI, .claude/) and list each hit you updated.
+2. For every Done-when item: name the test or command output that proves it.
+3. For every new Makefile target with a variable or a delete: show behavior
+   for empty value, "../x", a value containing `"; `, and the variable set
+   from the environment rather than the command line.
+4. For every new write path: can it give a different answer on re-run, on a
+   non-UTC machine, or with equal sort keys? Name the test pinning each.
+5. For every new top-level package: in test_truth_isolation? Metrics prefix
+   in CLAUDE.md?
+6. List every record file touched and every one the change implies you
+   should have touched.
+7. For each decision the spec didn't cover: the two alternatives not taken
+   and why, one line each.
+
 ## Git workflow (one branch + one PR per phase)
 
 - Treat `main` as protected: never commit to it directly; never force-push.
