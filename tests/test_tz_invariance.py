@@ -1,4 +1,4 @@
-"""RUNBOOK incident 3 guard: the reconcile write path gives the same bytes on a
+"""RUNBOOK incident 4 guard: the reconcile write path gives the same bytes on a
 machine in any timezone.
 
 For ten phases the reconciled rows' event_time/ingest_time were shifted by the

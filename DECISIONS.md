@@ -1190,7 +1190,7 @@ Phase 17 sits directly below the fixes.
   shifted by the developer machine's UTC offset on the reconciled path (campaign
   totals, pins and snapshots are offset-invariant, so nothing caught it; CI is
   UTC). That sink is now test-only. Developer ruling: not a note — RUNBOOK
-  incident 3 (same family as incident 2, the generalization made stronger: every
+  incident 4 (same family as incident 2, the generalization made stronger: every
   datetime is tz-aware UTC at every I/O boundary) plus an offline guard,
   `tests/test_tz_invariance.py`, that runs the reconcile write path under
   TZ=UTC and two non-UTC zones and asserts byte-identical rows — the "different

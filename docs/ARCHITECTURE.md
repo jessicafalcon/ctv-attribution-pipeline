@@ -602,7 +602,7 @@ handled.*
   instant inserted tz-aware UTC stored exactly). Found by inspection in Phase 17
   when the first lake-loaded rows sat +6h off the in-memory oracle — and it had
   been shifting the reconciled rows' `event_time`/`ingest_time` since Phase 6 on
-  every non-UTC machine (RUNBOOK incident 3). Rule: every datetime is tz-aware UTC
+  every non-UTC machine (RUNBOOK incident 4). Rule: every datetime is tz-aware UTC
   at every I/O boundary; a naive datetime never reaches a client call
   (`lake/load_serving.py` `_utc`; guard `tests/test_tz_invariance.py`).
 - **pyiceberg 0.11.1 snapshot expiry is metadata-only — orphaned data files stay

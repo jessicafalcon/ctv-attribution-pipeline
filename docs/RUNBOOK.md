@@ -1,6 +1,6 @@
 # Runbook — attribution pipeline
 
-For the next on-call engineer. Three incidents that already happened, in
+For the next on-call engineer. Four incidents that already happened, in
 post-incident form, plus one known limitation you should not rediscover the hard
 way. Every fact here traces to [`ARCHITECTURE.md` §8 "Gotchas"](ARCHITECTURE.md#8-gotchas),
 a [`DECISIONS.md`](../DECISIONS.md) entry, or a [`RESULTS.md`](RESULTS.md) number —
@@ -180,7 +180,7 @@ value pin (stored money equals the source to the cent) and the offline SQL guard
 [`tests/test_rollup_decimal.py`](../tests/test_rollup_decimal.py) (no money
 `sum()` without `toDecimal64`). **No alert covers a recurrence**: a last-digit
 difference moves no metric past any threshold.
-## Incident 3 — the reconciled rows that moved with the laptop's clock
+## Incident 4 — the reconciled rows that moved with the laptop's clock
 
 **Symptom.** Every row the reconciliation pass wrote (`path='reconciled'`) carried
 `event_time` and `ingest_time` shifted by the **machine's UTC offset** (+6h on an
