@@ -83,20 +83,29 @@ ATTRIBUTION ENGINE (deterministic batch attributor, Phase 16 — no stream frame
                    │  never a hot guess; reconciliation owns it
                    ├─ dedup on exposure_id / conversion_id (seen-set; TTL'd under continuous follow)
                    ├─ watermarks + allowed lateness (minutes–hours late)
-                   └─ emits attributed + unattributed conversion records
-                                       │
+                   └─ emits attributed + unattributed conversion records; a deferred row
+                      carries its full candidate_households (Phase 17)
+                                       │  lands (append) — never writes ClickHouse rows
                                        v
-CLICKHOUSE         attributed_conversions  (ReplacingMergeTree, key conversion_id, version processed_at)
-                   exposures_landed        (raw exposures, for reconciliation + naive benchmark)
+ICEBERG LAKE (system of record, Phase 17)   raw.exposures · raw.attributed_conversions
+                   both partitioned day(event_time) × bucket(N, household_id), N a table
+                   property; append-only logs (hot row, later the reconciled row);
+                   "current row" = argMax(processed_at) in SQL (DuckDB here; Spark/Trino at scale)
+                                       │  Dagster load, driven by the days TOUCHED
+                                       v
+CLICKHOUSE (derived serving projection, loaded from the lake; replayable with no Kafka)
+                   attributed_conversions  (ReplacingMergeTree, key conversion_id, version processed_at)
+                   exposures_landed        (raw exposures, for the naive benchmark + reconcile parity)
                    campaign_hourly         (rollups, refreshed on schedule; not insert-triggered)
                    report_snapshots        (reported_at × period → metrics; enables restatements)
                                        ^
-RECONCILIATION JOB (periodic)          │
-                   unattributed conversions still inside long window (up to 90d):
-                   state-misses → match against exposures_landed;
-                   ambiguous_ip → candidate households from device_graph, most-recent
-                   exposure across them wins (the ONE tiebreak) → write corrected rows
-                   → refresh rollups → write new report snapshot
+RECONCILIATION JOB (periodic, reads the LAKE, no broker)
+                   current hot-unattributed rows of raw.attributed_conversions per day:
+                   state-miss → bucket-local join vs raw.exposures in [day−90d, day];
+                   ambiguous_ip → EXPLODE over candidate_households BEFORE bucketing →
+                   bucket-local join → reduce by conversion_id across buckets, most-recent
+                   exposure wins (the ONE tiebreak) → append corrected rows to the lake
+                   → reload touched days → refresh rollups → write new report snapshot
                                        │
 REPORTING          ROAS / CPA / CVR / site-visit rate
                    restatement view: metric for period P as of time T
@@ -210,16 +219,52 @@ gotcha, DECISIONS Phase 5).
 - Every emitted record carries `processed_at` and `path` (`hot` | `reconciled`);
   an unattributed record also carries `reason` (`ambiguous_ip` | `state_miss`,
   null once credited) — the explicit contract reconciliation and the agent read
-  instead of re-deriving it from `candidate_count` (Phase 16).
+  instead of re-deriving it from `candidate_count` (Phase 16) — and a deferred
+  record carries `candidate_households`, the full sorted owner set of the shared
+  IP (Phase 17): the array is the truth, the placeholder `household_id` is the
+  key. The engine never writes ClickHouse rows: it lands its output in the lake
+  (below) and the Dagster load carries it to the serving tables.
 
-#### ClickHouse (serving layer)
+#### Lake of record (`lake/`, Phase 17)
+
+A local **Iceberg** lake (SqlCatalog on SQLite, `file://` warehouse under
+gitignored `data/lake/<profile>/`) is the system of record; ClickHouse is derived
+from it. Two raw tables, both partitioned **`day(event_time)` × `bucket(N,
+household_id)`** with N recorded as a table property (laptop default 8, identical
+on both tables, set once per deployment — SCALING.md):
+
+- `raw.exposures` — the engine's deduped exposures.
+- `raw.attributed_conversions` — the ClickHouse table's 19 columns in the same
+  order (a pinned contract: model = loader = DDL = Iceberg schema = reconcile
+  read-back).
+
+Both are **append-only logs**: the hot row and, later, the reconciled row for the
+same `conversion_id` both live here; exact re-lands accumulate. "Current row per
+key" is a READ-side question answered in SQL (`argMax(processed_at)`, the
+ReplacingMergeTree rule) — never assumed. The lake → ClickHouse **load** is a
+Dagster asset per (table, day), materialized for exactly the days a landing
+TOUCHED (`land()` returns them; a late row lands in an old day and reloads that
+day) — never for "today". Loading is idempotent because the ReplacingMergeTree
+collapses the re-insert. `make replay-serving` rebuilds the serving tables from
+the lake with no Kafka involvement (Kafka retention is hours; the lake is
+forever). Hygiene is a Dagster job (`make lake-maintain`: compact a day's small
+files, expire old snapshots), off the write path. Iceberg metadata (snapshot
+ids, commit times) is non-deterministic and carved out of the byte-identical
+guarantee exactly like the agent; every asserted check reads rows back.
+DuckDB is the laptop compute; the SQL is the contract and Spark/Trino the port.
+
+#### ClickHouse (serving layer — a derived projection)
+
+Loaded from the lake by the Dagster load assets (`lake/load_serving.py` is the
+one writer of the two landed tables; the pre-Phase-17 direct engine sink lives
+on only as the test oracle, `tests/oracle.py`).
 
 - `attributed_conversions`: **ReplacingMergeTree** keyed on `conversion_id` with
   `processed_at` as version, so a replay or a reconciliation correction supersedes
   the earlier row. Readers use `FINAL` or `argMax` at read. Inserts are synchronous
   today; async inserts are a scaling lever (see SCALING.md), not a current property.
-- `exposures_landed`: raw exposures, for reconciliation lookups and the naive
-  benchmark.
+- `exposures_landed`: raw exposures, for the naive benchmark and the reconcile
+  source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
   MV), never an insert-triggered summing MV, so corrections cannot double-count.
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
@@ -231,17 +276,23 @@ gotcha, DECISIONS Phase 5).
 - Sort keys chosen for the query pattern (`campaign_id`, `hour`).
 - A SELECT-only user exists for the agent.
 
-#### Reconciliation job (periodic)
+#### Reconciliation job (periodic, reads the lake)
 
-Selects unattributed conversions whose `event_time` is still within the long
-window (up to 90 days) — two kinds, told apart by `reason`: **state-misses** (certain household, causing
-exposure aged out of the hot window), matched against `exposures_landed` by
-household and window; and **ambiguous_ip** rows (Phase 16), whose candidate
-households are re-enumerated from the compacted `device_graph` with the engine's
-own resolver, scored with the same last-touch leaf per household, and settled by
-the most-recent-exposure rule (ties: `exposure_id`, then `household_id`) — the
-one implementation of that tiebreak (`reconcile.pick_household`). Writes
-corrected rows with `path=reconciled`, triggers a rollup refresh, and writes a
+Per event-time day, selects the CURRENT hot-unattributed rows of
+`raw.attributed_conversions` whose `event_time` is still within the long window
+(up to 90 days) — two channels, told apart by `reason` (Phase 17, spec D2):
+**state-misses** (certain household, causing exposure aged out of the hot
+window) join bucket-locally — only the `raw.exposures` partitions in `[day −
+90d, day]` with the same `bucket(household_id)`; **ambiguous_ip** rows are
+**exploded** into one row per entry of their persisted `candidate_households`
+BEFORE bucketing, each exploded row joins bucket-locally, and the results are
+reduced by `conversion_id` ACROSS buckets with the most-recent-exposure rule
+(ties: `exposure_id`, then `household_id`) — the one implementation of that
+tiebreak (`reconcile.pick_household`), the same last-touch leaf per household.
+The architecture's claim is no fan-out on the HOT path; batch fan-out with the
+full 90-day picture is cheap and correct. No device graph, no broker. Appends
+corrected rows (`path=reconciled`, a strictly later `processed_at`) to the lake,
+reloads the touched days into ClickHouse, triggers a rollup refresh, and writes a
 new report snapshot. This is the second attribution path and it is what makes a
 90-day window possible without 90 days of processor state; advertisers get a
 late correct credit instead of a fast wrong one.
@@ -257,7 +308,7 @@ change worked.
 
 #### Observability
 
-Prometheus metrics from producer, engine (including the in-process resolve step's `resolve_` series), and reconciliation job.
+Prometheus metrics from producer, engine (including the in-process resolve step's `resolve_` series), the lake → ClickHouse load (`lake_rows_loaded_total{table}`, emitted by whichever process ran the load), and reconciliation job.
 Grafana dashboards committed as JSON. Alertmanager rules for the deterministic
 conditions (lag, watermark stall, match rate outside band, restatement magnitude).
 Alerts fire a webhook to the agent, which is the second-stage triage.
@@ -272,16 +323,20 @@ Alerts fire a webhook to the agent, which is the second-stage triage.
 | Write model | ReplacingMergeTree + scheduled rollup refresh | Simplest model that stays correct under replays and corrections |
 | Restatements | `report_snapshots` with `reported_at` | Advertisers care; agent's late-arrival detector needs it |
 | Co-viewing | Read-time multiplier | Keeps the join clean |
-| Stream processor | None — a deterministic batch attributor in plain Python (Bytewax removed, Phase 16) | The Bytewax dataflow was a `TestingSource` + `fold_final` wrapper over the batch drain; the framework did no work. Continuous follow on a real framework (Bytewax proper vs Flink) is a Phase-17+ decision; SCALING.md keeps the Flink mapping as the port target |
+| Stream processor | None — a deterministic batch attributor in plain Python (Bytewax removed, Phase 16) | The Bytewax dataflow was a `TestingSource` + `fold_final` wrapper over the batch drain; the framework did no work. Continuous follow on a real framework (Bytewax proper vs Flink) is a Phase-18+ decision; SCALING.md keeps the Flink mapping as the port target |
+| System of record | The Iceberg lake; ClickHouse a derived, replayable projection loaded from it (Phase 17) | A dual-write with no transactional boundary is a drift generator, and an optional lake leaves ClickHouse as the record. Replay/backfill come from the lake, never Kafka retention; the 90-day reconcile is a partition-pruned (`day × bucket(household_id)`) join, not a scan (DECISIONS Phase 17) |
+| Ambiguous rows under bucketing | Persist `candidate_households` on the deferred row; explode per candidate → bucket-local join → cross-bucket reduce (Phase 17) | The placeholder sits in one bucket while its true candidates hash to others; the engine knew the set at deferral time and keeps it. No fan-out on the HOT path; batch fan-out is cheap and correct |
 
 ### 3.5 Out of scope for v1
 
 Co-viewing inside the engine, multi-touch attribution models, schema evolution
 beyond v1. Listed in README "Next steps".
 
-(Iceberg landing was originally out of scope here; Phase 12 added it — a local
-Iceberg exposure lake with a DuckDB-over-Iceberg reconcile source and Dagster
-orchestration. See §5 and DECISIONS Phase 12.)
+(Iceberg landing was originally out of scope here; Phase 12 added it as an
+optional dual-write, and Phase 17 made the lake the system of record with
+ClickHouse derived from it. See §3.3 "Lake of record", §5, DECISIONS Phase
+12/17. Still out of scope: an object store + REST catalog, Spark/Trino
+execution, continuous follow — the SCALING.md tier notes.)
 
 ## 4. The agent: attribution-integrity guardian
 
@@ -365,8 +420,8 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 
 | Capability | Where the project delivers it |
 |---|---|
-| Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 17+; SCALING.md Flink mapping) |
-| Deep compute / lakehouse | Windowed stateful joins, reconciliation path; local Iceberg exposure lake + DuckDB-over-Iceberg reconcile source + Dagster day-partitioned orchestration (Phase 12). Object store / REST catalog / Spark-Trino compute are the SCALING port |
+| Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 18+; SCALING.md Flink mapping) |
+| Deep compute / lakehouse | Windowed stateful joins, reconciliation path; the Iceberg lake is the system of record (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(household_id)`), ClickHouse a derived projection loaded by Dagster per touched day, reconciliation a bucket-aligned DuckDB-over-Iceberg join, replay from the lake with no Kafka (Phase 17). Object store / REST catalog / Spark-Trino compute are the SCALING port |
 | OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
 | On-call / incident readiness | Prometheus, Grafana, Alertmanager rules, runbook-style SCALING.md |
@@ -432,7 +487,7 @@ handled.*
   `conversion_id` is present when `one_row_per_conversion` collapses it
   (DECISIONS Phase 3 (b)). Windowing (watermarks, allowed lateness, eviction)
   landed in Phase 5 **on the batch drain**; continuous Kafka follow and the
-  framework to run it on (Bytewax proper vs Flink) are a Phase-17+ decision — the
+  framework to run it on (Bytewax proper vs Flink) are a Phase-18+ decision — the
   two resolve BACKLOG rows re-defer on exactly that trigger.
 - **The seeded duplicate is timestamp-identical to its original, so batch dedup
   is a full seen-set, not TTL'd.** The duplicate injector re-appends the *same
@@ -539,6 +594,38 @@ handled.*
   identical rows). Both facts kept the projection off the golden DDL path
   (`clickhouse/ddl.sql`) — it is added only inside `make cost-levers` against the
   `bench_large` run, so gate-0 tiny golden stays byte-identical.
+- **clickhouse-connect writes a NAIVE datetime as the client's LOCAL wall-clock,
+  but reads a `DateTime64(3,'UTC')` column back as a naive UTC wall-clock.** The
+  mirror image of the gotcha above, on the write side, and asymmetric with it: a
+  value read back naive-UTC and re-inserted naive is shifted by the machine's UTC
+  offset (probe on an MDT laptop: naive `12:02:51` stored as `18:02:51`; the same
+  instant inserted tz-aware UTC stored exactly). Found by inspection in Phase 17
+  when the first lake-loaded rows sat +6h off the in-memory oracle — and it had
+  been shifting the reconciled rows' `event_time`/`ingest_time` since Phase 6 on
+  every non-UTC machine (RUNBOOK incident 4). Rule: every datetime is tz-aware UTC
+  at every I/O boundary; a naive datetime never reaches a client call
+  (`lake/load_serving.py` `_utc`; guard `tests/test_tz_invariance.py`).
+- **pyiceberg 0.11.1 snapshot expiry is metadata-only — orphaned data files stay
+  on disk.** `table.maintenance.expire_snapshots()` drops old snapshots and
+  manifests, but there is no `remove_orphan_files`, so the Parquet files those
+  snapshots referenced (and the files a compaction replaced) are never deleted:
+  `make lake-maintain` (compaction = a rewrite of the day's data files, row content
+  unchanged; then expiry) bounds the LIVE file count, not the directory size
+  (measured: 24 → 32 files on disk across one compaction + expiry). Only `make
+  lake-reset` reclaims today (BACKLOG 45, re-qualified; pinned so a pyiceberg bump
+  fails loud).
+- **Phase-17 first-hour stack check (spec D11) — all four supported by the pinned
+  versions, no workaround needed.** pyiceberg 0.11.1 + pyiceberg-core, duckdb 1.5.5,
+  verified on a scratch catalog before any lake-of-record code was written:
+  (1) a `PartitionSpec(day(event_time), bucket[8](household_id))` is accepted on
+  `create_table` and the bucket count round-trips as a table property
+  (`ctv.bucket_count`); (2) `table.append` WRITES the bucketed layout — 3 days × 8
+  buckets landed as 24 Parquet files under `event_time_day=…/household_bucket=…/`;
+  (3) `table.maintenance.expire_snapshots().older_than(ts).commit()` exists on this
+  version (3 snapshots → 1); (4) DuckDB `iceberg_scan` with an
+  `event_time >= … and household_id = …` predicate reported `Total Files Read: 1`
+  of 24 — it prunes on BOTH the day and the bucket transform, which is what makes
+  the 90-day reconcile join partition-local instead of a scan.
 
 ---
 

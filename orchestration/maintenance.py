@@ -1,0 +1,39 @@
+"""Dagster job `lake_maintenance` (Phase 17, spec D10); run by
+`python -m lake.destructive maintain` (`make lake-maintain`, which prompts). Two
+ops, one per raw table, each running
+`lake.maintenance.maintain`: compact the day partitions that accumulated small
+files, then expire snapshots older than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7).
+Not part of `make run` — hygiene on a schedule, never on the write path.
+"""
+
+import os
+from datetime import UTC, datetime, timedelta
+
+from dagster import OpExecutionContext, job, op
+
+from lake.iceberg_catalog import ensure_attributed, ensure_exposures
+from lake.maintenance import maintain
+
+
+def _max_age() -> timedelta:
+    return timedelta(days=float(os.environ.get("LAKE_SNAPSHOT_MAX_AGE_DAYS", "7")))
+
+
+@op
+def maintain_exposures(context: OpExecutionContext) -> dict[str, int]:
+    out = maintain(ensure_exposures(), _max_age(), datetime.now(UTC))
+    context.log.info(f"raw.exposures: {out}")
+    return out
+
+
+@op
+def maintain_attributed(context: OpExecutionContext) -> dict[str, int]:
+    out = maintain(ensure_attributed(), _max_age(), datetime.now(UTC))
+    context.log.info(f"raw.attributed_conversions: {out}")
+    return out
+
+
+@job
+def lake_maintenance() -> None:
+    maintain_exposures()
+    maintain_attributed()

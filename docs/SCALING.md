@@ -20,7 +20,7 @@ partition counts but not the structure.
   resolves conversions in-process against the compacted device graph, and runs an
   arrival-ordered, watermark-gated, evicting pass (ARCHITECTURE §8). No stream
   framework: the Bytewax wrapper was removed in Phase 16 because it only regrouped
-  lists; the framework for continuous follow (Bytewax proper vs Flink) is a Phase-17+
+  lists; the framework for continuous follow (Bytewax proper vs Flink) is a Phase-18+
   choice and the mapping table below is the port target. Windowing, watermarks,
   allowed-lateness, dedup, and eviction are all real, but on the drain.
 - **Ambiguous shared-IP conversions are deferred, not guessed** (Phase 16): the hot
@@ -35,13 +35,20 @@ partition counts but not the structure.
 - **ClickHouse single node**: ReplacingMergeTree, **synchronous inserts** (async
   inserts are a scale-up lever, not built here — see the 50k/500k tiers below), a
   scheduled rollup refresh.
-- **Local lakehouse (Phase 12)**: exposures dual-write to a local Iceberg table
-  (SqlCatalog on SQLite + `file://` warehouse), read back by DuckDB as the reconcile
-  source, orchestrated by a local Dagster `dagster dev`. The **scale-tier port**
-  (cited by ARCHITECTURE §5 / README, not built): an object store + REST catalog for
-  the warehouse, Spark/Trino as the lake compute engine (DuckDB is the laptop proof of
-  the compute-on-lake pattern), and a deployed/containerized Dagster instead of the
-  loopback dev server.
+- **The lake is the record (Phase 17).** The engine lands `raw.exposures` and
+  `raw.attributed_conversions` in a local Iceberg lake (SqlCatalog on SQLite +
+  `file://` warehouse, one lake per profile), both partitioned `day(event_time) ×
+  bucket(N, household_id)` with **N = 8** recorded as a table property; Dagster
+  loads ClickHouse from it per touched day; reconciliation is a bucket-aligned
+  DuckDB-over-Iceberg join; replay is from the lake (no Kafka). The **scale-tier
+  port** (cited by ARCHITECTURE §5 / README, not built): an object store + REST
+  catalog for the warehouse, Spark/Trino running the SAME SQL as the lake compute
+  engine (DuckDB is the laptop proof), and a deployed/containerized Dagster instead
+  of the loopback dev server. Bucketing is what makes the 90-day reconcile join
+  shuffle-free at scale: a household's exposures and its candidates' exploded rows
+  hash to the same bucket of every day partition, so a (day, bucket) unit reads
+  1/N of the lake. N is set once per deployment like a partition count — never
+  changed on a populated lake (`make lake-reset` + re-populate, spec D7).
 
 Everything below is what has to change as the *rate* (not the event count) climbs.
 
@@ -104,14 +111,17 @@ there is no intermediate topic. The continuous-follow port re-introduces the key
 intermediate stream (a `keyBy(household_id)` in Flink terms) — it is the one topic
 Phase 16 removed and the one a framework would give back for free.
 
-| tier | target rate | per-topic partitions (≈) | engine workers |
-|---|---|---|---|
-| laptop | ~few k/sec | 1 | 1 (batch drain) |
-| 50k/sec | 50,000 | 8–16 | one per partition |
-| 500k/sec | 500,000 | 64–128 | one per partition, sharded state |
+| tier | target rate | per-topic partitions (≈) | engine workers | lake `bucket(N, household_id)` |
+|---|---|---|---|---|
+| laptop | ~few k/sec | 1 | 1 (batch drain) | 8 (table property, both raw tables) |
+| 50k/sec | 50,000 | 8–16 | one per partition | 64–128 (≈ one bucket per reconcile task; files stay ≥ tens of MB per (day, bucket)) |
+| 500k/sec | 500,000 | 64–128 | one per partition, sharded state | 512–1024 (Spark/Trino task = one (day, bucket); change N only by re-populating a new lake) |
 
 Partition count is a one-way ratchet in Kafka (you can add but not cleanly remove, and
 adding re-hashes keys), so it is provisioned for the target tier, not grown reactively.
+The lake bucket count N is the same kind of decision (Phase 17): a table property
+chosen for the target tier's file size × task parallelism, identical on both raw
+tables, and never changed on a populated lake — a new N means a new lake.
 
 ## Tier: 50k/sec
 
@@ -143,7 +153,7 @@ adding re-hashes keys), so it is provisioned for the target tier, not grown reac
   engine is a plain-Python batch attributor (Phase 16); at 500k/sec the mature choice
   is Flink: a battle-tested RocksDB state backend, incremental checkpointing,
   exactly-once, and operational tooling (Bytewax proper is the Python-first
-  alternative for the 50k tier — the Phase-17+ decision). The construct mapping is 1:1
+  alternative for the 50k tier — the Phase-18+ decision). The construct mapping is 1:1
   (below), so this is a port, not a redesign.
 - **ClickHouse becomes a cluster.** ReplicatedReplacingMergeTree, sharded by a
   household hash (keeps a conversion's corrections on one shard) or by `campaign_id`
@@ -226,5 +236,5 @@ sized to the real duplicate-injector / upstream re-send delay. This is also wher
 seeded fixture stops being a faithful proxy: the fixture's duplicate is
 **timestamp-identical** to its original (same `event_time` and `ingest_time`), so a
 real deployment with genuinely-later re-send timestamps is needed to exercise TTL
-sizing. Continuous follow and its framework are a Phase-17+ decision; the two resolve
+sizing. Continuous follow and its framework are a Phase-18+ decision; the two resolve
 BACKLOG rows re-defer on the same trigger.

@@ -11,11 +11,12 @@ so a distinct-on-exposure_id read equals ClickHouse's collapse on the full
 (campaign_id, event_time, exposure_id) sort key. Do NOT rely on append for dedup.
 """
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import pyarrow as pa
 
-from lake.iceberg_catalog import ensure_table
+from lake.iceberg_catalog import ensure_exposures
 from producer.models import Exposure
 
 # Arrow schema mirrors EXPOSURE_SCHEMA: timestamptz(UTC) at microsecond precision
@@ -69,13 +70,18 @@ def _to_arrow(exposures: list[Exposure]) -> pa.Table:
     )
 
 
-def land(exposures: list[Exposure]) -> int:
-    """Append `exposures` to raw.exposures; return the count appended. Consumes
-    the SAME deduped list the ClickHouse sink lands (streaming.dataflow run_engine
-    under --lake-land), so the two copies share one input set by construction
+def touched_days(times: Iterable[datetime]) -> set[str]:
+    """The `event_time` day partitions (YYYY-MM-DD, UTC — Iceberg's day transform)
+    a landing writes. Spec D6: the load is driven by the days TOUCHED, never by
+    the wall clock, so a late row that lands in an old day reloads that day."""
+    return {_to_utc_ms(t).date().isoformat() for t in times}
+
+
+def land(exposures: list[Exposure]) -> set[str]:
+    """Append `exposures` to raw.exposures; return the event_time days touched
+    (empty when nothing landed). The engine's deduped list is the one input set
     (DECISIONS Phase 12)."""
     if not exposures:
-        return 0
-    table = ensure_table()
-    table.append(_to_arrow(exposures))
-    return len(exposures)
+        return set()
+    ensure_exposures().append(_to_arrow(exposures))
+    return touched_days(e.event_time for e in exposures)

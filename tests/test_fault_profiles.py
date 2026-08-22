@@ -244,7 +244,7 @@ def test_in_window_scenarios_restate_only_through_the_deferral_channel(
     # State-miss channel: nothing to recover on the long window.
     assert reconcile(state_miss, by_hh, LONG_WINDOW, at) == []
     # Ambiguous channel: exactly the deferred set, each credited once.
-    recovered = reconcile(expand_candidates(ambiguous, idx), by_hh, LONG_WINDOW, at)
+    recovered = reconcile(expand_candidates(ambiguous), by_hh, LONG_WINDOW, at)
     assert len(ambiguous) == deferred
     assert {r.conversion_id for r in recovered} == {r.conversion_id for r in ambiguous}
 

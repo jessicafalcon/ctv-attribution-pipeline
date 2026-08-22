@@ -6,9 +6,11 @@ A self-contained streaming data pipeline: a seeded producer emits TV
 ad-exposure and conversion events into Redpanda, a deterministic batch
 attributor (plain Python, no stream framework) resolves conversions to
 households through a device graph in-process and does a windowed,
-late-tolerant, cross-device join over a drain of the topics, a periodic
-reconciliation job closes the long-window tail and settles the shared-IP
-ambiguous conversions the hot path refuses to guess, ClickHouse serves
+late-tolerant, cross-device join over a drain of the topics and lands its output
+in a local Iceberg lake (the system of record), Dagster loads ClickHouse from the
+lake, a periodic reconciliation job reads the lake bucket-locally to close the
+long-window tail and settle the shared-IP ambiguous conversions the hot path
+refuses to guess, ClickHouse serves
 ROAS/CPA/CVR/site-visit rate with restatements, and a read-only AI agent
 triages attribution integrity from Prometheus/Alertmanager alerts. Ground-truth causal links let
 attribution accuracy and agent accuracy be scored against reality.
@@ -32,15 +34,19 @@ REDPANDA  exposures | conversions  + schema registry
 ATTRIBUTION ENGINE (deterministic batch attributor, no stream framework)
    resolve step in-process: device → household (IP fallback; shared IP = ambiguous)
    hot window (7d) · last-touch + assists · dedup (seen-set) · watermarks + allowed lateness
-   ambiguous shared-IP → unattributed (ambiguous_ip), never a hot guess
-                                       ▼
-CLICKHOUSE  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
+   ambiguous shared-IP → unattributed (ambiguous_ip) + candidate_households, never a hot guess
+                                       ▼ land (append)
+ICEBERG LAKE (system of record, Phase 17)  raw.exposures · raw.attributed_conversions
+            day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
+                                       ▼ Dagster load (touched days)
+CLICKHOUSE  (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
             exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
                                        ▲
-RECONCILIATION JOB (periodic)  unattributed in long window (≤90d): state-misses → match vs
-                               exposures_landed; ambiguous_ip → candidate households from
-                               device_graph, most-recent exposure wins (the ONE tiebreak)
-                               → corrected rows → refresh → snapshot
+RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
+                               state-miss → bucket-local join vs raw.exposures [day−90d, day];
+                               ambiguous_ip → explode over candidate_households → bucket-local
+                               join → reduce across buckets, most-recent exposure wins (the ONE
+                               tiebreak) → append to lake → reload → refresh → snapshot
                                        │
 REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
 ──── off the critical path ──────────────────────────────────────────────
@@ -62,16 +68,30 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   compacted-topic graph loader, was `stage.py`). Offline replay = `make resolve`.
   No topic.
 - `streaming/` — the engine: `attribute.py` pure core (hot rule, watermark,
-  eviction, dedup) + `dataflow.py` batch-drain driver. No Bytewax (Phase 16).
-- `reconcile/` — periodic long-window matcher (state-misses AND the deferred
-  ambiguous_ip rows: candidates re-enumerated from the device graph,
-  `pick_household` = the one most-recent-exposure tiebreak), rollup refresh,
-  snapshot writer; `sources.py` = the ClickHouse / Iceberg exposure-source
-  interface (Phase 12).
-- `lake/` — local Iceberg exposure lake (Phase 12): catalog + schema, dedup-safe
-  landing, DuckDB read. Data under gitignored `data/lake/`.
-- `orchestration/` — Dagster day-partitioned reconciliation assets + headless
-  runner (Phase 12).
+  eviction, dedup, the candidate set captured before the placeholder collapse) +
+  `dataflow.py` batch-drain driver that LANDS to the lake (never writes ClickHouse
+  rows). No Bytewax (Phase 16). The old direct sink is `tests/oracle.py`.
+- `reconcile/` — periodic long-window matcher over the lake (Phase 17): per day,
+  state-miss rows join bucket-locally; ambiguous_ip rows are exploded over their
+  persisted `candidate_households`, joined bucket-locally, reduced across buckets
+  by `pick_household` = the one most-recent-exposure tiebreak; rollup refresh,
+  snapshot writer. One candidate reader (the lake), one picker, one fix — the
+  Phase-6 ClickHouse reader and the Phase-12 source classes were deleted at the
+  Phase-17 review gate; the integration parity proof reads `exposures_landed`
+  itself.
+- `lake/` — the lake of record (Phase 12 → 17): catalog + schemas
+  (`raw.exposures`, `raw.attributed_conversions`, `day × bucket(8, household_id)`),
+  landing (returns touched days), DuckDB reads (dedup / argMax current),
+  `load_serving.py` (the ONE ClickHouse writer of the landed tables),
+  `maintenance.py` (compact + expire), `destructive.py` (the THREE destructive paths
+  — `reset | replay | maintain` — one process each: validate the profile, derive
+  the root, tty prompt, act; `replay` stamps `eval_meta` in-process). Data under
+  gitignored `data/lake/<profile>/`.
+- `orchestration/` — Dagster assets: per-day lake → ClickHouse load, day-partitioned
+  bucket-aligned reconciliation, finalize; the `lake_maintenance` job (not
+  registered in the UI code location — destructive, one entry point); ONE headless
+  CLI, `run.py` (`load | reconcile`, `--profile` required — it binds the lake);
+  `replay.py` / `maintenance.py` are library code for `lake/destructive.py`.
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
@@ -92,28 +112,47 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 
 - `make setup` — uv sync, pre-commit install
 - `make up` / `make down` — compose up with health checks / down with volumes
-  (`down` is the ONLY sanctioned destructive path)
+  (`down` plus the three paths in `lake/destructive.py` — `lake-reset`,
+  `replay-serving`, `lake-maintain` — are the sanctioned destructive paths; one
+  process each: validate the profile, prompt on a tty, act)
 - `make seed PROFILE=tiny|medium|<fault>` — run producer (deterministic per
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/;
   the unit proof of the resolve step the engine runs in-process
-- `make run` — engine (resolve in-process → hot join) + reconciliation pass (a
-  single pass, not a daemon); the full pipeline over the seeded stream
-- `make run-hot` — engine only, no reconciliation; backs the hot-path oracle
-  suites (tiny golden/accuracy, medium hardening) and CI, where a reconciliation
-  pass would over-credit long-tail organics and shift the pins. Hot numbers
-  exclude the deferred shared-IP conversions by design (Phase 16)
-- `make lake-land` — engine, dual-writing the SAME deduped exposures
-  into the Iceberg lake (`raw.exposures`, day-partitioned) alongside ClickHouse. The
-  SOLE landing site (`--lake-land` flag; `make run`/CI never land, so the engine path
-  stays byte-identical). Run after `make up && make seed` (Phase 12)
+- `make run` — engine (resolve in-process → hot join) → lake → Dagster load →
+  ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
+  reloads touched days → rollup + snapshots; a single pass, not a daemon); the full
+  pipeline over the seeded stream. Every row in ClickHouse arrived through the lake
+  (Phase 17). One lake per PROFILE, `data/lake/<profile>`, bound by each entry
+  point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override)
+- `make run-hot` — engine → lake → load only, no reconciliation; backs the hot-path
+  oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
+  reconciliation pass would over-credit long-tail organics and shift the pins. Hot
+  numbers exclude the deferred shared-IP conversions by design (Phase 16)
 - `make reconcile-dagster PROFILE=<p>` — orchestrated reconciliation: materialize the
-  day-partitioned `reconciled_conversions` Dagster asset (exposures sourced from
-  Iceberg via DuckDB) over the candidate days + finalize, headless (ephemeral
-  instance, no webserver). `PARTITION=<YYYY-MM-DD>` materializes one day. Output is
-  byte-identical to `make run`'s reconcile pass. Run after `make lake-land` (Phase 12)
-- `make dagster-ui` — optional dev-only Dagster asset-graph UI + backfill controls,
+  day-partitioned `reconciled_conversions` Dagster asset (bucket-aligned over the
+  lake) over the candidate days, reload the touched days, finalize — headless
+  (ephemeral instance, no webserver). `PARTITION=<YYYY-MM-DD>` materializes one day.
+  Output is byte-identical to `make run`'s reconcile pass. Run after `make run-hot`
+- `make replay-serving PROFILE=<p> [CONFIRM=yes]` — rebuild the ClickHouse serving
+  tables FROM THE LAKE, no Kafka: TRUNCATE `exposures_landed` + `eval_meta` +
+  `attributed_conversions` (destructive → prompts unless CONFIRM=yes), reload every
+  day the lake holds (current rows: hot or reconciled), stamp `eval_meta` in the
+  same process; `make eval` then reproduces the pins (Phase 17)
+- `make lake-reset PROFILE=<p> [CONFIRM=yes]` — one of the three sanctioned destructive
+  paths (`lake/destructive.py`; the others are `replay-serving` and `lake-maintain`),
+  beside `make down`: delete this profile's lake (`data/lake/<p>/`); prompts
+  unless CONFIRM=yes. `make down` never touches `data/lake/`. The clean-stack
+  `test-int-*` targets pass CONFIRM=yes for their own profile (a clean stack is a
+  clean lake — the lake outlives `make down` and ClickHouse is loaded from it)
+- `make lake-maintain PROFILE=<p> [CONFIRM=yes]` — the `lake_maintenance` Dagster job (prompts unless CONFIRM=yes — it rewrites the record's data files): compact
+  each day partition that accumulated >1 file per bucket (one file per (day,
+  bucket)) and expire snapshots older than `LAKE_SNAPSHOT_MAX_AGE_DAYS` (7). Off
+  the `make run` path; rows unchanged (Phase 17)
+- `make dagster-ui PROFILE=<p>` — optional dev-only Dagster asset-graph viewer;
+  materialize works for the one profile bound via `DAGSTER_PROFILE` (no default
+  lake root, so an unbound code location only renders the graph),
   bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
@@ -136,8 +175,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   the schema doesn't reward one: leading key already prunes campaign, non-key columns
   scattered), and PREWHERE (WINS). Reuses `bench.py`'s canonicalization + summary
   reader; magnitude-free direction asserts + 6dp row-equality; rewrites the "Query cost
-  levers" block in `docs/RESULTS.md`. Run after `make up && make seed PROFILE=bench_large
-  && make run` (Phase 13)
+  levers" block in `docs/RESULTS.md`. Run after `make lake-reset PROFILE=bench_large
+  CONFIRM=yes && make up && make seed PROFILE=bench_large
+  && make run PROFILE=bench_large` (Phase 13)
 - `make scale-curve` — measured hot-window scaling curve (offline, no compose):
   drain the engine over tiered event counts (1k/10k/100k exposures resident), print
   the measured STRUCTURAL per-exposure window-state cost and the occupancy curve (deep
@@ -147,7 +187,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (Phase 14)
 - `make metrics-capture PROFILE=<p>` — dump each stage's terminal Prometheus
   registry from a REAL run to `data/out/<p>/metrics/*.prom` (provenance of the
-  promtool alert fixtures; live-stack, run after `make up && make seed`)
+  promtool alert fixtures; a CLEAN-STACK capture: `make down && make lake-reset
+  PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p>` first — over a
+  populated lake the reconcile candidates are the lake's current rows and a second
+  capture differs; recaptured in Phase 18)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values;
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
@@ -160,38 +203,46 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (API tokens; ask first)
 - `make test` — pytest, no services, no network
 - `make test-int` — pytest against running compose stack (tiny profile)
-- `make test-int-medium` — clean medium-only stack (make down && up && seed
+- `make test-int-medium` — clean medium-only stack + lake (make down && lake-reset && up && seed
   medium && run-hot) → the Phase-5 live hardening proof (hot engine only — a
   reconcile pass would shift the pinned hot precision); isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
-- `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
+- `make test-int-long-delay` — clean long_delay-only stack + lake (make down && lake-reset && up && seed
   long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
   for the same shared-conversion_id reason (DECISIONS Phase 5/6)
-- `make test-int-shared-ip` — clean shared_ip_spike-only stack (make down && up &&
+- `make test-int-shared-ip` — clean shared_ip_spike-only stack + lake (make down && lake-reset && up &&
   seed shared_ip_spike && run-hot; the test runs the reconcile pass itself) → the
   Phase-8/16 live fault-harness proof: hot `caused_wrong_household=0` (ambiguous
   deferred), post-reconcile 69/80 correct / 11 wrong-household (the fault observed,
   same pick the old hot reduce made), and the `AttributionContext` is populated;
   isolated for the same shared-conversion_id reason
-- `make test-int-agent` — clean shared_ip_spike-only stack (make down && up && seed &&
+- `make test-int-agent` — clean shared_ip_spike-only stack + lake (make down && lake-reset && up && seed &&
   run) → the Phase-9 live read-only proof: the SELECT-only `agent_ro` user cannot write
   (INSERT/ALTER/DROP/CREATE → ACCESS_DENIED) and the whole collector+probe read path
   runs under it (SN2). No LLM call, no API tokens; isolated for the same reason
-- `make test-int-lakehouse` — clean long_delay-only stack (make down && up && seed
-  long_delay && lake-land long_delay) → the Phase-12 live lakehouse proof: reconcile
-  output is byte-identical whether exposures are sourced from ClickHouse or
-  Iceberg-via-DuckDB, and the Dagster-orchestrated pass writes the same reconciled
-  rows. No API tokens; isolated for the same shared-conversion_id reason
+- `make test-int-lakehouse` — clean long_delay-only stack + lake (make down &&
+  lake-reset && up && seed long_delay && run-hot long_delay) → the Phase-17 live
+  lake-of-record proof (the module writes only to a tmp lake it owns): lake-loaded
+  serving rows == the direct-write oracle (`tests/oracle.py`) rows; an ACCUMULATED
+  lake (3 more appends) reloads byte-identically; the bucket-aligned lake pass ==
+  the same candidates matched against exposures read from ClickHouse
+  (`exposures_landed FINAL`, a test-local read); the Dagster-orchestrated pass
+  writes the same reconciled rows. No API tokens; isolated for the same
+  shared-conversion_id reason
 - `make lint` — ruff via pre-commit
 
-Canonical clean-state demos:
+Canonical clean-state demos (a clean state is a clean lake too — the lake outlives
+`make down`, and a `run-hot` over a lake that already holds a reconcile pass's rows
+would load those):
 - Hot-path headline (fast, stable pins — tiny's only caused hot-misses are the
   3 deferred shared-IP conversions, so `run-hot` keeps the hot pins and avoids
   reconciliation over-crediting its organics):
-  `make down && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
+  `make down && make lake-reset CONFIRM=yes && make up && make seed PROFILE=tiny && make run-hot && make eval && make report`
 - Reconciliation + restatement (where the long tail earns its keep — recall
   0.587→0.973, ROAS restated up):
-  `make down && make up && make seed PROFILE=long_delay && make run && make eval PROFILE=long_delay && make report && make restate`
+  `make down && make lake-reset PROFILE=long_delay CONFIRM=yes && make up && make seed PROFILE=long_delay && make run PROFILE=long_delay && make eval PROFILE=long_delay && make report && make restate`
+- Replay from the lake (no Kafka) — after either demo:
+  `make replay-serving PROFILE=<p> CONFIRM=yes && make eval PROFILE=<p>`
 
 ## Event model facts (from ARCHITECTURE.md; update if empirical findings differ)
 
@@ -203,7 +254,10 @@ Canonical clean-state demos:
   ambiguous (bool), candidate_count.
 - Attributed record adds: exposure_id (nullable), assists (list),
   attributed (bool), processed_at, path (hot | reconciled), reason
-  (ambiguous_ip | state_miss, null when attributed — Phase 16).
+  (ambiguous_ip | state_miss, null when attributed — Phase 16),
+  candidate_households (list; the shared IP's sorted owner set when
+  candidate_count > 1, else empty; kept on the reconciled credit — Phase 17).
+  19 columns, one order everywhere (`tests/test_column_contract.py`).
 - Lateness = ingest_time − event_time. Hot path handles minutes–hours;
   reconciliation handles days.
 - Shared IPs across households are the ONLY source of wrong-household
@@ -225,8 +279,15 @@ AI sits at the edge; the pipeline is deterministic.
 - The Iceberg lake's metadata (snapshot ids, commit times) and Dagster run
   ids/wall-clock are non-deterministic and carved out of the byte-identical
   guarantee, exactly like the agent — every asserted check reads row content
-  back, never metadata; landing is off by default (`--lake-land`), so `make
-  run`/CI stay byte-identical (Phase 12; DECISIONS Phase 12).
+  back, never metadata. Since Phase 17 every row reaches ClickHouse through the
+  lake (engine → lake → Dagster load), and the guarantee is on ROW CONTENT: the
+  tiny golden, every pin in `tests/pins.py`, and lake-loaded == direct-write-oracle
+  rows hold byte-for-byte (DECISIONS Phase 12/17).
+- The lake is an append-only log; "current row per conversion_id" is computed in
+  SQL (`argMax(processed_at)`) on every read that needs it — never assumed.
+  Re-landing is idempotent on read; re-loading is idempotent by the
+  ReplacingMergeTree. Loads are driven by the days a landing TOUCHED, never by
+  the wall clock.
 - The pipeline NEVER reads truth links.
 - Every write to attributed_conversions is idempotent (ReplacingMergeTree
   keyed conversion_id, version processed_at). Rollups are refreshed on
@@ -272,7 +333,7 @@ AI sits at the edge; the pipeline is deterministic.
   anthropic, fastapi + uvicorn (agent webhook), pytest, ruff, pre-commit,
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
-- Prometheus metric names prefixed by stage: producer_, resolve_, engine_,
+- Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
   reconcile_, agent_.
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
@@ -341,8 +402,11 @@ standard way over the clever way.
   developer has approved the review verdicts (see review gate above).
   PR body: Done-when check + command output, files touched, decisions
   the spec didn't cover, open risks. Title `Phase N — <name>`.
-- CI (GitHub Actions) runs `make lint`, `make test`, and on PRs also
-  `make up && make seed PROFILE=tiny && make run && make test-int`.
+- CI (GitHub Actions) runs `make lint`, `make test`, and (on PRs and pushes to main)
+  `make up && make test-alerts && make lake-reset CONFIRM=yes && make seed
+  PROFILE=tiny && make run-hot && make test-int && make test-int-long-delay &&
+  make bench` (hot-path oracles on tiny; reconciliation proven on its own
+  long_delay stack).
   A PR is mergeable only when CI is green and code-reviewer +
   functionality-tester have run.
 - The developer merges (squash), never Claude. After merge:
@@ -362,7 +426,10 @@ never auto-fixed, ignored, or committed around.
 
 - `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
   from trial-signal-assistant); after any .py edit inside this repo, runs
-  pytest and blocks on red; treats "no tests collected" as skip. WIRING is
+  pytest and blocks on red; treats "no tests collected" as skip. Since Phase 17
+  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, which only the
+  `make test-int*` targets export — so the hook cannot seed the live broker or
+  re-stamp `eval_meta`. WIRING is
   local-only by design (a committed settings.json would auto-execute an
   inbound PR branch's hook + pytest + conftest.py for anyone opening it in
   Claude Code). One-time re-enable — copy into the gitignored
@@ -395,8 +462,9 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-All phases **0–16 merged; the plan is complete.** CHECKPOINTs: 4, 7, 10.
-Phases 12–16 are post-plan extensions (not in the original PHASES.md 0–11).
+All phases **0–16 merged; 17 built and in review** (the plan, 0–11, is complete).
+CHECKPOINTs: 4, 7, 10. Phases 12–17 are post-plan extensions (not in the original
+PHASES.md 0–11).
 Full per-phase rationale lives in `DECISIONS.md` and `specs/`; deferred items in
 `BACKLOG.md`; headline numbers in `docs/RESULTS.md`. Dates are 2026; Spec cell is
 the `specs/` file where one was cited.
@@ -415,17 +483,18 @@ the `specs/` file where one was cited.
 | 9 | 08-19 | #11 | Agent loop — 6-cause hypothesis enum + 5 parameterized-SQL probes over SELECT-only `agent_ro` (no free-form SQL); typed `AttributionFinding` (fail → AMBIGUOUS_NEEDS_HUMAN); manual tool-use loop (Sonnet-5); Alertmanager webhook (trigger-only, alert text never reaches LLM). Live: device_graph_mismatch CONFIDENT | PASSED | `phase-9` |
 | 10 | 08-19 | #12 | **CHECKPOINT** — agent eval + near-miss demo; `no_fault_baseline` profile; frozen 6-scenario catalog + PURE scoring; `make agent-eval` → **30/30 correct, false-positive 0/10 = 0%** (real_lift vs shared_ip_spike both clean; co_view_bug 5× AMBIGUOUS; late_burst 5× CONFIDENT) | PASSED | `phase-10` |
 | 11 | 08-20 | #13 | Docs (final planned phase, no pipeline code) — `README.md` design doc, `docs/SCALING.md` (hot-window-state constraint, partition math, 50k/500k tiers, Bytewax→Flink mapping), `docs/RESULTS.md` accuracy tables (tiny 0.673/1.000, medium 0.708/1.000, long_delay 0.587→0.973); no new numbers invented | PASSED (coherence BLOCKER — false "async inserts on" claim — fixed to a SCALING lever) | none (docs) |
-| 12 | 08-20 | #21 | *post-plan* — lakehouse landing + orchestrated reconciliation: local Iceberg exposure lake (`lake/`) + Dagster day-partitioned assets (`orchestration/`); `--lake-land` dual-write, byte-identical parity (ClickHouse == Iceberg-sourced reconcile); +5 packages (approved) | PASSED | `phase-12-lakehouse-landing` |
+| 12 | 08-20 | #21 | *post-plan* — lakehouse landing + orchestrated reconciliation: local Iceberg exposure lake (`lake/`) + Dagster day-partitioned assets (`orchestration/`); an optional dual-write (superseded by Phase 17: the lake is now the record), byte-identical parity (ClickHouse == Iceberg-sourced reconcile); +5 packages (approved) | PASSED | `phase-12-lakehouse-landing` |
 | 13 | 08-20 | #20 | *post-plan* — query cost levers on `bench_large`: projection-by-`event_time` WINS, FINAL-avoidance / skip-index DOCUMENTED NEGATIVE, PREWHERE WINS; lever DDL only inside `make cost-levers`, gate-0 golden untouched | PASSED (BLOCKER + drift cleared on re-check) | `phase-13-query-cost-levers` |
 | 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
 | 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
 | 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
+| 17 | 08-21 | — | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (one of the three destructive paths, `lake/destructive.py`), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | pending review | `phase-17-lake-of-record` |
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
 - `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
 - `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
-- `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/lake-land/metrics-capture), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
+- `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/metrics-capture; since Phase 17 also replay-serving), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.
 - `fix/make-resolve-source` (PR #29) — two pre-existing Makefile bugs surfaced by the Phase-16 review: bare `make resolve` exited 2 (`SOURCE ?= fixtures  # …` carried trailing spaces into `--source`), and `test-int-medium` stamped `eval_meta=tiny` over a medium DB (ran `run-hot` without `PROFILE=medium`, so the BACKLOG-43 guard could not fire). `tests/test_makefile.py` guards both offline via `make -n`.
 - `fix/docs-accuracy-pin` (PR #26) — single-sourced the household-grain accuracy pins into `tests/pins.py` (tiny/medium/long_delay), referenced by the 5 test suites, plus `tests/test_docs_accuracy_pins.py` asserting the README/RESULTS accuracy TABLE cells equal them; closes BACKLOG 36. Table-scoped — prose citations deferred to a new BACKLOG row.
 

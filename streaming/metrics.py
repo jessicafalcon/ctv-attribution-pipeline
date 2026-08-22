@@ -34,8 +34,9 @@ AMBIGUOUS_DEFERRED = Counter(
 )
 EXPOSURES_LANDED = Counter(
     "engine_exposures_landed_total",
-    "Exposure rows offered to exposures_landed (cumulative across runs; "
-    "post-dedup, so re-sends are already dropped before landing).",
+    "Exposure rows the engine landed in the lake (raw.exposures; cumulative "
+    "across runs; post-dedup, so re-sends are already dropped before landing). "
+    "The lake → ClickHouse load counts separately: lake_rows_loaded_total.",
 )
 DEDUP_SUPPRESSED = Counter(
     "engine_dedup_suppressed_total",

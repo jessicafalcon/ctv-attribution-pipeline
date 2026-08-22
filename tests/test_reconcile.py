@@ -19,13 +19,12 @@ from producer.generate import generate
 from producer.models import (
     AttributedConversion,
     Exposure,
-    Household,
     ResolvedConversion,
 )
 from reconcile.reconcile import (
     LONG_WINDOW,
     RECONCILE_DELTA,
-    _read_candidates,
+    _check_candidate,
     expand_candidates,
     pick_household,
     reconcile,
@@ -154,50 +153,63 @@ def _ambiguous(cid: str, household: str, day: float, ip: str, n: int = 2):
     )
 
 
-def _shared_ip_graph() -> GraphIndex:
-    # H1 and H2 share 100.64.0.1; H3 owns 10.0.0.9 alone.
-    return GraphIndex.from_households(
-        [
-            Household(household_id="H1", devices=[], ips=["100.64.0.1"]),
-            Household(household_id="H2", devices=[], ips=["100.64.0.1"]),
-            Household(household_id="H3", devices=[], ips=["10.0.0.9"]),
-        ]
+def _hot(conv: ResolvedConversion, candidate_households: list[str] | None = None):
+    """The hot unattributed row reconciliation reads back (Phase 17: the
+    candidate set travels on the row)."""
+    return AttributedConversion(
+        **conv.model_dump(),
+        exposure_id=None,
+        assists=[],
+        attributed=False,
+        path="hot",
+        processed_at=conv.ingest_time,
+        reason="ambiguous_ip" if conv.candidate_count > 1 else "state_miss",
+        candidate_households=candidate_households or [],
     )
 
 
 def test_pick_household_keeps_most_recent_last_touch_then_exposure_then_hh() -> None:
     conv = _ambiguous("c-9", "H1", day=10, ip="100.64.0.1")
-    older = last_touch([_exposure("e-a", "H1", day=5)], conv, LONG_WINDOW)
+    hhs = ["H1", "H2"]
+    older = last_touch([_exposure("e-a", "H1", day=5)], conv, LONG_WINDOW, hhs)
     newer = last_touch(
         [_exposure("e-b", "H2", day=6)],
         conv.model_copy(update={"household_id": "H2"}),
         LONG_WINDOW,
+        hhs,
     )
     assert pick_household([older, newer]) is newer
     # Same event_time → exposure_id decides (a total order; household_id vestigial).
-    tie_a = last_touch([_exposure("e-a", "H1", day=6)], conv, LONG_WINDOW)
+    tie_a = last_touch([_exposure("e-a", "H1", day=6)], conv, LONG_WINDOW, hhs)
     assert pick_household([tie_a, newer]) is newer  # "e-b" > "e-a"
     # Attributed beats unattributed; all unattributed → None (stays hot row).
-    missed = last_touch([], conv, LONG_WINDOW)
+    missed = last_touch([], conv, LONG_WINDOW, hhs)
     assert pick_household([missed, older]) is older
     assert pick_household([missed]) is None
 
 
-def test_expand_candidates_re_enumerates_owners_from_the_graph() -> None:
-    graph = _shared_ip_graph()
-    placeholder = _ambiguous("c-1", "H1", day=10, ip="100.64.0.1")  # lowest hh
-    plain = _candidate("c-2", "H3", day=10)
-    out = expand_candidates([placeholder, plain], graph)
+def test_expand_candidates_explodes_the_persisted_candidate_set() -> None:
+    placeholder = _hot(
+        _ambiguous("c-1", "H1", day=10, ip="100.64.0.1"), ["H1", "H2"]
+    )  # lowest hh is the placeholder
+    plain = _hot(_candidate("c-2", "H3", day=10))
+    out = expand_candidates([placeholder, plain])
     assert [(r.conversion_id, r.household_id) for r in out] == [
         ("c-1", "H1"),
         ("c-1", "H2"),
         ("c-2", "H3"),
     ]
     assert all(r.candidate_count == 2 and r.ambiguous for r in out[:2])
-    # An IP nobody owns any more expands to nothing (left as its hot row).
-    assert (
-        expand_candidates([_ambiguous("c-3", "H1", day=1, ip="0.0.0.0")], graph) == []
-    )
+    assert all(type(r) is ResolvedConversion for r in out)  # decision cols dropped
+
+
+def test_ambiguous_row_without_its_candidate_set_is_refused() -> None:
+    # A pre-Phase-17 ambiguous row reads back as [] — refused loud by the model,
+    # never silently left unrecovered.
+    with pytest.raises(ValueError, match="candidate_households"):
+        _hot(_ambiguous("c-3", "H1", day=1, ip="0.0.0.0"))
+    with pytest.raises(ValueError, match="not one of candidate_households"):
+        _hot(_ambiguous("c-3", "H1", day=1, ip="0.0.0.0"), ["H2", "H9"])
 
 
 def test_reconcile_refuses_an_unexpanded_ambiguous_candidate() -> None:
@@ -211,10 +223,9 @@ def test_reconcile_refuses_an_unexpanded_ambiguous_candidate() -> None:
 
 
 def test_ambiguous_conversion_is_credited_to_the_most_recent_household() -> None:
-    graph = _shared_ip_graph()
     at = reconciled_at_for(T0 + timedelta(days=30))
     expanded = expand_candidates(
-        [_ambiguous("c-1", "H1", day=10, ip="100.64.0.1")], graph
+        [_hot(_ambiguous("c-1", "H1", day=10, ip="100.64.0.1"), ["H1", "H2"])]
     )
     exposures = {
         "H1": [_exposure("e-1", "H1", day=8.0)],
@@ -224,6 +235,7 @@ def test_ambiguous_conversion_is_credited_to_the_most_recent_household() -> None
     assert (row.household_id, row.exposure_id, row.path) == ("H2", "e-2", "reconciled")
     assert row.processed_at == at and row.ambiguous and row.candidate_count == 2
     assert row.reason is None  # credited → the deferral reason is cleared
+    assert row.candidate_households == ["H1", "H2"]  # provenance kept on the credit
     # No candidate household has an exposure → not recovered (idempotent no-op).
     assert reconcile(expanded, {}, LONG_WINDOW, at) == []
 
@@ -260,7 +272,7 @@ def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     for e in exps:
         by_hh.setdefault(e.household_id, []).append(e)
     recovered = reconcile(
-        expand_candidates(candidates, graph),
+        expand_candidates(candidates),
         by_hh,
         LONG_WINDOW,
         reconciled_at_for(max(e.ingest_time for e in exps)),
@@ -284,43 +296,16 @@ def test_shared_ip_spike_post_reconcile_reproduces_the_old_hot_pick() -> None:
     )
 
 
-# ---- _read_candidates: the reason/candidate_count contract ---------------------
+# ---- the reason/candidate_count/candidate_households contract on read-back ------
 
 
-class _StubClient:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def query(self, _sql):
-        class _R:
-            pass
-
-        r = _R()
-        r.result_rows = self._rows
-        return r
-
-
-def _db_row(cid: str, candidate_count: int, reason):
-    t = T0 + timedelta(days=10)
-    return (
-        cid, t, t, "d-1", "100.64.0.1", "purchase", 1.0, None,
-        "H1", "ip", int(candidate_count > 1), candidate_count, reason,
-    )  # fmt: skip
-
-
-def test_read_candidates_accepts_null_reason_from_pre_migration_rows() -> None:
+def test_check_candidate_accepts_null_reason_from_pre_migration_rows() -> None:
     # Rows written before the Phase-16 additive migration carry NULL reason; the
-    # candidate kind is still derivable from candidate_count (a replay input, not a
-    # hypothetical — ReplacingMergeTree keeps them until the next engine pass).
-    rows = _read_candidates(
-        _StubClient([_db_row("c-1", 1, None), _db_row("c-2", 3, None)])
-    )
-    assert [(r.conversion_id, r.candidate_count) for r in rows] == [
-        ("c-1", 1),
-        ("c-2", 3),
-    ]
+    # candidate kind is still derivable from candidate_count.
+    _check_candidate("c-1", 1, None, [])
+    _check_candidate("c-2", 3, None, ["H1", "H2", "H3"])
 
 
-def test_read_candidates_refuses_a_reason_that_disagrees_with_candidate_count() -> None:
+def test_check_candidate_refuses_a_reason_that_disagrees_with_candidate_count() -> None:
     with pytest.raises(ValueError, match="disagrees with candidate_count=3"):
-        _read_candidates(_StubClient([_db_row("c-9", 3, "state_miss")]))
+        _check_candidate("c-9", 3, "state_miss", ["H1", "H2", "H3"])

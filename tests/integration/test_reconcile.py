@@ -1,5 +1,5 @@
 """Phase-6 LIVE reconciliation proof on a CLEAN long_delay-only stack
-(`make test-int-long-delay`: make down && up && seed long_delay && run
+(`make test-int-long-delay`: make down && lake-reset && up && seed long_delay && run
 long_delay — where `run` is resolve → engine → reconcile). NOT part of the shared
 `make test-int` (tiny-only): tiny/medium/long_delay share conversion_id space, so
 a shared stack interleaves ReplacingMergeTree rows (DECISIONS Phase 5).
@@ -25,6 +25,7 @@ from confluent_kafka import Consumer
 from accuracy.run import load_truth
 from accuracy.score import score
 from clickhouse.client import connect, read_exposure_households
+from lake.iceberg_catalog import configure
 from queries import restatement
 from reconcile import reconcile
 from tests.pins import (
@@ -32,6 +33,16 @@ from tests.pins import (
     LONG_DELAY_POST,
     TODECIMAL_TRUNCATED_CENT_VALUES,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _profile_lake():
+    """This module runs the reconcile pass IN-PROCESS over the STACK's lake (the
+    clean long_delay stack `make test-int-long-delay` built), so it binds that
+    profile's lake like `make run PROFILE=long_delay` does — there is no default
+    root (review gate: an unset default produced a profile-mixed lake)."""
+    configure("long_delay")
+
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
 FIXTURES = Path(__file__).parent.parent.parent / "fixtures" / "tiny"

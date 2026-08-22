@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-land reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -30,9 +30,28 @@ setup:
 up:
 	docker compose up -d --wait
 
-# The ONLY sanctioned destructive path: removes containers AND volumes.
+# The first sanctioned destructive path: removes containers AND volumes. Does
+# NOT touch data/lake/ (the lake is the record; see lake-reset).
 down:
 	docker compose down -v
+
+# The three destructive paths — lake-reset, replay-serving, lake-maintain — are
+# ONE Python process each (lake/destructive.py): validate the profile, derive the
+# root from it (no path argument exists to escape with), prompt on a tty, then
+# act. Make never interpolates a user value into a guard and never splits guard
+# and action across shells (rounds 2 and 3 of the Phase-17 review each found a
+# hole in a Make-level guard; `make -i` cannot step inside a process). CONFIRM
+# counts only from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes'
+# is a stated residual — these guards are for mistakes, not for a user who
+# controls the environment (DECISIONS Phase 17).
+_YES = $(if $(filter command line,$(origin CONFIRM)),$(if $(filter yes,$(CONFIRM)),--yes,),)
+
+# Delete this PROFILE's lake of record, data/lake/<profile> (spec D9). The
+# clean-stack test-int-* targets pass CONFIRM=yes: a "clean stack" for a profile
+# means a clean lake too, since the lake outlives `make down` and the serving
+# tables are loaded from it.
+lake-reset:
+	uv run python -m lake.destructive reset --profile "$(PROFILE)" $(_YES)
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
@@ -44,14 +63,25 @@ seed:
 resolve:
 	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
 
+# Phase 17: the lake is the record. One lake per PROFILE (profiles share
+# conversion_id space — the same isolation `make down` gives ClickHouse, without a
+# destructive step): engine and reconcile land under data/lake/<profile>/ (bound by
+# each entry point's --profile) and the Dagster load reads it back. Each
+# clean-stack test-int-* target pins `PROFILE` target-wide so its pytest line
+# (run by the parent make) binds the same lake as the `$(MAKE) run PROFILE=<p>`
+# child.
+# No LAKE_ROOT here: every Python entry point takes `--profile` and binds its own
+# lake (lake.iceberg_catalog.configure → data/lake/<profile>); LAKE_ROOT in the
+# environment is test-only (tmp fixtures) and refused outside pytest.
+
 # Live pipeline over the seeded stream: attribution engine (resolve in-process →
-# hot join) → reconciliation pass (recovers long-window misses AND the deferred
-# shared-IP conversions, refreshes the rollup, writes pre/post report snapshots).
-# Run after `make up && make seed`.
+# hot join) → lake → Dagster load → ClickHouse, then the reconciliation pass
+# (recovers long-window misses AND the deferred shared-IP conversions → lake →
+# reload → rollup refresh + pre/post report snapshots). Run after `make up &&
+# make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
 run:
-	uv run python -m streaming.dataflow
-	uv run python -m reconcile.reconcile
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
+	uv run python -m streaming.dataflow --profile "$(PROFILE)"
+	uv run python -m reconcile.reconcile --profile "$(PROFILE)"
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -59,34 +89,45 @@ run:
 # reconciliation pass would over-credit their long-tail organics and shift those
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
-	uv run python -m streaming.dataflow
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
+	uv run python -m streaming.dataflow --profile "$(PROFILE)"
 
-# Phase 12: run the hot path (engine) and dual-write the SAME deduped
-# exposures into the Iceberg lake (raw.exposures) alongside ClickHouse. The sole
-# landing site — make run/CI never land, so the engine path stays byte-identical.
-# Run after make up && make seed.
-lake-land:
-	uv run python -m streaming.dataflow --lake-land
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
-
-# Phase 12: orchestrated reconciliation. Materialize the day-partitioned
-# reconciled_conversions asset (exposures sourced from Iceberg via DuckDB) over
-# the candidate days + the finalize asset, headless (no webserver, ephemeral
-# Dagster instance). PROFILE is informational; PARTITION=<YYYY-MM-DD> materializes
-# a single day. Run after make lake-land.
+# Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
+# reconciled_conversions asset (exposures sourced from Iceberg via DuckDB,
+# corrections appended to the lake) over the candidate days, reload the touched
+# days, then the finalize asset — headless (no webserver, ephemeral Dagster
+# instance). PROFILE selects the lake; PARTITION=<YYYY-MM-DD> materializes a
+# single day. Run after make run-hot.
 reconcile-dagster:
-	uv run python -m orchestration.run --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
+	uv run python -m orchestration.run reconcile --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
 
-# Phase 12 (optional, dev only): serve the Dagster asset-graph UI + backfill
-# controls. Bound to loopback (-h 127.0.0.1) — never published, never 0.0.0.0.
-# DAGSTER_HOME under gitignored data/ so instance sqlite + run logs never touch the
-# repo (carries no secrets). Not needed for make reconcile-dagster (headless,
-# ephemeral instance). A containerized/published webserver is a deployment lever,
-# not built (DECISIONS Phase 12).
+# Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
+# the rows of exposures_landed + attributed_conversions + eval_meta (TRUNCATE — destructive,
+# so CONFIRM=yes or the tty prompt), reloads every day the lake holds (hot AND
+# reconciled current rows), stamps eval_meta in the SAME process (one recipe
+# line — `make -i` cannot re-stamp after a refusal); `make eval` then reproduces the
+# pins. The backfill story: Kafka retention is hours, the lake is forever.
+replay-serving:
+	uv run python -m lake.destructive replay --profile "$(PROFILE)" $(_YES)
+
+# Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
+# than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7) and rewrite each day partition
+# that has accumulated more than one file per bucket into one file per bucket.
+# Not part of make run. Row content is unchanged, data files are REWRITTEN (a
+# mutation of the record, so it prompts like the other two; asserted offline on
+# both raw tables). Expiry is metadata-only on pyiceberg 0.11.1 (BACKLOG 45).
+lake-maintain:
+	uv run python -m lake.destructive maintain --profile "$(PROFILE)" $(_YES)
+
+# Phase 12/17 (optional, dev only): the Dagster asset-graph viewer; materialize
+# works for the ONE profile bound by DAGSTER_PROFILE (= PROFILE — there is no
+# default lake root, so an unbound code location only renders the graph). Bound
+# to loopback (-h 127.0.0.1) — never published, never 0.0.0.0. DAGSTER_HOME under
+# gitignored data/ so instance sqlite + run logs never touch the repo (carries no
+# secrets). Not needed for make reconcile-dagster (headless, ephemeral instance).
+# A containerized/published webserver is a deployment lever, not built.
 dagster-ui:
 	mkdir -p data/dagster_home
-	DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
+	DAGSTER_PROFILE=$(PROFILE) DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
 
 # Measured scaling curve (offline, no compose): drain the engine over tiered event
 # counts (1k/10k/100k exposures resident in the hot window), report the STRUCTURAL
@@ -112,24 +153,22 @@ bench:
 # canonicalization + summary reader; asserts direction (winners read fewer bytes;
 # the negatives are asserted NOT to help) and identical result rows; rewrites the
 # "Query cost levers" block in docs/RESULTS.md. Live-stack: run after
-# `make up && make seed PROFILE=bench_large && make run`.
+# `make lake-reset PROFILE=bench_large CONFIRM=yes && make up && make seed
+# PROFILE=bench_large && make run PROFILE=bench_large` (a clean lake + the same
+# PROFILE on every step — the engine binds its lake from --profile).
 cost-levers:
 	uv run python -m queries.measure_levers
 
-# Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
-# textfiles under data/out/<profile>/metrics/. This is the provenance of the
-# promtool alert fixtures (observability/gen_alert_fixtures.py bakes these into
-# observability/rules/tests/alerts_test.yml): the threshold-crossing numbers come
-# from a real stage run, never hand-authored.
-# Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
-# needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
-# FINAL, so these two are not producible service-free — like test-int-long-delay.
-# The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
+# Dump each stage's terminal Prometheus registry from a REAL run (the provenance
+# of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make
+# lake-reset PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p> && make
+# metrics-capture PROFILE=<p>` — over a populated lake the reconcile candidates
+# are the lake's CURRENT rows, so a second capture sees zero and the numbers
+# differ. The fixtures are recaptured in Phase 18 (alert rules).
 metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
-	uv run python -m streaming.dataflow --metrics-out data/out/$(PROFILE)/metrics/engine.prom
-	uv run python -m reconcile.reconcile --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
+	uv run python -m streaming.dataflow --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/engine.prom
+	uv run python -m reconcile.reconcile --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
 
 # Attribution accuracy (household grain) vs the truth side file, for the given
 # PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;
@@ -165,7 +204,8 @@ agent-run:
 
 # Phase-10 fault->diagnosis sweep: every fault profile + the no-fault baseline, run
 # EVAL_REPS times, scored against the pure rubric, both tables written to
-# docs/RESULTS.md. Drives its own clean stack per scenario (down/up/seed/run — profiles
+# docs/RESULTS.md. Drives its own clean stack + lake per scenario
+# (down/lake-reset/up/seed/run — profiles
 # share conversion_id space, DECISIONS Phase 5), so run it on a free machine, not over a
 # stack you want to keep. This is the ONLY eval path that calls the LLM — it costs API
 # tokens (30 invocations, well under $10), so ask the developer before running (CLAUDE.md).
@@ -182,6 +222,10 @@ test:
 # long_delay lakehouse test each need a clean single-profile stack (profiles share
 # conversion_id space; DECISIONS Phase 5), so they are excluded here and run via
 # test-int-medium / test-int-long-delay / test-int-lakehouse.
+# CTV_INT=1: the integration suite runs ONLY under these targets (tests/conftest.py
+# skips it otherwise — a bare pytest used to seed the live broker and re-stamp
+# eval_meta over whatever stack was up; review gate, round 3).
+test-int: export CTV_INT = 1
 test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
@@ -196,8 +240,11 @@ test-int:
 # has a couple of hot-unattributed organics that the 90d pass would over-credit,
 # reconciling here would shift the pinned hot-only precision (92/130). The medium
 # proof is a hot-engine proof by design.
+test-int-medium: PROFILE = medium
+test-int-medium: export CTV_INT = 1
 test-int-medium:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=medium CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=medium
 	$(MAKE) run-hot PROFILE=medium
@@ -207,8 +254,11 @@ test-int-medium:
 # the sanctioned `make down` (tiny/medium/long_delay share conversion_id space;
 # DECISIONS Phase 5). Recovers the long-delay misses, then asserts the recovery
 # delta + restatement against ClickHouse FINAL.
+test-int-long-delay: PROFILE = long_delay
+test-int-long-delay: export CTV_INT = 1
 test-int-long-delay:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
@@ -221,8 +271,11 @@ test-int-long-delay:
 # Phase 16), then runs the reconcile pass itself and pins the post side (the
 # shared-IP fault observed: 69/80 correct, 11 wrong-household, Row 20) and the
 # populated context (report_snapshots exists once that pass has run).
+test-int-shared-ip: PROFILE = shared_ip_spike
+test-int-shared-ip: export CTV_INT = 1
 test-int-shared-ip:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run-hot PROFILE=shared_ip_spike
@@ -233,23 +286,37 @@ test-int-shared-ip:
 # INSERT/ALTER/DROP/CREATE → ACCESS_DENIED — and that the whole collector read path
 # runs under agent_ro (SN2). NO LLM call, so no API tokens: the loop is unit-tested
 # with a mocked client (tests/test_loop.py); this proves the DB boundary live.
+test-int-agent: PROFILE = shared_ip_spike
+test-int-agent: export CTV_INT = 1
 test-int-agent:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=shared_ip_spike CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=shared_ip_spike
 	$(MAKE) run PROFILE=shared_ip_spike
 	uv run pytest tests/integration/test_agent_readonly.py
 
-# Phase-12 live lakehouse proof on a CLEAN long_delay-only stack (same shared-
-# conversion_id isolation as the others). Lands to the lake + ClickHouse, then
-# asserts the reconcile source-equivalence (ClickHouse-sourced == Iceberg-sourced
-# recovered rows, byte-identical) and that the Dagster-orchestrated pass reproduces
-# the long_delay recovery. No API tokens.
+# Phase-12/17 live lakehouse proof on a CLEAN long_delay-only stack + lake (same
+# shared-conversion_id isolation as the others; this target DOES `lake-reset` the
+# long_delay lake — it is destructive, like every clean-stack target). The test
+# module itself writes only to a tmp LAKE_ROOT it creates (module fixture), so it
+# is safe to run standalone against a populated stack. Asserts: lake-loaded
+# serving rows == the direct-write oracle's rows; reconcile equivalence
+# (ClickHouse-read exposures == the bucket-aligned lake pass, byte-identical); the
+# Dagster-orchestrated pass reproduces the recovery; and an ACCUMULATED lake (≥3
+# appends) loads and reconciles byte-identically. No API tokens. Afterwards the
+# stack's ClickHouse holds the tmp lake's reconciled rows while
+# data/lake/long_delay holds hot rows only — divergent by design; run
+# `make lake-reset PROFILE=long_delay CONFIRM=yes && make run PROFILE=long_delay`
+# before a `make replay-serving PROFILE=long_delay`.
+test-int-lakehouse: PROFILE = long_delay
+test-int-lakehouse: export CTV_INT = 1
 test-int-lakehouse:
 	$(MAKE) down
+	$(MAKE) lake-reset PROFILE=long_delay CONFIRM=yes
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
-	$(MAKE) lake-land PROFILE=long_delay
+	$(MAKE) run-hot PROFILE=long_delay
 	uv run pytest tests/integration/test_lakehouse.py
 
 # Prove the four alert rules fire on REAL captured metric values (fix #4: promtool

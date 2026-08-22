@@ -73,6 +73,14 @@ def _check_traces(errors: list[str]) -> None:
         ("docs/ARCHITECTURE.md", "TRUNCATES the binary value"),
         ("reconcile/reconcile.py", "toUnixTimestamp64Milli"),
         ("reconcile/reconcile.py", "_max_ingest"),
+        ("lake/load_serving.py", "_utc"),
+        ("lake/destructive.py", "confirm_or_abort"),
+        ("tests/test_clean_state_chains.py", "lake-reset"),
+        ("tests/test_tz_invariance.py", "tzset"),
+        (
+            "docs/ARCHITECTURE.md",
+            "writes a NAIVE datetime as the client's LOCAL wall-clock",
+        ),
         ("docs/ARCHITECTURE.md", "read_rows` counts un-merged version-parts"),
         (
             "docs/ARCHITECTURE.md",

@@ -7,9 +7,12 @@ hand-authored. The .prom inputs live under data/out/<profile>/metrics/
 Regenerate after capturing both profiles on clean single-profile stacks (they
 share conversion_id space — DECISIONS Phase 5):
 
-    make down && make up && make seed PROFILE=tiny && make metrics-capture PROFILE=tiny
-    make down && make up && make seed PROFILE=long_delay \
-        && make metrics-capture PROFILE=long_delay
+    make down && make lake-reset CONFIRM=yes && make up \
+        && make seed PROFILE=tiny && make metrics-capture PROFILE=tiny
+    make down && make lake-reset PROFILE=long_delay CONFIRM=yes && make up \
+        && make seed PROFILE=long_delay && make metrics-capture PROFILE=long_delay
+    (a CLEAN lake each time — since Phase 17 the reconcile candidates are the lake's
+    current rows, so a capture over a populated lake does not reproduce)
     uv run python observability/gen_alert_fixtures.py
 """
 

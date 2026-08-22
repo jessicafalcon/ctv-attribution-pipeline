@@ -14,29 +14,33 @@ harmless only because `-n` propagates through MAKEFLAGS, so the children also
 dry-run and `docker compose down -v` never executes. No services, no network.
 """
 
-import os
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
+
+from tests._env import clean_env
 
 REPO_ROOT = Path(__file__).parent.parent
 MAKEFILE = REPO_ROOT / "Makefile"
 
 # `?=` is overridable from the environment; scrub so an exported SOURCE/PROFILE
 # on the developer's shell can't fail these tests for a non-Makefile reason.
-_ENV = {k: v for k, v in os.environ.items() if k not in {"SOURCE", "PROFILE"}}
+# The scrub list is shared with tests/test_destructive.py (tests/_env.py).
+_ENV = clean_env()
 
 
-def _dry_run(target: str) -> list[str]:
+def _dry_run(target: str, *args: str) -> list[str]:
     out = subprocess.run(
-        ["make", "-n", target],
+        ["make", "-n", "--no-print-directory", target, *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
         env=_ENV,
     ).stdout
-    return out.splitlines()
+    return [ln for ln in out.splitlines() if not ln.startswith("make[")]
 
 
 def _profile_tokens(line: str) -> set[str]:
@@ -49,7 +53,8 @@ def _profile_tokens(line: str) -> set[str]:
 def _isolated_live_targets() -> list[str]:
     """The clean-stack targets, discovered from the Makefile — a new one is
     covered by construction, not by remembering to list it here."""
-    targets = re.findall(r"^(test-int-[a-z-]+):", MAKEFILE.read_text(), re.M)
+    # `:` then end/tab/newline — not the `target: PROFILE = p` pin lines
+    targets = re.findall(r"^(test-int-[a-z-]+):\s*$", MAKEFILE.read_text(), re.M)
     assert targets, "no test-int-* targets found"
     return targets
 
@@ -80,12 +85,144 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         populates = {
             t
             for ln in lines
-            if re.search(r"\bmake (run|run-hot|lake-land)\b", ln)
+            if re.search(r"\bmake (run|run-hot)\b", ln)
             for t in _profile_tokens(ln)
         }
-        markers = {
-            t for ln in lines if "write_marker" in ln for t in _profile_tokens(ln)
+        resets = {
+            t
+            for ln in lines
+            if re.search(r"\bmake lake-reset\b", ln) and "CONFIRM=yes" in ln
+            for t in _profile_tokens(ln)
         }
         assert len(seeds) == 1, f"{target}: seed profiles {seeds}"
         assert populates == seeds, f"{target}: populate {populates} != seed {seeds}"
-        assert markers == seeds, f"{target}: eval_meta marker {markers} != seed {seeds}"
+        # eval_meta is stamped in-process by the populate step (no write_marker
+        # recipe line anywhere — `make -i` must not stamp over a failed step)
+        assert not any("write_marker" in ln for ln in lines), target
+        # Phase 17: a clean stack is a clean lake — the target resets ITS profile's
+        # lake (explicit CONFIRM=yes), else run-hot would reload an older pass.
+        assert resets == seeds, f"{target}: lake-reset {resets} != seed {seeds}"
+        # … and the target pins PROFILE target-wide, so its pytest line (run by the
+        # parent make, not the `$(MAKE) … PROFILE=p` children) gets the same
+        # LAKE_ROOT as the populate step.
+        (seed,) = seeds
+        pin = rf"^{target}: PROFILE = {re.escape(seed)}$"
+        assert re.search(pin, MAKEFILE.read_text(), re.M), (
+            f"{target}: missing target-specific `PROFILE = {seed}`"
+        )
+        marker = rf"^{target}: export CTV_INT = 1$"
+        assert re.search(marker, MAKEFILE.read_text(), re.M), (
+            f"{target}: must export CTV_INT=1 (integration tests skip without it)"
+        )
+
+
+def test_integration_tests_skip_without_the_marker() -> None:
+    out = subprocess.run(
+        ["uv", "run", "pytest", "tests/integration/test_engine.py", "-q", "-rs"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        # a NESTED pytest on purpose: the skip must fire in a fresh interpreter,
+        # exactly as the run-tests hook would start one
+        env={k: v for k, v in clean_env().items() if k != "CTV_INT"},
+    ).stdout
+    assert "SKIPPED" in out and "passed" not in out, out
+    assert "CTV_INT" in out
+
+
+def _make_in_sandbox(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run the REAL lake-reset recipe (not -n) with the repo Makefile but cwd = a
+    sandbox dir, so a guard failure could only ever remove something inside the
+    sandbox. UV_PROJECT points `uv run` at the repo from the foreign cwd."""
+    (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True)
+    (tmp_path / "data" / "x").mkdir()
+    return subprocess.run(
+        ["make", "-f", str(MAKEFILE), "-C", str(tmp_path), *args],
+        capture_output=True,
+        text=True,
+        # UV_PROJECT: the repo venv from a foreign cwd; PYTHONPATH: the repo is
+        # not an installed package (pytest's pythonpath=. does the same thing).
+        env=clean_env(UV_PROJECT=str(REPO_ROOT), PYTHONPATH=str(REPO_ROOT)),
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def test_destructive_recipes_are_one_python_process_each() -> None:
+    # Rounds 2 and 3 of the Phase-17 review each found a hole in a Make-level
+    # guard; the fix is structural: every destructive recipe is ONE line invoking
+    # lake.destructive, which validates, confirms, then acts inside one process.
+    for target, action in (
+        ("lake-reset", "reset"),
+        ("replay-serving", "replay"),
+        ("lake-maintain", "maintain"),
+    ):
+        lines = [ln for ln in _dry_run(target, "PROFILE=tiny") if ln.strip()]
+        assert lines[0].startswith(
+            f'uv run python -m lake.destructive {action} --profile "tiny"'
+        ), lines
+        assert len(lines) == 1, lines  # ONE process; nothing can run after a refusal
+        assert "--yes" not in lines[0]  # prompts unless CONFIRM=yes on the command line
+        assert "rm -rf" not in lines[0] and "truncate" not in lines[0]
+        (yes_line,) = [
+            ln
+            for ln in _dry_run(target, "PROFILE=tiny", "CONFIRM=yes")
+            if "lake.destructive" in ln
+        ]
+        assert yes_line.rstrip().endswith("--yes")
+
+
+@pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
+def test_confirm_counts_only_from_the_command_line(target: str) -> None:
+    # `$(origin CONFIRM)`: an exported CONFIRM=yes must not become --yes, on any
+    # of the three destructive paths (round 3: replay-serving had its own check).
+    out = subprocess.run(
+        ["make", "-n", target, "PROFILE=tiny"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=clean_env(CONFIRM="yes"),
+    ).stdout
+    assert "--yes" not in out
+
+
+@pytest.mark.parametrize("flags", [[], ["-i"]])
+@pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
+def test_hostile_profile_refused_even_under_make_i(
+    tmp_path: Path, flags: list[str], target: str
+) -> None:
+    # `make -i` steps over failed recipe LINES; it cannot step inside one process
+    # (round 3: the shell-level guard was bypassed exactly this way). Executed
+    # for all three targets (round 5) — a refused replay must not reach the
+    # eval_meta stamp either (it is in the same process, after the load).
+    res = _make_in_sandbox(tmp_path, *flags, target, "PROFILE=../x", "CONFIRM=yes")
+    out = res.stdout + res.stderr
+    assert "refusing" in out
+    assert "marker set" not in out and "removed" not in out
+    assert (tmp_path / "data" / "x").exists()
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+def test_docs_say_confirm_for_every_destructive_target() -> None:
+    # docs-vs-behaviour: each destructive target's CLAUDE.md Commands bullet
+    # names CONFIRM (round 5: lake-maintain's did not, and the live command
+    # aborts without it).
+    text = (REPO_ROOT / "CLAUDE.md").read_text()
+    for target in ("lake-reset", "replay-serving", "lake-maintain"):
+        pat = rf"^- `make {target} PROFILE=<p> \[CONFIRM=yes\]`"
+        assert re.search(pat, text, re.M), (
+            f"CLAUDE.md: `make {target}` must show CONFIRM"
+        )
+
+
+def test_lake_reset_without_confirm_aborts_even_under_make_i(tmp_path: Path) -> None:
+    res = _make_in_sandbox(tmp_path, "-i", "lake-reset", "PROFILE=tiny")
+    assert "aborted" in res.stdout
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+def test_lake_reset_removes_exactly_the_profile_lake(tmp_path: Path) -> None:
+    res = _make_in_sandbox(tmp_path, "lake-reset", "PROFILE=tiny", "CONFIRM=yes")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not (tmp_path / "data" / "lake" / "tiny").exists()
+    assert (tmp_path / "data" / "x").exists()

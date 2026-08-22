@@ -72,7 +72,7 @@ def hot_and_post(
         by_hh.setdefault(e.household_id, []).append(e)
     candidates = [r for r in hot if not r.attributed]
     recovered = reconcile(
-        expand_candidates(candidates, graph),
+        expand_candidates(candidates),
         by_hh,
         LONG_WINDOW,
         reconciled_at_for(max(e.ingest_time for e in exps)),

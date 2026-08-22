@@ -2,6 +2,13 @@
 
 *A streaming attribution engine with an AI measurement-integrity agent — scored against ground truth.*
 
+*This README is the living design doc: it describes `main` as of its last edit.
+Dated facts live in `docs/RESULTS.md` and the per-phase history
+(`docs/PHASES.md`, `DECISIONS.md`). Two state stores: the Iceberg lake under
+`data/lake/<profile>/` is the record and outlives `make down`; ClickHouse is
+derived from it — so "clean state" is `make down && make lake-reset`, two
+commands, on purpose.*
+
 The ad is seen on a TV; the conversion happens on a phone. This pipeline joins those
 two separately-keyed event streams across a household/device graph, inside a time
 window, tolerating duplicates and conversions that arrive days late, and serves the
@@ -15,6 +22,7 @@ Two commands to a running demo:
 ```bash
 make up
 make seed PROFILE=tiny && make run
+# second and later runs: a clean state is two stores — `make down && make lake-reset CONFIRM=yes` first
 ```
 
 ---
@@ -71,15 +79,19 @@ REDPANDA  exposures | conversions  + schema registry
 ATTRIBUTION ENGINE (deterministic batch attributor)
    resolve step in-process: device → household (IP fallback; shared IP = ambiguous)
    hot window (7d) · last-touch + assists · dedup (seen-set) · watermarks + allowed lateness
-   ambiguous shared-IP → unattributed (ambiguous_ip), deferred — never a hot guess
-                                       ▼
-CLICKHOUSE  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
+   ambiguous shared-IP → unattributed (ambiguous_ip) + candidate_households, never a hot guess
+                                       ▼ land (append)
+ICEBERG LAKE (system of record)  raw.exposures · raw.attributed_conversions
+            day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
+                                       ▼ Dagster load (touched days)
+CLICKHOUSE (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
             exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
                                        ▲
-RECONCILIATION JOB (periodic)  unattributed in long window (≤90d): state-misses → match vs
-                               exposures_landed; ambiguous_ip → candidate households from the
-                               device graph, most-recent exposure wins → corrected rows →
-                               refresh → snapshot
+RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
+                               state-miss → bucket-local join vs raw.exposures [day−90d, day];
+                               ambiguous_ip → explode over candidate_households → bucket-local
+                               join → reduce across buckets, most-recent exposure wins →
+                               append to lake → reload → refresh → snapshot
                                        │
 REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
 ──── off the critical path ──────────────────────────────────────────────
@@ -146,11 +158,14 @@ insert-triggered summing view (a correction would otherwise double-count).
 `report_snapshots` stamps each refresh with `reported_at`, which is what makes
 restatements ("ROAS for day D as reported on D+1 vs now") queryable.
 
-**Reconciliation job (periodic).** Selects hot-path misses still inside the 90-day
-long window — state-misses *and* the deferred ambiguous_ip rows (candidate households
-re-enumerated from the device graph) — re-runs the *same* pure attribution leaf
-against `exposures_landed`, applies the one most-recent-exposure tiebreak, writes
-corrected rows with `path=reconciled`, refreshes the rollup, and writes a new
+**Reconciliation job (periodic, reads the lake).** Per event-time day, selects the
+current hot-unattributed rows of `raw.attributed_conversions` still inside the
+90-day long window — state-misses join bucket-locally against `raw.exposures` in
+`[day − 90d, day]`; the deferred ambiguous_ip rows are exploded over their persisted
+`candidate_households` BEFORE bucketing, joined bucket-locally, and reduced across
+buckets — re-runs the *same* pure attribution leaf, applies the one
+most-recent-exposure tiebreak, appends corrected rows (`path=reconciled`) to the
+lake, reloads the touched days, refreshes the rollup, and writes a new
 snapshot. This is the second attribution path — it is what makes a 90-day window
 possible without 90 days of processor state.
 
@@ -231,15 +246,20 @@ pre-commit). Bring the stack up with health checks (not sleeps): `make up`.
 Two canonical clean-state demos:
 
 ```bash
-# Hot-path headline — fast, stable pins
-make down && make up && make seed PROFILE=tiny && make run-hot && make eval PROFILE=tiny && make report
+# Hot-path headline — fast, stable pins (a clean stack is a clean lake: the lake
+# outlives `make down`, and run-hot loads the lake's current rows)
+make down && make lake-reset CONFIRM=yes && make up && make seed PROFILE=tiny && make run-hot && make eval PROFILE=tiny && make report
 
 # Reconciliation + restatement (recall 0.587 → 0.973, ROAS restated up)
-make down && make up && make seed PROFILE=long_delay && make run && make eval PROFILE=long_delay && make report && make restate
+make down && make lake-reset PROFILE=long_delay CONFIRM=yes && make up && make seed PROFILE=long_delay && make run PROFILE=long_delay && make eval PROFILE=long_delay && make report && make restate
+
+# Replay the serving layer from the lake — no Kafka (after either demo)
+make replay-serving PROFILE=<p> CONFIRM=yes && make eval PROFILE=<p>
 ```
 
-`make run` is engine (resolve in-process) → reconciliation, a single pass (not a
-daemon). `make run-hot` stops before reconciliation and backs the hot-path oracle
+`make run` is engine (resolve in-process) → Iceberg lake → Dagster load →
+ClickHouse → reconciliation (lake → append → reload), a single pass (not a
+daemon). Every row in ClickHouse arrived through the lake. `make run-hot` stops before reconciliation and backs the hot-path oracle
 suites, where a reconciliation pass would over-credit the tiny/medium long-tail
 organics and shift the pinned numbers. Eleven profiles live under `producer/profiles/`: `tiny`,
 `medium`, `long_delay`, plus six fault/control profiles (`shared_ip_spike`,
@@ -297,7 +317,7 @@ not speculative code.
   (the Bytewax wrapper was removed in Phase 16 — it only regrouped lists). Windowing,
   watermarks, and eviction are all real, but on the drain. Moving to an unbounded
   continuous follow — and choosing the framework for it, Bytewax proper vs Flink — is
-  a Phase-17+ decision, and it is the trigger for the next two items.
+  a Phase-18+ decision, and it is the trigger for the next two items.
 - **TTL'd dedup state.** Batch dedup is a full seen-set, correct because the whole
   stream is in memory. Under continuous follow an unbounded seen-set is a memory leak;
   it becomes TTL'd state keyed on `event_time + max_resend_delay`. The seeded
@@ -315,11 +335,14 @@ not speculative code.
   producer's multiplier would couple reporting to generation parameters. Co-viewing
   stays a producer-realism knob; the `co_view_bug` fault is scored as a labeled
   capability boundary the agent correctly abstains on (DECISIONS Phase 10).
-- **Iceberg landing + orchestrated reconciliation** — originally cut, **added in
-  Phase 12**: a local Iceberg exposure lake (`raw.exposures`, day-partitioned) with a
-  DuckDB-over-Iceberg reconcile source proven byte-identical to the ClickHouse-sourced
-  pass, and a Dagster day-partitioned `reconciled_conversions` asset (headless
-  `make reconcile-dagster`; local `dagster dev` UI). Object store / REST catalog /
+- **Iceberg lake of record + orchestrated reconciliation** — originally cut,
+  **added in Phase 12** as an optional dual-write and **made the system of record
+  in Phase 17**: the engine lands `raw.exposures` + `raw.attributed_conversions`
+  (`day × bucket(8, household_id)`), Dagster loads ClickHouse from the lake per
+  touched day, reconciliation is a bucket-aligned DuckDB-over-Iceberg join proven
+  byte-identical to the single in-memory pass, and `make replay-serving` rebuilds
+  the serving tables from the lake with no Kafka (headless `make
+  reconcile-dagster`; local `dagster dev` asset-graph viewer bound to one profile). Object store / REST catalog /
   Spark-Trino compute / a containerized Dagster webserver stay the SCALING port. See
   RESULTS.md and ARCHITECTURE §5.
 - **Multi-touch models, schema evolution beyond v1, co-view inside the engine** — out

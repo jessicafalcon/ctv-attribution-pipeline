@@ -32,8 +32,8 @@ real failure mode, wrong-household (shared-IP) attribution.
   on `tiny` is a labeled diagnostic only (3/47 = 0.064), never the headline.
 - **Hot recall below 1.0 on `tiny`/`medium` is the Phase-16 deferral, not a miss.**
   tiny's 3 and medium's 1 caused shared-IP conversions are emitted unattributed
-  (reason ambiguous_ip) and credited by the reconciliation pass, which re-enumerates
-  the candidate households from the device graph and applies the most-recent-exposure
+  (reason ambiguous_ip) and credited by the reconciliation pass, which explodes the row's persisted
+  `candidate_households` (Phase 17 — no device graph, no broker) and applies the most-recent-exposure
   rule there. Post-reconcile, tiny is 52/35/35 and medium 130/92/92 — exactly the
   pre-Phase-16 hot numbers. Same answer after reconciliation; fewer moving parts.
 - **`long_delay` is the reconciliation story.** Its caused conversions arrive days
@@ -53,7 +53,7 @@ real failure mode, wrong-household (shared-IP) attribution.
 
 The same four-metric advertiser report (ROAS, CPA, CVR, site-visit rate per
 campaign) run two ways over the `long_delay` profile after a full pipeline pass
-(`make down && make up && make seed PROFILE=long_delay && make run && make bench`):
+(`make down && make lake-reset PROFILE=long_delay CONFIRM=yes && make up && make seed PROFILE=long_delay && make run PROFILE=long_delay && make bench`):
 
 - **naive** — full `FINAL` scan-and-join of the raw serving tables
   (`queries/report.sql`: `attributed_conversions` ⋈ `exposures_landed`).
@@ -124,7 +124,11 @@ over the `bench_large` serving tables (a multi-granule profile — `attributed_c
 granule every lever is a no-op). The pre-aggregation rollup (`make bench`, above) is the
 *least* specific lever; these are the specific, explainable ones a data platform rewards.
 Measured by `make cost-levers`, reusing `bench.py`'s canonicalization and summary reader.
-The block below is regenerated verbatim by that command:
+The block below is regenerated verbatim by that command. Caveat (Phase 17, kept
+OUTSIDE the block so a regeneration cannot erase it): the figures were measured on
+the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16)
+and `candidate_households` (Phase 17) and the projection is `select *`, so a re-run
+regenerates different byte figures — the direction asserts are what is pinned.
 
 <!-- COST_LEVERS_START -->
 
@@ -212,7 +216,9 @@ Two honesty boundaries on what this proves:
 
 Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
 
-> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** The three
+> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** (Since Phase 17
+> `make agent-eval` resets each scenario's lake itself, so the BACKLOG-49 re-run is
+> safe to schedule; API tokens, ask first.) The three
 > tables below were captured by `make agent-eval` (30 live invocations) before
 > Phase 16 deferred shared-IP conversions to reconciliation. Since then the
 > context a fault profile presents has moved in one place: three profiles carry
@@ -264,13 +270,29 @@ The discriminator each scenario turns on, captured once per profile from ClickHo
 
 These are small-profile results reported as measured. `co_view_bug`'s abstention is a **labeled capability boundary**, not a gap papered over: the co-view *adjusted* factor is a DECISIONS won't-do (BACKLOG 26 — the honest per-genre expected baseline does not exist in serving data, and sourcing it from the producer's multiplier would couple reporting to generation parameters). The agent correctly declines to diagnose from noise. Verdict/hypothesis stability across reps is a measurement, never a gated assertion (the AI edge is carved out of the byte-identical guarantee, CLAUDE.md).
 
+## Lake of record (Phase 17) — provenance
+
+Since Phase 17 every row reaches ClickHouse through the lake: engine → Iceberg
+(`raw.exposures`, `raw.attributed_conversions`; `day × bucket(8, household_id)`) →
+Dagster load → ClickHouse, and reconciliation reads the lake bucket-locally. No
+accuracy number in this document moved — the tables above are re-proven through
+the lake by the same suites (`make test-int` tiny, `make test-int-long-delay`,
+`make test-int-lakehouse`), and `tests/pins.py` is unchanged. The live proofs
+(clean `long_delay` stack + fresh lake): lake-loaded serving rows == the
+direct-write oracle's rows (row content, sorted, 6dp); 3 extra appends of the same
+run reload byte-identically; the bucket-aligned lake pass == the ClickHouse-sourced
+pass == the Iceberg-sourced pass; `make replay-serving` from a cold ClickHouse
+reproduces recall 0.9733. Offline, the bucketed pass equals the single in-memory
+pass on long_delay and shared_ip_spike (`tests/test_bucketed_reconcile.py`).
+
 ## Lakehouse landing + orchestrated reconciliation (Phase 12)
 
 The reconciliation long-window matcher can source its candidate exposures from a
 local **Iceberg** lake (via **DuckDB** `iceberg_scan`) instead of ClickHouse, and
 runs as a **Dagster** day-partitioned asset — without changing the pipeline's
 output. Measured on a clean `long_delay` stack (`make test-int-lakehouse` +
-`make lake-land && make reconcile-dagster PROFILE=long_delay && make eval`).
+`make run-hot PROFILE=long_delay && make reconcile-dagster PROFILE=long_delay &&
+make eval PROFILE=long_delay`; Phase 12 ran the since-removed `make lake-land`).
 
 ### Byte-identical source swap (Done-when #2)
 
@@ -279,7 +301,7 @@ ClickHouse `exposures_landed FINAL` or from Iceberg-via-DuckDB:
 
 | check | result |
 |---|---|
-| lake `raw.exposures` rows after `make lake-land` | 360 (== exposures produced), day-partitioned on `event_time` |
+| lake `raw.exposures` distinct rows after `make run-hot PROFILE=long_delay` | 360 (== exposures produced), partitioned `day(event_time) × bucket(8, household_id)` since Phase 17 (day-only in Phase 12) |
 | ClickHouse-sourced vs Iceberg-sourced recovered rows | **byte-identical** (same set, same order, same `processed_at`, same last-touch exposure_id + assists) |
 | `make eval` recall (long_delay) | **0.9733** — unchanged from the ClickHouse-sourced reconcile |
 | `path='reconciled'` rows written | 32 (== the live pin since Phase 16: 35 candidates → 32 recovered — 29 state-misses + the 3 deferred shared-IP conversions; 3 organics without an in-90d exposure stay unmatched) |
@@ -301,6 +323,8 @@ Single partition (`make reconcile-dagster PROFILE=long_delay PARTITION=2026-08-0
 reconciled_conversions[2026-08-01] materialized
 reconcile-dagster: 1 day-partition(s) recovered + finalize
 ```
+(Phase-12 transcript; since Phase 17 the last line also reports the corrected rows
+reloaded over the touched days.)
 
 Backfill over the candidate date range (`make reconcile-dagster PROFILE=long_delay`):
 
@@ -312,13 +336,16 @@ reconciled_conversions[2026-08-19] materialized
 ... (2026-08-20 … 2026-08-27, 2026-08-29 … 2026-08-31)
 reconcile-dagster: 15 day-partition(s) recovered + finalize
 ```
+(Phase-12 transcript; since Phase 17 the last line also reports the corrected rows
+reloaded over the touched days.)
 
 15 day-partitions cover all candidate days (13 before Phase 16; the 3 deferred
 shared-IP conversions add 2026-08-02 and 2026-08-09); the union reproduces the full
 recovery (recall 0.9733). Provenance: the transcript above was captured live in
 Phase 12 (13 days) and its day list re-derived OFFLINE for Phase 16 from the
-long_delay candidate set (`orchestration.run._candidate_days` logic over the hot
-output), not re-captured from a live `make reconcile-dagster`; the 32-row recovery
+long_delay candidate set (the logic now in `reconcile.candidate_days()`, which reads
+the lake's current hot-unattributed rows — applied, for this transcript, over the
+hot output), not re-captured from a live `make reconcile-dagster`; the 32-row recovery
 itself is live-pinned by `make test-int-lakehouse` / `test-int-long-delay`. Iceberg snapshot ids / commit times and Dagster run ids
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).

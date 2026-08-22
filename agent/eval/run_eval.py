@@ -5,7 +5,8 @@ This is the ONLY token-spending path in the eval (§2 cost posture: 30 invocatio
 ~1-2k context + a ~3-8k cached prefix each — well under $10). CLAUDE.md gates it behind
 developer approval; every offline test mocks the client.
 
-Isolation: each scenario gets its own clean stack (`make down && up && seed && run`) —
+Isolation: each scenario gets its own clean stack + lake (`make down && lake-reset
+&& up && seed && run`) —
 tiny/medium/faults share `conversion_id` space (DECISIONS Phase 5), so two profiles
 cannot co-reside in the serving tables. `make run` (full, not `run-hot`): `late_burst`
 needs the restatement, and every scenario needs `report_snapshots` for the context's
@@ -55,8 +56,14 @@ def _make(*targets: str, profile: str | None = None) -> None:
 
 
 def stand_up_profile(profile: str) -> None:
-    """Clean isolated stack for one profile: down → up → seed → full run."""
+    """Clean isolated stack for one profile: down → lake-reset → up → seed →
+    full run. The lake reset is load-bearing since Phase 17: the lake outlives
+    `make down`, and a `make run` over a lake that already holds a scenario's
+    reconciled rows reloads them as current, finds no candidates, and collapses
+    the restatement discriminator (`max_abs_roas_delta`) to 0 — the Phase-17
+    review gate found this path without it (pinned in tests/test_run_eval.py)."""
     _make("down")
+    _make("lake-reset", "CONFIRM=yes", profile=profile)
     _make("up")
     _make("seed", profile=profile)
     _make("run", profile=profile)

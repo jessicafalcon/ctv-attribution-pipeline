@@ -231,18 +231,20 @@ extend the data-platform surface — lakehouse storage + compute, an orchestrato
 real query-cost story, a measured scaling point, a runbook, a simplified core, a
 lake of record, cost/ops levers, and a docs reshape. Each has a spec under
 `specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
-how it was approved, and none opens a branch until approved. Status: **12–15
-merged**, **16 in review** (`phase-16-simplify-core`), **17–19 specs approved,
-not started** (Phase 17's spec needs the Phase-16 follow-up edit recorded in
-BACKLOG before its branch opens). Phase 12 additionally needed dependency sign-off
-and an ARCHITECTURE §3.5 scope reversal.
+how it was approved, and none opens a branch until approved. Status: **12–16
+merged**, **17 built, in review** (`phase-17-lake-of-record`; its spec was amended
+first — D1–D12 — for the Phase-16 follow-up recorded in BACKLOG), **18–19 specs
+approved, not started** (Phase 18's spec needs a Phase-17 follow-up edit before its
+branch opens — BACKLOG). Phase 12 additionally needed dependency sign-off and an
+ARCHITECTURE §3.5 scope reversal.
 
 ## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
 
 **Goal.** Land raw exposures to a local Iceberg table (day-partitioned); move the
 reconciliation pass to a day-partitioned Dagster software-defined asset that reads
 exposures from Iceberg via DuckDB, feeding the unchanged `attribute_household` leaf.
-ClickHouse `exposures_landed` stays as the serving copy (dual-write). Adds the
+ClickHouse `exposures_landed` stays as the serving copy (dual-write — superseded by
+Phase 17, where the lake is the record and ClickHouse is loaded from it). Adds the
 lakehouse storage angle (Iceberg), compute angle (DuckDB), and an orchestrator.
 
 **Done when.** Reconciled output is byte-identical to the current ClickHouse-sourced
@@ -318,14 +320,30 @@ and medium equal the pre-Phase-16 hot numbers; shared_ip_spike post-reconcile 69
 
 **Goal.** Flip the arrow: the Iceberg lake becomes the system of record and
 ClickHouse a replayable serving projection, with bucket-aligned reconciliation.
-Spec: `specs/phase-17-lake-of-record.md`. Pre-condition from Phase 16 (BACKLOG):
-the spec must add an explicit ambiguous-candidate path — a deferred row's
-candidate households hash to other buckets, so a bucket-local join would silently
-stop recovering them — via a `candidate_households` column and "explode per
-candidate → bucket-local join → reduce by `conversion_id`" (fan-out/reduce in
-batch, never on the hot path); `reason` and `candidate_households` join the
-"same columns" list; `device_graph` lands as a lake table so reconciliation needs
-no broker.
+Spec: `specs/phase-17-lake-of-record.md` (amended before the branch opened with
+decisions D1–D12 against the Phase-16 coherence audit's F1–F3).
+
+**Done when.** `make test && make lint && make down && make lake-reset
+CONFIRM=yes && make up && make seed PROFILE=tiny && make run-hot && make eval &&
+make test-int && make test-int-lakehouse && make test-int-long-delay` — tiny
+through the lake is the gate-0 proof (a clean stack is a clean lake); long_delay
+is the reconcile-through-lake + 0.587→0.973 proof.
+
+**Delivered (2026-08-21).** `candidate_households` on the attributed row (the
+engine keeps the full candidate set at deferral time; 19-column contract pinned
+across model/loader/oracle/DDL/Iceberg/read-back) so reconciliation explodes the
+row and needs no device graph or broker — the BACKLOG "land `device_graph` as a
+lake table" fix is superseded; `raw.exposures` + `raw.attributed_conversions`
+partitioned `day × bucket(8, household_id)` (N a table property, guarded);
+engine → lake → Dagster load (touched days) → ClickHouse on every path,
+`--lake-land` / dual-write gone, the direct sink now `tests/oracle.py`;
+bucket-aligned reconcile over the lake == the single pass byte-for-byte
+(long_delay, shared_ip_spike); `make replay-serving` (Kafka-free), `make
+lake-reset` (one of three sanctioned destructive paths, all in `lake/destructive.py`; per-profile lake root), `make
+lake-maintain` (Dagster job). Every pin in `tests/pins.py` unchanged; the tiny
+golden re-frozen once for the additive column (0 decision changes — now a rule,
+DECISIONS Phase 17). Found live: clickhouse-connect writes naive datetimes as
+local time (ARCHITECTURE §8).
 
 ## Phase 18 — Cost and ops levers (PROPOSED)
 

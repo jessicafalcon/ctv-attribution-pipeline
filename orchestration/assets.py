@@ -1,15 +1,24 @@
-"""Dagster software-defined assets for orchestrated reconciliation (Phase 12).
+"""Dagster software-defined assets — the lake of record → ClickHouse load and the
+orchestrated reconciliation (Phase 12; Phase 17 flips the arrow).
 
 A Dagster software-defined asset = a data product Dagster tracks with lineage and
-partitions, so "the exposure lake" and "reconcile day D" become named,
+partitions, so "load day D into ClickHouse" and "reconcile day D" become named,
 independently re-runnable, backfillable units instead of one opaque `make run`
 subprocess. Determinism is preserved by construction: the assets call the SAME
-pure `reconcile.recover` / `reconcile.finalize` used by `make run`; only the
-exposure source is the Iceberg lake. Dagster run ids / wall-clock are
-non-deterministic and are NOT asserted on (DECISIONS Phase 12).
+pure functions `make run` calls (`lake.load_serving`, `reconcile.recover_day`,
+`reconcile.finalize`). Dagster run ids / wall-clock are non-deterministic and are
+NOT asserted on (DECISIONS Phase 12).
+
+Graph:
+  exposures_iceberg ─┐                      ┌─ clickhouse_exposures_landed[day]
+  attributed_iceberg ┴ (observe the lake) ──┴─ clickhouse_attributed_conversions[day]
+                                                │
+  reconciled_conversions[day]  (candidates + exposures from the lake, bucket-aligned,
+                                corrections APPENDED to raw.attributed_conversions)
+                                                │ → reload the touched days
+  reconciled_report  (global finalize: snapshots + rollup)
 """
 
-import os
 from datetime import date, timedelta
 
 from dagster import (
@@ -22,17 +31,16 @@ from dagster import (
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from lake.iceberg_catalog import ensure_table
+from lake.iceberg_catalog import ensure_attributed, ensure_exposures
+from lake.land_attributed import land_attributed
+from lake.load_serving import load_attributed_day, load_exposures_day
 from reconcile.reconcile import (
-    LONG_WINDOW,
     _max_ingest,
-    _read_candidates,
     finalize,
+    lake_candidates,
     reconciled_at_for,
-    recover,
+    recover_day,
 )
-from reconcile.sources import IcebergExposureSource
-from resolve.graph_loader import load_graph_index
 
 
 def _day_keys(start: date, end: date) -> list[str]:
@@ -47,8 +55,9 @@ def _day_keys(start: date, end: date) -> list[str]:
 # depending on when it ran, breaking the determinism policy ("same input → same
 # answer on a re-run"). A fixed static set spanning the sim calendar is
 # reproducible and still day-granular + backfillable (DECISIONS Phase 12). All
-# profiles seed 2026-08-01; a one-year span covers every tail. The runner
-# materializes only the days that hold candidates.
+# profiles seed 2026-08-01; a one-year span covers every tail. Which days get
+# materialized is decided by the DATA — the days a landing touched (spec D6), or
+# the days holding reconcile candidates — never by today's date.
 DAY_PARTITIONS = StaticPartitionsDefinition(
     _day_keys(date(2026, 8, 1), date(2027, 8, 1))
 )
@@ -56,48 +65,87 @@ DAY_PARTITIONS = StaticPartitionsDefinition(
 
 @asset
 def exposures_iceberg() -> MaterializeResult:
-    """The Iceberg `raw.exposures` lake table (landed out-of-band by
-    make lake-land). This asset observes it — ensures it exists and reports its
-    row count — it does not re-land; landing rides the engine so the lake and
-    ClickHouse share one input set (DECISIONS Phase 12)."""
-    table = ensure_table()
-    rows = table.scan().to_arrow().num_rows
+    """The Iceberg `raw.exposures` table. Observes it (ensures it exists, reports
+    the physical row count — an append-only log, so ≥ the distinct count)."""
+    rows = ensure_exposures().scan().to_arrow().num_rows
+    return MaterializeResult(metadata={"rows": MetadataValue.int(rows)})
+
+
+@asset
+def attributed_iceberg() -> MaterializeResult:
+    """The Iceberg `raw.attributed_conversions` table (observe only)."""
+    rows = ensure_attributed().scan().to_arrow().num_rows
     return MaterializeResult(metadata={"rows": MetadataValue.int(rows)})
 
 
 @asset(deps=[exposures_iceberg], partitions_def=DAY_PARTITIONS)
+def clickhouse_exposures_landed(context: AssetExecutionContext) -> MaterializeResult:
+    """Load this day's distinct exposures from the lake into `exposures_landed`.
+    Re-materializing is idempotent (ReplacingMergeTree collapses the re-insert)."""
+    apply_ddl()
+    n = load_exposures_day(connect(), context.partition_key)
+    return MaterializeResult(metadata={"rows": MetadataValue.int(n)})
+
+
+@asset(deps=[attributed_iceberg], partitions_def=DAY_PARTITIONS)
+def clickhouse_attributed_conversions(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Load this day's CURRENT attributed row per conversion_id (argMax
+    processed_at over the lake's append-only log) into `attributed_conversions`.
+    Idempotent: keyed conversion_id, version processed_at."""
+    apply_ddl()
+    n = load_attributed_day(connect(), context.partition_key)
+    return MaterializeResult(metadata={"rows": MetadataValue.int(n)})
+
+
+@asset(
+    deps=[
+        exposures_iceberg,
+        attributed_iceberg,
+        # reconciled_at = max(ingest_time) over BOTH loaded serving tables
+        # (reconcile._max_ingest): both loads are lineage, else a scheduler
+        # reorder could stamp a different version than `make run` (review gate).
+        clickhouse_exposures_landed,
+        clickhouse_attributed_conversions,
+    ],
+    partitions_def=DAY_PARTITIONS,
+)
 def reconciled_conversions(context: AssetExecutionContext) -> MaterializeResult:
-    """Recover the hot-misses whose conversion event_time falls on this partition
-    day, sourcing their households' exposures from the Iceberg lake via DuckDB.
-    `reconciled_at` is the global, data-derived version (max ingest_time + 1s,
-    stable across days), so a per-day backfill stamps exactly what a single full
-    ClickHouse pass would — the byte-identical guarantee (Done-when #2)."""
+    """The bucket-aligned reconcile for this partition day (spec D2): the day's
+    current hot-unattributed rows from raw.attributed_conversions, exploded over
+    their candidate households, joined bucket-locally against raw.exposures in
+    [day − 90d, day], reduced across buckets by `pick_household` — and the
+    corrections APPENDED to raw.attributed_conversions (path=reconciled).
+    `reconciled_at` is the global, data-derived version (max ingest_time over
+    the loaded serving state + 1s, stable across days), so a per-day backfill
+    stamps exactly what a single full pass would — the byte-identical
+    guarantee. The touched days are reported so the runner reloads them into
+    ClickHouse before the finalize. (Day-partitioned with the bucket loop
+    inside, not day × bucket: the cross-bucket reduce needs every bucket's
+    scores in one place, and an IO manager to carry them between runs is
+    machinery the laptop tier does not need — DECISIONS Phase 17.)"""
     day = context.partition_key
     client = connect()
     apply_ddl()
     reconciled_at = reconciled_at_for(_max_ingest(client))
-    candidates = [
-        c for c in _read_candidates(client) if c.event_time.date().isoformat() == day
-    ]
-    # Same device graph as `make run`'s pass (compacted topic), so an ambiguous
-    # conversion expands to the same candidate households — byte-identical.
-    graph = load_graph_index(os.environ.get("KAFKA_BROKER", "127.0.0.1:19092"))
-    recovered = recover(
-        client, candidates, IcebergExposureSource(), LONG_WINDOW, reconciled_at, graph
-    )
+    candidates = lake_candidates(day)
+    recovered = recover_day(day, reconciled_at)
+    touched = land_attributed(recovered)
     return MaterializeResult(
         metadata={
             "candidates": MetadataValue.int(len(candidates)),
             "recovered": MetadataValue.int(len(recovered)),
+            "touched_days": MetadataValue.json(sorted(touched)),
         }
     )
 
 
-@asset(deps=[reconciled_conversions])
+@asset(deps=[reconciled_conversions, clickhouse_attributed_conversions])
 def reconciled_report() -> MaterializeResult:
-    """Global finalize, once all days are recovered: pre/post report snapshots +
-    rollup refresh (reconcile.finalize). Non-partitioned — it summarizes the whole
-    reconciled state, not one day."""
+    """Global finalize, once all days are recovered AND reloaded: pre/post report
+    snapshots + rollup refresh (reconcile.finalize). Non-partitioned — it
+    summarizes the whole reconciled state, not one day."""
     client = connect()
     finalize(client)
     return MaterializeResult()

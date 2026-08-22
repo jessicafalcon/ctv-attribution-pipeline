@@ -32,11 +32,16 @@ jobs:
         with:
           version: "0.12.5" # match local; bump deliberately
       - run: uv sync --locked
-      # Hot path against the compose stack: seed → engine (resolve in-process) → ClickHouse,
-      # then the tiny integration suite (FINAL-state + idempotency). `run-hot`,
-      # not `run`: the tiny golden + pinned accuracy are hot-path oracles, and a
-      # reconciliation pass would over-credit tiny's long-tail organics and shift
-      # them.
+      # Phase 17: every row reaches ClickHouse through the lake (engine → Iceberg →
+      # Dagster load → ClickHouse), so the integration job needs the DuckDB iceberg
+      # extension too (same one-time fetch as the offline job; DECISIONS Phase 12).
+      - run: uv run python -m lake.install_extension
+      # Hot path against the compose stack: seed → engine (resolve in-process) →
+      # lake → load → ClickHouse, then the tiny integration suite (FINAL-state +
+      # idempotency). `run-hot`, not `run`: the tiny golden + pinned accuracy are
+      # hot-path oracles, and a reconciliation pass would over-credit tiny's
+      # long-tail organics and shift them. Runtime grows with the lake hop
+      # (Dagster + DuckDB) — accepted (spec D5).
       - run: make up
       # Alert-rule guard (offline w.r.t. the stack — needs only the digest-pinned
       # prometheus image, already pulled by `make up`): promtool check rules +
@@ -45,12 +50,17 @@ jobs:
       # landing). This is what catches a metric rename or rule edit silently
       # breaking the fixture — the guard that keeps Gate 2 honest.
       - run: make test-alerts
+      # Clean lake, not just a clean stack (Phase 17): ClickHouse is loaded from
+      # the lake, which outlives `make down`. A fresh runner has no lake, so this is
+      # a no-op here — it is the documented clean-state step, kept so the CI chain
+      # equals the spec's DONE command and the canonical demos.
+      - run: make lake-reset CONFIRM=yes
       - run: make seed PROFILE=tiny
       - run: make run-hot
       - run: make test-int
       # Reconciliation coverage: its rollup/restatement/RMT-supersession logic is
       # live-only (no offline oracle), so it must run in CI. Its own clean
-      # long_delay stack (the target does down && up && seed && run), which tiny
+      # long_delay stack (the target does down && lake-reset && up && seed && run), which tiny
       # can't substitute — tiny's 3 state-misses have no exposure inside 90d and
       # its 5 shared-IP deferrals (Phase 16) are in-window, so a long-window pass
       # recovers no state-miss there. Costs a second stack cycle.

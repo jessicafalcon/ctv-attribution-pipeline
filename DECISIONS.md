@@ -2,7 +2,7 @@
 
 One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
 "Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
-Phase 16 sits directly below the fixes.
+Phase 17 sits directly below the fixes.
 
 ## Phase 0
 
@@ -1016,7 +1016,8 @@ Phase 16 sits directly below the fixes.
   = 5` per scenario is exactly why the tables report a rate (k/5), not a single-run claim;
   verdict/hypothesis stability across reps is a measurement, never a gated assertion — the
   AI edge is carved out of the byte-identical guarantee (CLAUDE.md). The sweep drives its
-  own clean stack per scenario (`make down && up && seed && run`, full run for the
+  own clean stack per scenario (`make down && up && seed && run` — since Phase 17
+  `lake-reset` between down and up, full run for the
   restatement field) because profiles share `conversion_id` space (Phase 5); FG2 (BACKLOG
   31) is satisfied by rendering each profile's deterministic live context headline into a
   dedicated per-profile headline table in RESULTS (`tables.headline_table`, all six
@@ -1093,6 +1094,294 @@ Phase 16 sits directly below the fixes.
   weakening/removing the guard (defeats row 29, and CLAUDE.md forbids weakening a failing
   test to make it pass).
 
+## Phase 17
+
+- **`candidate_households` on the attributed row (spec D1) — the engine keeps what
+  it knew.** At deferral time the engine holds the shared IP's full owner set (the
+  fan-out `resolve_one` emitted, captured by `candidate_households_by_conversion`
+  BEFORE `one_row_per_conversion` collapses it to the placeholder). Phase 16 threw
+  that away and had reconciliation re-derive it from the device graph over the
+  broker. Now it is persisted as `candidate_households Array(String)` (ClickHouse,
+  additive `add column if not exists` — the `reason` pattern) and the deferred row
+  is self-describing: `expand_candidates` explodes the array, `load_graph_index`
+  is gone from `reconcile/` and `orchestration/`, and a reconcile pass needs no
+  broker (closes the BACKLOG broker-dependency row; its suggested fix — land
+  `device_graph` as a lake table — is superseded). The model validator pins the
+  contract: `candidate_count == 1` ⇒ empty; `> 1` ⇒ exactly `candidate_count`
+  sorted distinct households containing `household_id`. A reconciled credit keeps
+  the array (provenance: the pick was made among these). Rejected: a nullable
+  `household_id` for ambiguous rows (a nullable RMT key column is worse than the
+  documented min-candidate placeholder — the array is the truth, the placeholder
+  is the key); landing `device_graph` in the lake (a second copy of the graph to
+  keep equal, for a set the engine already had in hand).
+- **A pre-Phase-17 ambiguous row fails loud with the fix named, not with a bare
+  pydantic error.** On a volume created before the column, the migration reads an
+  old ambiguous row back as `[]`; `lake.read_attributed._row` raises
+  `PrePhase17RowError` ("this lake predates Phase 17; re-populate it") BEFORE it
+  builds the model, so the model validator never gets to throw a bare pydantic
+  error — the same loud-failure standard as the `eval_meta` guard. (Review gate:
+  the first cut put the check after model construction in the since-deleted
+  `_read_candidates`, where the validator fired first and made it unreachable.) Rejected: expanding such a row to nothing and leaving it as its hot row
+  (a silent non-recovery that moves numbers).
+- **Tiny golden re-frozen — the second sanctioned exception, and now a rule.**
+  `fixtures/tiny/expected/attributed.jsonl`: every line gains the
+  `candidate_households` key (`[]` on 50 rows; the set on the 5 deferred shared-IP
+  rows — c-000014/25/41/42 `[h-0004, h-0005]`, c-000016 `[h-0000, h-0001,
+  h-0008]`); ZERO decision changes, every existing cell byte-identical, verified
+  by a keyed diff before the developer signed off (2026-08-21). The fixture commit
+  stands alone. **The rule, so the next phase does not re-derive it:**
+  `fixtures/tiny/expected/` is re-frozen ONLY for additive engine-output columns
+  where every existing cell is byte-identical; the approval artifact is the keyed
+  diff showing zero decision changes. Rejected: comparing the golden on the
+  fixture's keys only (option b) — that turns the gate into a subset comparison
+  that can never again catch a column silently disappearing, which is exactly
+  what the file exists to catch.
+- **First-hour stack check (spec D11) passed on the pinned versions — recorded
+  under ARCHITECTURE §8**, in the same commit as the code that builds on it, so
+  "verified before built" is true in the history.
+- **The lake is the record; ClickHouse is derived — every path, no flag.**
+  `streaming/dataflow.py` lands the deduped exposures and the attributed rows
+  (`land_run`) and never writes ClickHouse rows; `lake/load_serving.py` is the one
+  writer of `exposures_landed` / `attributed_conversions`, driven by Dagster
+  per-(table, day) load assets; reconciliation appends corrections to the lake
+  and reloads. `--lake-land`, `make lake-land` and the Phase-12 "off by default"
+  carve-out are gone (that DECISIONS entry carries the superseded pointer). The
+  old sink moved to `tests/oracle.py` and is the parity oracle: lake-loaded ==
+  direct-write rows, proven live. Gate-0 golden and every `tests/pins.py` pin are
+  unchanged — the phase moved rows, it did not change them. CI integration
+  runtime grows by the Dagster + DuckDB hop (accepted, spec D5).
+- **Loads are driven by the days a landing TOUCHED (spec D6).** `land()` /
+  `land_attributed()` return the set of `event_time` days they wrote (UTC, the
+  Iceberg day transform); `orchestration.run.materialize_load(days)` materializes
+  exactly those partitions of both load assets. Partition keys stay the Phase-12
+  static calendar; which ones run comes from the data, never "today". A late row
+  lands in an old day and reloads that day.
+- **One lake per profile: `data/lake/<profile>`, bound by each entry point's
+  `--profile` (the Makefile variable this bullet first described is gone — round
+  2 of the review gate; see the round-2 and round-3 entries).** Profiles share
+  conversion_id space (DECISIONS Phase 5) and the lake outlives `make down`, so a
+  shared lake would load tiny's current rows into a long_delay stack (seen live:
+  510 = 360 + 150 exposures). Per-profile roots give the same isolation `make
+  down` gives ClickHouse without a destructive step. Plain `=`, not `?=` (a child
+  make would inherit the parent's exported tiny value — seen live), and each
+  clean-stack target pins `PROFILE` target-wide so its pytest line, which runs in
+  the parent make, opens the same lake as the `$(MAKE) run PROFILE=p` child
+  (seen live, too: the test landed into `data/lake/tiny`).
+- **A clean stack is a clean lake: the `test-int-*` targets run `make lake-reset
+  PROFILE=<p> CONFIRM=yes`, and the canonical demos say so.** `make down` does
+  not touch `data/lake/` (spec D9) — but ClickHouse is now LOADED from the lake,
+  so a `run-hot` over a lake that already holds an earlier pass's reconciled rows
+  loads those as the current rows and the hot-only pins break (seen live: 3 of 4
+  lakehouse checks failed against a lake carried over from `test-int-long-delay`).
+  The confirmation is explicit in the recipe (`CONFIRM=yes`), the rm is scoped to
+  the profile's root, and `tests/test_makefile.py` asserts each isolated target
+  resets the lake of the profile it seeds. `make lake-reset` is the second
+  sanctioned destructive path; bare it prompts.
+- **clickhouse-connect writes a NAIVE datetime as local wall-clock but reads a
+  `DateTime64(3,'UTC')` column back as naive UTC — the loader inserts tz-aware
+  UTC.** Found live: the first lake-loaded rows sat at +6h (MDT) vs the oracle;
+  a probe (`_tz_probe`) showed naive `12:02:51` stored as `18:02:51`, aware UTC
+  stored exactly. The lake readers return naive UTC by contract (DECISIONS Phase
+  12), so `load_serving._utc` attaches UTC before every insert; pinned offline
+  in `tests/test_load_serving.py`, invisible in CI (UTC). Recorded under
+  ARCHITECTURE §8. **Latent pre-Phase-17 consequence, reported for a ruling:**
+  Phase 6–16's `recover()` inserted recovered rows whose `event_time` /
+  `ingest_time` came from the same naive-UTC read through the same naive write —
+  shifted by the developer machine's UTC offset on the reconciled path (campaign
+  totals, pins and snapshots are offset-invariant, so nothing caught it; CI is
+  UTC). That sink is now test-only. Developer ruling: not a note — RUNBOOK
+  incident 4 (same family as incident 2, the generalization made stronger: every
+  datetime is tz-aware UTC at every I/O boundary) plus an offline guard,
+  `tests/test_tz_invariance.py`, that runs the reconcile write path under
+  TZ=UTC and two non-UTC zones and asserts byte-identical rows — the "different
+  machine" answer the determinism question was missing for ten phases. Artifact
+  audit: no committed doc quotes a reconciled-row timestamp; fixtures are
+  model-serialized producer/engine output; the Phase-12 parity proof passed
+  because both sides were shifted equally.
+- **Reconciliation reads the lake, bucket-aligned, with the Dagster asset
+  day-partitioned and the bucket loop inside it — not `day × bucket` (spec D2,
+  deviation reported).** `recover_day(day)`: the day's current hot-unattributed
+  rows (`lake_candidates`, argMax over the append-only log — a conversion an
+  earlier pass corrected is not a candidate), exploded over
+  `candidate_households` BEFORE bucketing (`expand_candidates`), grouped by
+  pyiceberg's own `bucket[8]` hash (`bucket_of`), one DuckDB read per bucket
+  restricted to that bucket's households and `[day − 90d, day + 1d)` (DuckDB
+  prunes on both transforms — 1 of 8 files, pinned offline), then the leaf per
+  row and `pick_household` per conversion across buckets — the one
+  implementation, untouched. `make run` and `make reconcile-dagster` call the
+  same function. Why the asset stays day-partitioned: the cross-bucket reduce
+  needs every bucket's scored candidates in one place, and a
+  `MultiPartitionsDefinition(day × bucket)` join asset would need an IO manager
+  to carry per-bucket scores between runs to a reduce asset — machinery the
+  laptop tier does not need; the Spark/Trino port parallelizes the bucket loop
+  as tasks. The SQL per (day, bucket) is the contract either way. Gate: the
+  bucketed pass == the single in-memory pass byte for byte on long_delay and
+  shared_ip_spike (`tests/test_bucketed_reconcile.py`) and == the ClickHouse-
+  and Iceberg-sourced passes live. The architecture's claim is no fan-out on the
+  HOT path; batch fan-out with the full 90-day picture is cheap and correct.
+- **Both raw tables carry the same `bucket(N, household_id)` (spec D7), guarded.**
+  `ctv.bucket_count` is a table property on both; `ensure_*` refuses an existing
+  table whose partition fields or recorded N differ (`LakeLayoutError` naming
+  `make lake-reset`) instead of appending into a foreign layout — the Phase-12
+  day-only lake at `data/lake/` is exactly that case. Never re-spec a populated
+  lake.
+- **Lake hygiene: compaction is `overwrite(rows, overwrite_filter=<day>)`, not
+  `rewrite_data_files` (spec D10).** pyiceberg 0.11.1 has no rewrite API and its
+  `dynamic_partition_overwrite` refuses non-identity transforms (`day`), so a day
+  whose partitions hold >1 file is read back and written once under a filtered
+  overwrite → one file per (day, bucket), rows unchanged (physical duplicates
+  included — compaction does not dedup, the read does). Snapshot expiry is
+  pyiceberg's `maintenance.expire_snapshots().older_than()`. A Dagster job, off
+  `make run`, wall-clock by nature and therefore outside the byte-identical
+  guarantee like all lake metadata. Live on long_delay: 14 attributed day
+  partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Lake-as-record, reaffirmed after five review rounds (developer ruling on
+  the audit's "would you make the decision again").** Every entry point must now
+  be told its profile — and that requirement is the PROOF the decision is right,
+  not a cost of it. The alternative, a global default root, is precisely the
+  mixed-profile lake the testers created by accident in round 3. State that
+  outlives compose volumes must be addressed explicitly; a required `--profile`
+  is the cheapest possible form of explicit, and the env-var shortcut is what
+  was banned. `lake/` is not a junk drawer (ten modules, one role each); the
+  smell is the lander/reader PAIRS — rule of three, BACKLOG row, collapse on the
+  third table.
+- **Review gate, rounds 4–5 (four things that only lived in code comments,
+  now recorded).** (1) The `eval_meta` marker is stamped IN-PROCESS, after the
+  load, by every populate path — the engine (`streaming.dataflow`), the reconcile
+  job and `lake.destructive replay` — never a separate Makefile line: under `make
+  -i` a separate line stamps a green marker over a failed step, the wrong-profile
+  scoring bug (BACKLOG 43) in a new coat; pinned (a failing load leaves the marker
+  untouched). This supersedes the Phase-6/PR-#25 "standalone write_marker step"
+  argument, whose premise (the engine never knows the profile) no longer holds.
+  (2) `lake-reset` RAISES on a failed removal (exit 1, no "removed"): a
+  clean-stack target that says "removed" over a stale lake loads that lake and
+  shifts the pins silently (pinned with an unremovable root). (3) One scrub list
+  (`tests/_env.py`) for every test that runs a real recipe or the destructive
+  CLI in a subprocess — LAKE_ROOT, PYTEST_CURRENT_TEST, CONFIRM, MAKEFLAGS — pinned
+  so no helper grows its own. (4) The Dagster UI code location registers NO jobs:
+  `lake_maintenance` rewrites the record's data files, is destructive by this
+  repo's definition, and has exactly one entry point — the prompting
+  `lake.destructive maintain`; the UI is a viewer plus a profile-bound
+  materialize of the non-destructive assets. Threat model, restated once: these
+  guards are for mistakes — typos, stray env, a wrong-profile stack, a wrong
+  `-C` — not for a user who controls the environment. Every destructive prompt
+  prints the RESOLVED root, so a wrong working directory is visible at the one
+  place it can be caught.
+- **Review gate, round 3: stop hardening shell guards in Make — the destructive
+  paths are one Python process, and the threat model is written down.** Rounds 2
+  and 3 each found a new hole in the guard the previous round added (`$(origin
+  CONFIRM)` → `MAKEFLAGS='CONFIRM=yes'` reads back as command-line origin;
+  guard/prompt/`rm` on separate recipe lines → `make -i` steps over the
+  refusal). That is the signature of defending in the wrong layer: Make's
+  variable model and multi-shell recipes cannot express "one process validates,
+  confirms, then acts". `lake/destructive.py` can: `reset`, `replay`, `maintain`
+  — one `confirm_or_abort(action, yes=)` helper, the profile validated
+  (`[a-z0-9_]+`, via `configure`) before anything else, the root derived from the
+  profile (no path argument exists to escape with), a tty prompt (`n`/EOF/no
+  tty → "aborted", exit 1), the action last. Every Makefile recipe is one line
+  (`uv run python -m lake.destructive <action> --profile "$(PROFILE)" $(_YES)`);
+  `make -i` cannot step inside a process (pinned with a leading `-i` in the
+  sandbox test). `lake-maintain` now prompts too — compaction REWRITES the
+  record's data files (row content unchanged, pinned on both raw tables; the
+  earlier "metadata-only" wording covered only expiry). **Threat model, and
+  stop there:** these guards protect against MISTAKES — typos, an empty or
+  wrong PROFILE, a stray exported variable, a wrong-profile stack — not against
+  a user who controls the environment; that user can run `rm -rf` directly.
+  `MAKEFLAGS='CONFIRM=yes'` is therefore a stated residual, like `$(shell …)` in
+  an env-origin PROFILE. `override LAKE_ROOT` left the Makefile with the last
+  shell guard: nothing reads it now. Also in round 3: the outside-pytest
+  `LAKE_ROOT` refusal moved from `configure()` into `_lake_root()` — the one
+  resolver — so no importer can bypass it; `make dagster-ui` binds ONE profile
+  via `DAGSTER_PROFILE` (the Dagster code location had no way to bind a lake
+  once the default root was gone — an unbound location renders the graph and
+  fails loud on materialize) and is worded as what a test proves: an
+  asset-graph viewer, materialize for the bound profile — "backfill controls"
+  went, untested dev tooling earns no claim; the three command chains the
+  clean-state guard did not reach (RESULTS benchmark provenance, `cost-levers`,
+  `metrics-capture`) now carry `lake-reset` + `PROFILE=` on every step and the
+  guard covers RESULTS + the Makefile comments plus a seed→run same-profile
+  check; `tests/conftest.py` skips the integration suite without `CTV_INT=1`
+  (exported only by the `make test-int*` targets) and unbinds the lake per test
+  — a bare `pytest` that seeds the live broker and re-stamps `eval_meta` is the
+  same hazard class as an unbounded `rm -rf` (closes BACKLOG 57).
+- **Review gate, round 2 (security + code + coherence + functionality, second
+  pass).** (1) `--profile` OWNS the lake root: every entry point binds
+  `data/lake/<profile>` through `lake.iceberg_catalog.configure`; there is no
+  default root (an unset default produced a profile-mixed lake at `data/lake/`
+  that `lake-reset` refuses to touch — the default was the bug), `LAKE_ROOT` is
+  test-only (tmp fixtures; an entry point refuses it outside pytest), and
+  `lake_days()` checks `catalog_exists()` before any `ensure_*` so asking never
+  creates an empty lake. `tests/integration/test_context.py` binds the
+  shared_ip_spike lake (it reconciles the STACK's lake to pin post numbers — a
+  tmp lake would hold no candidates; reported as a deviation from "tmp fixture").
+  (2) `make lake-reset` validates PROFILE as DATA in the shell (`case`, via a
+  target-specific `export`, never make-interpolated into the recipe): a PROFILE
+  of `x" ; touch pwned ; echo "` used to run its payload before the refusal — a
+  real hole, closed and pinned (dry-run: the `case` is the first command and the
+  text appears nowhere; sandbox: nothing runs — that `case` guard was itself
+  superseded in round 3 by the one-process `lake/destructive.py`; the Makefile
+  pin for the quote case went with it. What is true NOW: a quoted command-line
+  PROFILE such as `x" ; touch pwned ; echo "` still splits the recipe line — the
+  `touch pwned` EXECUTES — and the destructive action itself only aborts because
+  `--yes` lands on the detached echo. Mistake-class under the threat model (the
+  PROFILE is the developer's own command line), a stated residual, not a closed
+  hole). Residual, stated: an
+  environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
+  `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
+  single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
+  (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
+  exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
+  `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model
+  is built — the first cut checked after construction, where the validator fired
+  first and made the guard unreachable (pinned with a pyarrow-written stale
+  row). (5) `orchestration/` was four near-identical headless runners with an
+  "informational" `--profile` each — the junk-drawer symptom the audit named —
+  and is now one CLI, `orchestration/run.py` (`load | reconcile | replay |
+  maintain`, `--profile` required, one `_materialize` helper); behaviour
+  unchanged, the DONE command is the proof. (6) "Clean stack = two commands"
+  CONFIRMS the lake-as-record decision rather than weakening it: the lake is
+  durable state that outlives compose volumes — that is the point; folding it
+  into `make down` would make the record as ephemeral as a volume. The README
+  says so in one sentence (Phase 19 makes it the first-screen honesty line). (7)
+  The continuous-follow framework label is "Phase 18+" in every living doc (frozen
+  specs keep their wording; was a mix of
+  17+/18+): Phase 18's spec does not decide it either; the label means "after
+  18". (8) Phase 18 gets its own gate for the loader-owned dirty set and a
+  corrected DONE command — both on the BACKLOG amendment row, so they are in the
+  spec before the branch opens.
+- **Review-gate minors, batched.** `read_current` breaks an equal-`processed_at`
+  tie by `path` (total order, never file order); the tz test uses `monkeypatch`,
+  not `os.environ`; Dagster control flow raises instead of `assert` (stripped
+  under `-O`); `reconcile/` is one reader (the lake), one picker, one fix —
+  `_read_candidates`, `reconcile/sources.py` and the oracle's insert functions
+  were deleted (the junk-drawer symptom the audit named; the parity proof reads
+  `exposures_landed` in the test); the oracle's values go through the loader's
+  `_utc` so it cannot reproduce the §8 naive write; the load stage has a metric
+  (`lake_rows_loaded_total{table}`) like every stage; stale prose (RESULTS
+  cost-lever provenance, `read_exposures` header, CI description in CLAUDE.md)
+  corrected. Left as-is on the developer's ruling: type hints outside touched
+  code. (The continuous-follow labels were later normalized to "Phase 18+" in
+  every living doc; frozen specs keep their wording — round 2, item 7.)
+- **`reconciled_at` stays anchored in ClickHouse (`_max_ingest` over the loaded
+  serving tables), not in the lake — for now.** Reconciliation reads the record
+  for candidates and exposures but stamps its version from the derived store;
+  anchoring in the lake would be purer but changes the Phase-6 restatement
+  semantics (`reported_at` is computed server-side from the same max) for no
+  current gain. The Dagster asset declares BOTH load assets as lineage so the
+  orchestrated pass cannot stamp a different version than `make run` (review
+  gate). Recorded as a Phase-18 question — it interacts with the dirty-set
+  design (BACKLOG, Phase-18 spec row).
+- **`make replay-serving` TRUNCATEs the two landed tables — and `eval_meta` — under explicit
+  confirmation — and refuses an empty lake.** Truncating the serving tables to
+  reload nothing would be data loss with a green exit code (review gate):
+  `lake_days()` must be non-empty before the TRUNCATE (`EmptyLakeError`).
+  The destructive-command rule allows TRUNCATE with explicit
+  confirmation; the Makefile passes `--yes` only under a command-line `CONFIRM=yes`, else the
+  runner prompts. The rollup/snapshot tables are derived and left alone (the next
+  reconcile pass refreshes them); `eval_meta` is re-stamped. Days come from the
+  data (`lake_days`: distinct event_time days in both raw tables). Live: 360
+  exposures + 115 attributed rows reloaded with no broker, recall 0.9733.
+
 ## Phase 16
 
 - **Deletion-first: three boxes removed, none added.** The Phase-15 architecture
@@ -1131,7 +1420,10 @@ Phase 16 sits directly below the fixes.
   `ambiguous=1`, `candidate_count=N`. It is a deterministic stand-in, not a
   decision: it was never credited and reconciliation ignores it (candidates are
   re-enumerated from the graph). tiny example: c-000016 (cc=3, owners h-0000 /
-  h-0001 / h-0005) sits on h-0000.
+  h-0001 / h-0008) sits on h-0000. (Corrected in Phase 17: this prose said
+  h-0005; the fixture's three c-000016 fan-out rows are h-0000/h-0001/h-0008 and
+  no test ever pinned the owner set, so the wrong value was hand-typed here and
+  nowhere else.)
 - **The tiebreak moved, not rewritten, and lives in ONE place.**
   `reconcile.pick_household` is the old `reduce_conversion` body — most-recent
   last-touch exposure, ties `exposure_id` then `household_id`, attributed beats
@@ -1168,7 +1460,8 @@ Phase 16 sits directly below the fixes.
   holds byte-for-byte — it was always a property of `attribute.py`. `bytewax` is
   out of `pyproject.toml`, `uv.lock` and the CLAUDE.md allowlist (the first package
   removal). Continuous follow is a framework choice (Bytewax proper vs Flink) for
-  Phase 17+, chosen with fresh eyes; SCALING.md's mapping table is retained as the
+  Phase 18+ ("after 18" — normalized in the Phase-17 review), chosen with fresh
+  eyes; SCALING.md's mapping table is retained as the
   port target, re-headed "Engine construct here".
 - **Fixture re-freeze: the one sanctioned exception, one commit, signed off.**
   `fixtures/tiny/expected/attributed.jsonl`: every line gains the new `reason`
@@ -1361,7 +1654,10 @@ Phase 16 sits directly below the fixes.
 - **Landing is gated `--lake-land`, the SOLE landing site; off for make run/CI.** So
   the engine path stays byte-identical, the lake stack stays out of every non-lake
   run (bounded blast radius, the spec pinned decision), and there is no double-land.
-  A re-land is harmless anyway (dedup-on-read).
+  A re-land is harmless anyway (dedup-on-read). **Superseded by Phase 17** (the
+  lake is the record; landing is always on and is the ONLY engine write path; the
+  byte-identical guarantee is on row content, which a lake hop cannot change —
+  DECISIONS Phase 17).
 - **Idempotency is on READ, not write (append accumulates).** An Iceberg append only
   accumulates rows — unlike the ClickHouse ReplacingMergeTree, which collapses re-sends
   on its sort key at FINAL. The DuckDB read does `select distinct` to collapse the
@@ -1409,7 +1705,8 @@ Phase 16 sits directly below the fixes.
   corrections.
 - **Only the reconcile *source* swaps; everything else stays ClickHouse.** DuckDB is the
   one lake compute engine (Spark/Trino are the SCALING port, not built); `exposures_landed`
-  is KEPT as the serving/benchmark copy (dual-write, not replaced). The pass is factored
+  is KEPT as the serving/benchmark copy (dual-write, not replaced — Phase 17 made the
+  lake the record and `exposures_landed` a derived copy loaded from it). The pass was factored
   into `recover()` (per-day, source-agnostic, given a fixed global `reconciled_at`) +
   `finalize()` (global snapshots + rollup); `run()` composes both with the same operations
   in the same order, so `make run` is byte-identical.
@@ -1450,10 +1747,16 @@ Phase 16 sits directly below the fixes.
     folded it into the engine) do not take `--profile`
     — the engine reads from topics and never knows the profile name. Threading it in
     would touch the byte-identical path; a standalone `write_marker.py` step in the
-    populate targets keeps the engine untouched.
+    populate targets keeps the engine untouched. *(Superseded in Phase 17: every
+    stage takes a required `--profile` — it binds the lake of record — and stamps
+    the marker in-process after its load; a separate recipe line would be run by
+    `make -i` over a failed step. The marker stays a table off the golden path;
+    only WHO writes it moved.)*
   - **Why a versionless single-row RMT keyed on a constant, no timestamp:** the marker
     must be deterministic (off the golden-compared path, so gate-0 stays byte-identical)
     and replay-idempotent. Constant key `k=0` makes every write replace the one row; no
     timestamp avoids the §8 clickhouse-connect tz round-trip and keeps re-runs identical.
   - Stamped by every populate target that leaves a scoreable DB (`run`, `run-hot`,
     `lake-land`, `metrics-capture`); `reconcile-dagster` inherits `lake-land`'s stamp.
+    (Phase 17: `lake-land` is gone; the populate targets are `run`, `run-hot`,
+    `metrics-capture`, `replay-serving`, and `reconcile-dagster` runs after `run-hot`.)

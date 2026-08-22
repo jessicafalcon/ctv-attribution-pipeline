@@ -17,7 +17,7 @@ reaches the sink (`one_row_per_conversion`).
 """
 
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -97,10 +97,11 @@ def one_row_per_conversion(
     shared-IP fan-out (N rows, one per candidate household, same
     `conversion_id`) collapses to its lowest-`household_id` candidate — a
     PLACEHOLDER the hot path emits unattributed (`candidate_count > 1` →
-    ambiguous_ip); reconciliation re-enumerates the candidates from the device
-    graph, so the placeholder household is never credited. Exact re-sends that
-    survived upstream (dedup off) collapse too (same bytes). This is what keeps
-    `conversion_id` a safe ReplacingMergeTree sort key (DECISIONS Phase 3 (b))
+    ambiguous_ip); reconciliation explodes the row's persisted
+    `candidate_households` (Phase 17), so the placeholder is never credited.
+    Exact re-sends that survived upstream (dedup off) collapse too (same bytes).
+    This is what keeps `conversion_id` a safe ReplacingMergeTree sort key
+    (DECISIONS Phase 3 (b))
     now that the `conversion_id`-keyed reduce is gone (Phase 16)."""
     by_conv: dict[str, ResolvedConversion] = {}
     for r in resolved:
@@ -110,8 +111,44 @@ def one_row_per_conversion(
     return list(by_conv.values())
 
 
+def candidate_households_by_conversion(
+    rows: Iterable[ResolvedConversion],
+) -> dict[str, list[str]]:
+    """`conversion_id` → sorted candidate households, for the shared-IP fan-outs
+    (`candidate_count > 1`) in `rows` — one row per candidate household, as
+    `resolve_one` emits them (the engine, before `one_row_per_conversion`
+    collapses the fan-out) and as `reconcile.expand_candidates` re-creates them.
+    Certain conversions are absent. This is what the deferred row persists as
+    `candidate_households` (Phase 17)."""
+    seen: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        if r.candidate_count > 1:
+            seen[r.conversion_id].add(r.household_id)
+    return {cid: sorted(hhs) for cid, hhs in seen.items()}
+
+
+def _candidates_of(
+    conv: ResolvedConversion, candidates: Mapping[str, list[str]] | None
+) -> list[str]:
+    """The candidate set to persist on `conv`'s row: empty for a certain
+    conversion; for an ambiguous one it MUST be present in `candidates` — a
+    deferred row without its candidate set could never be reconciled."""
+    if conv.candidate_count == 1:
+        return []
+    hhs = (candidates or {}).get(conv.conversion_id)
+    if not hhs:
+        raise ValueError(
+            f"{conv.conversion_id}: ambiguous (candidate_count="
+            f"{conv.candidate_count}) but no candidate_households were supplied"
+        )
+    return list(hhs)
+
+
 def last_touch(
-    exposures: list[Exposure], conv: ResolvedConversion, window: timedelta
+    exposures: list[Exposure],
+    conv: ResolvedConversion,
+    window: timedelta,
+    candidate_households: Sequence[str] = (),
 ) -> Candidate:
     """The leaf. `exposures` are the rows of ONE household. Credit the eligible
     exposure with the latest `event_time` (ties broken by `exposure_id`); the
@@ -121,9 +158,13 @@ def last_touch(
     ambiguity-blind: reconciliation scores each candidate household of an
     ambiguous conversion with this same function."""
     lo = conv.event_time - window
+    hhs = list(candidate_households)
     eligible = [e for e in exposures if lo <= e.event_time <= conv.event_time]
     if not eligible:
-        return Candidate(_attributed(conv, None, [], attributed=False), None)
+        return Candidate(
+            _attributed(conv, None, [], attributed=False, candidate_households=hhs),
+            None,
+        )
     winner = max(eligible, key=lambda e: (e.event_time, e.exposure_id))
     # Distinct assist ids, and never the credited exposure itself — set
     # difference by id, so a *resent* last-touch exposure (same id twice in
@@ -131,7 +172,9 @@ def last_touch(
     # semantics, distinct from the Phase-5 seen-set stream dedup.
     assists = sorted({e.exposure_id for e in eligible} - {winner.exposure_id})
     return Candidate(
-        _attributed(conv, winner.exposure_id, assists, attributed=True),
+        _attributed(
+            conv, winner.exposure_id, assists, attributed=True, candidate_households=hhs
+        ),
         winner.event_time,
     )
 
@@ -140,15 +183,27 @@ def attribute_household(
     exposures: list[Exposure],
     resolved: list[ResolvedConversion],
     window: timedelta,
+    candidates: Mapping[str, list[str]] | None = None,
 ) -> list[Candidate]:
     """The HOT-PATH rule over one household's rows. A conversion whose household
     is certain (`candidate_count == 1`: device hit or single-owner IP) gets
     `last_touch`. A shared-IP conversion (`candidate_count > 1`, reason
     ambiguous_ip) is emitted unattributed WITHOUT probing state — the hot path
     never guesses a household; reconciliation (Phase 6/16) owns it, alongside
-    the state-miss rows (no in-window exposure)."""
+    the state-miss rows (no in-window exposure). `candidates` supplies the
+    candidate set each ambiguous row persists (`candidate_households_by_conversion`
+    over the fan-out); required for every ambiguous row, unused otherwise."""
     return [
-        Candidate(_attributed(conv, None, [], attributed=False), None)
+        Candidate(
+            _attributed(
+                conv,
+                None,
+                [],
+                attributed=False,
+                candidate_households=_candidates_of(conv, candidates),
+            ),
+            None,
+        )
         if conv.candidate_count > 1
         else last_touch(exposures, conv, window)
         for conv in resolved
@@ -199,6 +254,7 @@ def attribute_household_streaming(
     events: list[tuple[str, Exposure | ResolvedConversion]],
     window: timedelta,
     allowed_lateness: timedelta,
+    candidates: Mapping[str, list[str]] | None = None,
 ) -> StreamResult:
     """Stage 1, streaming form (features 2–3). Process ONE household's exposures
     and resolved conversions in arrival (ingest) order through a watermark-gated
@@ -244,13 +300,15 @@ def attribute_household_streaming(
             if released:
                 pending = [c for c in pending if c.event_time > watermark]
                 for conv in released:
-                    out.extend(attribute_household(exposures, [conv], window))
+                    out.extend(
+                        attribute_household(exposures, [conv], window, candidates)
+                    )
         keep = [e for e in exposures if watermark <= e.event_time + window]  # evict >
         evicted += len(exposures) - len(keep)
         exposures = keep
         peak = max(peak, len(exposures))
     for conv in pending:  # EOF flush: surviving state, watermark → +∞
-        out.extend(attribute_household(exposures, [conv], window))
+        out.extend(attribute_household(exposures, [conv], window, candidates))
     return StreamResult(
         out, StreamState(peak=peak, evicted=evicted, final=len(exposures))
     )
@@ -268,6 +326,8 @@ def attribute(
     exp_by_hh: dict[str, list[Exposure]] = defaultdict(list)
     for e in exposures:
         exp_by_hh[e.household_id].append(e)
+    resolved = list(resolved)
+    candidates = candidate_households_by_conversion(resolved)
     res_by_hh: dict[str, list[ResolvedConversion]] = defaultdict(list)
     for r in one_row_per_conversion(resolved):
         res_by_hh[r.household_id].append(r)
@@ -275,7 +335,9 @@ def attribute(
     rows = [
         cand.row
         for hid, res_rows in res_by_hh.items()
-        for cand in attribute_household(exp_by_hh.get(hid, []), res_rows, window)
+        for cand in attribute_household(
+            exp_by_hh.get(hid, []), res_rows, window, candidates
+        )
     ]
     return sorted(rows, key=lambda r: r.conversion_id)
 
@@ -286,6 +348,7 @@ def _attributed(
     assists: list[str],
     *,
     attributed: bool,
+    candidate_households: list[str],
 ) -> AttributedConversion:
     if attributed:
         reason = None
@@ -302,4 +365,5 @@ def _attributed(
         path="hot",
         processed_at=conv.ingest_time,  # event-derived RMT version (DECISIONS Phase 3)
         reason=reason,
+        candidate_households=candidate_households,
     )

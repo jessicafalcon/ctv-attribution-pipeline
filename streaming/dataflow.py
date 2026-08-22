@@ -8,7 +8,7 @@ Teaching notes:
   event-time watermark (`max(event_time) − allowed_lateness`) reaches its
   `event_time`, and exposures are evicted past `event_time + hot_window`. This is
   windowing **on the batch drain** — the engine stays batch (no continuous Kafka
-  follow; that is a Phase-17+ framework decision — ARCHITECTURE §8, DECISIONS
+  follow; that is a Phase-18+ framework decision — ARCHITECTURE §8, DECISIONS
   Phase 5/16).
 - **Why no stream framework.** Until Phase 16 this module wrapped the same pass
   in a Bytewax dataflow fed from a bounded `TestingSource`; the framework only
@@ -25,15 +25,17 @@ paths cannot diverge.
 import argparse
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import timedelta
-from itertools import batched
 
 from confluent_kafka import Consumer
 from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
-from clickhouse.apply import apply as apply_ddl
-from clickhouse.client import connect
+from clickhouse.write_marker import write_marker
 from common.kafka import drain
+from lake.iceberg_catalog import configure
+from lake.land_attributed import land_attributed
+from lake.land_exposures import land
 from producer.models import (
     AttributedConversion,
     Conversion,
@@ -48,14 +50,25 @@ from streaming.attribute import (
     ALLOWED_LATENESS,
     HOT_WINDOW,
     attribute_household_streaming,
+    candidate_households_by_conversion,
     dedup_streams,
     one_row_per_conversion,
 )
-from streaming.sink import insert_attributed, insert_exposures
 
 EXPOSURES_TOPIC = "exposures"
 CONVERSIONS_TOPIC = "conversions"
-_BATCH = 256  # rows per ClickHouse insert → fewer, larger parts
+
+
+@dataclass(frozen=True)
+class EngineRun:
+    """One drain's output, in memory: the deduped exposures and the attributed
+    rows — what the lake receives (`land_run`) and what the parity oracle
+    compares against."""
+
+    exposures: list[Exposure]
+    rows: list[AttributedConversion]
+    resolved: int
+    suppressed: int
 
 
 def _allowed_lateness() -> timedelta:
@@ -98,13 +111,16 @@ def run_attribution(
     )
     for e in exposures:
         events[e.household_id].append(("exp", e))
+    # The fan-out's candidate set, captured BEFORE the collapse to one placeholder
+    # row — persisted on the deferred row as candidate_households (Phase 17).
+    candidates = candidate_households_by_conversion(resolved)
     for r in one_row_per_conversion(resolved):
         events[r.household_id].append(("res", r))
 
     rows: list[AttributedConversion] = []
     for household_events in events.values():
         result = attribute_household_streaming(
-            household_events, HOT_WINDOW, allowed_lateness
+            household_events, HOT_WINDOW, allowed_lateness, candidates
         )
         metrics.observe_state(result.state)
         for cand in result.candidates:
@@ -132,16 +148,11 @@ def resolve_conversions(
     return resolved
 
 
-def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
-    """Drain the two event topics, resolve conversions in-process, apply the
-    DDL, run the engine to completion. Returns row counts for logging/tests.
-
-    `lake_land` (make lake-land only; off for make run/CI) dual-writes the SAME
-    deduped exposure list this run feeds to ClickHouse into the Iceberg lake, so
-    the two copies share one input set by construction (DECISIONS Phase 12). Off by
-    default keeps the engine path byte-identical and the lake stack out of every
-    other run."""
-    apply_ddl()
+def run_engine(broker: str) -> EngineRun:
+    """Drain the two event topics, resolve conversions in-process, run the engine
+    to completion — and return the result WITHOUT writing it. Pure apart from
+    the metrics and the drain, so the integration oracle can call it to get the
+    rows the old direct sink would have written (Phase 17)."""
     exposures_raw = [
         Exposure.model_validate_json(v)
         for v in _drain_topic(broker, EXPOSURES_TOPIC, "engine-exposures")
@@ -176,29 +187,17 @@ def run_engine(broker: str, lake_land: bool = False) -> dict[str, int]:
     )
     metrics.observe_watermark_lag(peak_lateness)
     rows = run_attribution(exposures, resolved, _allowed_lateness())
-    # Synchronous, chunked inserts; idempotency lives in the table engines
-    # (DECISIONS Phase 3). Async inserts are a SCALING lever, not built.
-    client = connect()
-    try:
-        for chunk in batched(rows, _BATCH):
-            insert_attributed(client, chunk)
-        for chunk in batched(exposures, _BATCH):
-            insert_exposures(client, chunk)
-        metrics.EXPOSURES_LANDED.inc(len(exposures))
-    finally:
-        client.close()
-    # Dual-write the exact same deduped list into the Iceberg lake (make lake-land
-    # only). This is the sole landing site — make run/CI never pass lake_land — so
-    # there is no double-land; a re-run is harmless anyway (dedup-on-read).
-    if lake_land:
-        from lake.land_exposures import land
+    return EngineRun(exposures, rows, len(resolved), suppressed)
 
-        land(exposures)
-    return {
-        "exposures": len(exposures),
-        "resolved": len(resolved),
-        "suppressed": suppressed,
-    }
+
+def land_run(run: EngineRun) -> set[str]:
+    """Land the run in the lake of record — raw.exposures + raw.attributed_
+    conversions — and return the event_time days touched, which the Dagster load
+    then materializes into ClickHouse (spec D5/D6). The engine never writes
+    ClickHouse rows."""
+    days = land(run.exposures) | land_attributed(run.rows)
+    metrics.EXPOSURES_LANDED.inc(len(run.exposures))
+    return days
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -211,21 +210,31 @@ def main(argv: list[str] | None = None) -> None:
         "(promtool-fixture provenance; see make metrics-capture)",
     )
     parser.add_argument(
-        "--lake-land",
-        action="store_true",
-        help="also append the deduped exposures to the Iceberg lake "
-        "(make lake-land; Phase 12). Off for make run/CI.",
+        "--profile", required=True, help="binds the lake of record: data/lake/<profile>"
     )
     args = parser.parse_args(argv)
     broker = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
     if args.metrics_port:
         start_http_server(args.metrics_port, addr="127.0.0.1")
-    counts = run_engine(broker, lake_land=args.lake_land)
+    # Imported at call time, not module top: the offline oracle suites import
+    # this module and must not pay for (or depend on) the Dagster stack.
+    from orchestration.run import materialize_load
+
+    configure(args.profile)
+
+    run = run_engine(broker)
+    days = land_run(run)
+    loaded = materialize_load(days)
+    # The eval_meta profile marker (BACKLOG 43) is stamped HERE, after the load,
+    # in the same process — never a separate recipe line that `make -i` would run
+    # over a failed engine (review gate, round 5; the replay path got the same
+    # treatment in round 4).
+    write_marker(args.profile)
     print(
-        f"engine: {counts['exposures']} exposures, {counts['resolved']} resolved "
-        f"({counts['suppressed']} re-sends deduped) "
-        f"→ attributed_conversions + exposures_landed"
-        + (" + raw.exposures (lake)" if args.lake_land else "")
+        f"engine: {len(run.exposures)} exposures, {run.resolved} resolved "
+        f"({run.suppressed} re-sends deduped) → lake raw.exposures + "
+        f"raw.attributed_conversions ({len(days)} day(s)) → ClickHouse "
+        f"({loaded['exposures']} exposures, {loaded['attributed']} attributed)"
     )
     if args.metrics_out:
         write_to_textfile(args.metrics_out, REGISTRY)

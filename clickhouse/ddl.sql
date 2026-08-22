@@ -24,7 +24,8 @@ create table if not exists attributed_conversions
     attributed      UInt8,
     path            String,
     processed_at    DateTime64(3, 'UTC'),
-    reason          Nullable(String)
+    reason          Nullable(String),
+    candidate_households Array(String)
 )
 engine = ReplacingMergeTree(processed_at)
 order by conversion_id;
@@ -36,6 +37,17 @@ order by conversion_id;
 -- attributed. An explicit contract for reconciliation / the agent / later
 -- phases instead of re-deriving it from attributed=0 and candidate_count.
 alter table attributed_conversions add column if not exists reason Nullable(String);
+
+-- Phase 17 additive migration (same pattern). candidate_households: the FULL
+-- candidate set the engine saw when it deferred a shared-IP conversion (sorted
+-- owner households of the IP); empty when candidate_count = 1. Reconciliation
+-- explodes this array — it no longer reads the device graph — and household_id
+-- on an ambiguous row stays the min-candidate placeholder (the RMT key, never a
+-- decision). An ambiguous row written before this column exists reads back as []
+-- and is refused by the lake read (lake/read_attributed.py PrePhase17RowError,
+-- naming the fix: re-populate from the engine) before any model is built.
+alter table attributed_conversions
+    add column if not exists candidate_households Array(String);
 
 -- Raw exposures, for Phase-6 reconciliation lookups and the Phase-7 naive
 -- benchmark. ReplacingMergeTree (not plain MergeTree) so re-landing on a replay
