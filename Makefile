@@ -44,8 +44,7 @@ down:
 # counts only from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes'
 # is a stated residual — these guards are for mistakes, not for a user who
 # controls the environment (DECISIONS Phase 17).
-_CONFIRMED = $(if $(filter command line,$(origin CONFIRM)),$(filter yes,$(CONFIRM)),)
-_YES = $(if $(_CONFIRMED),--yes,)
+_YES = $(if $(filter command line,$(origin CONFIRM)),$(if $(filter yes,$(CONFIRM)),--yes,),)
 
 # Delete this PROFILE's lake of record, data/lake/<profile> (spec D9). The
 # clean-stack test-int-* targets pass CONFIRM=yes: a "clean stack" for a profile
@@ -105,11 +104,11 @@ reconcile-dagster:
 # Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
 # the rows of exposures_landed + attributed_conversions (TRUNCATE — destructive,
 # so CONFIRM=yes or the tty prompt), reloads every day the lake holds (hot AND
-# reconciled current rows), stamps eval_meta; `make eval` then reproduces the
+# reconciled current rows), stamps eval_meta in the SAME process (one recipe
+# line — `make -i` cannot re-stamp after a refusal); `make eval` then reproduces the
 # pins. The backfill story: Kafka retention is hours, the lake is forever.
 replay-serving:
 	uv run python -m lake.destructive replay --profile "$(PROFILE)" $(_YES)
-	uv run python -m clickhouse.write_marker --profile "$(PROFILE)"
 
 # Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
 # than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7) and rewrite each day partition

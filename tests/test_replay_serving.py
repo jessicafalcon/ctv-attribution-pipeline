@@ -91,9 +91,31 @@ def _dry_run(*args: str) -> str:
     ).stdout
 
 
-def test_make_replay_serving_stamps_eval_meta_and_gates_confirm() -> None:
+def test_make_replay_serving_is_one_process_and_gates_confirm() -> None:
     out = _dry_run("PROFILE=long_delay")
-    assert re.search(r'lake\.destructive replay --profile "long_delay"\s*$', out, re.M)
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(lines) == 1 and re.search(
+        r'lake\.destructive replay --profile "long_delay"\s*$', lines[0]
+    )
     assert "--yes" not in out  # prompts unless CONFIRM=yes on the command line
-    assert re.search(r'write_marker --profile "long_delay"', out)  # D8: stamps
     assert "--yes" in _dry_run("PROFILE=long_delay", "CONFIRM=yes")
+
+
+def test_destructive_replay_stamps_eval_meta_after_the_load(monkeypatch) -> None:
+    # D8: the marker is written IN the replay process, after the reload — never
+    # a second recipe line that `make -i` could run after a refusal (round 4).
+    import clickhouse.write_marker as wm
+    import lake.destructive as d
+    import lake.iceberg_catalog as cat
+
+    events: list[str] = []
+    monkeypatch.setattr(cat, "_profile", "long_delay")
+    monkeypatch.setattr(rp, "lake_days", lambda: {"2026-08-01"})
+    monkeypatch.setattr(
+        rp,
+        "truncate_and_reload",
+        lambda days: events.append("load") or {"exposures": 1, "attributed": 1},
+    )
+    monkeypatch.setattr(wm, "write_marker", lambda p: events.append(f"marker:{p}"))
+    d.replay(yes=True)
+    assert events == ["load", "marker:long_delay"]

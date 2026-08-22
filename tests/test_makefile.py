@@ -14,19 +14,21 @@ harmless only because `-n` propagates through MAKEFLAGS, so the children also
 dry-run and `docker compose down -v` never executes. No services, no network.
 """
 
-import os
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests._env import clean_env
+
 REPO_ROOT = Path(__file__).parent.parent
 MAKEFILE = REPO_ROOT / "Makefile"
 
 # `?=` is overridable from the environment; scrub so an exported SOURCE/PROFILE
 # on the developer's shell can't fail these tests for a non-Makefile reason.
-_ENV = {k: v for k, v in os.environ.items() if k not in {"SOURCE", "PROFILE"}}
+# The scrub list is shared with tests/test_destructive.py (tests/_env.py).
+_ENV = clean_env()
 
 
 def _dry_run(target: str, *args: str) -> list[str]:
@@ -121,7 +123,9 @@ def test_integration_tests_skip_without_the_marker() -> None:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env={k: v for k, v in _ENV.items() if k != "CTV_INT"},
+        # a NESTED pytest on purpose: the skip must fire in a fresh interpreter,
+        # exactly as the run-tests hook would start one
+        env={k: v for k, v in clean_env().items() if k != "CTV_INT"},
     ).stdout
     assert "SKIPPED" in out and "passed" not in out, out
     assert "CTV_INT" in out
@@ -139,7 +143,7 @@ def _make_in_sandbox(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         # UV_PROJECT: the repo venv from a foreign cwd; PYTHONPATH: the repo is
         # not an installed package (pytest's pythonpath=. does the same thing).
-        env={**_ENV, "UV_PROJECT": str(REPO_ROOT), "PYTHONPATH": str(REPO_ROOT)},
+        env=clean_env(UV_PROJECT=str(REPO_ROOT), PYTHONPATH=str(REPO_ROOT)),
         stdin=subprocess.DEVNULL,
     )
 
@@ -157,8 +161,9 @@ def test_destructive_recipes_are_one_python_process_each() -> None:
         assert lines[0].startswith(
             f'uv run python -m lake.destructive {action} --profile "tiny"'
         ), lines
+        assert len(lines) == 1, lines  # ONE process; nothing can run after a refusal
         assert "--yes" not in lines[0]  # prompts unless CONFIRM=yes on the command line
-        assert "rm -rf" not in "\n".join(lines) and "truncate" not in "\n".join(lines)
+        assert "rm -rf" not in lines[0] and "truncate" not in lines[0]
         (yes_line,) = [
             ln
             for ln in _dry_run(target, "PROFILE=tiny", "CONFIRM=yes")
@@ -177,7 +182,7 @@ def test_confirm_counts_only_from_the_command_line(target: str) -> None:
         capture_output=True,
         text=True,
         check=True,
-        env={**_ENV, "CONFIRM": "yes"},
+        env=clean_env(CONFIRM="yes"),
     ).stdout
     assert "--yes" not in out
 

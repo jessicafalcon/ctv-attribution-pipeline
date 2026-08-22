@@ -54,7 +54,11 @@ def reset(yes: bool) -> None:
         f"lake-reset deletes {root} (the lake of record for PROFILE={profile()})",
         yes=yes,
     )
-    shutil.rmtree(root, ignore_errors=True)
+    # Let a failed removal RAISE (exit 1, no "removed"): a clean-stack target
+    # that reports "removed" over a stale lake would load that lake's rows and
+    # shift the pins silently (review gate, round 4). A missing root is fine.
+    if root.exists():
+        shutil.rmtree(root)
     print(f"lake-reset: removed {root}")
 
 
@@ -78,9 +82,17 @@ def replay(yes: bool) -> None:
         yes=yes,
     )
     loaded = truncate_and_reload(days)
+    # The eval_meta marker is stamped HERE, in the same process, after the load:
+    # a separate recipe line would re-stamp it under `make -i` even when the
+    # replay was refused or aborted — the wrong-marker hazard the PR-#25 guard
+    # exists for (review gate, round 4).
+    from clickhouse.write_marker import write_marker
+
+    write_marker(profile())
     print(
         f"replay-serving: {loaded['exposures']} exposures, "
-        f"{loaded['attributed']} attributed rows reloaded from the lake (no broker)"
+        f"{loaded['attributed']} attributed rows reloaded from the lake (no broker); "
+        f"eval_meta: marker set to profile={profile()}"
     )
 
 
@@ -122,8 +134,6 @@ def main(argv: list[str] | None = None) -> None:
         configure(args.profile)  # validates [a-z0-9_]+ BEFORE anything else
         ACTIONS[args.action](args.yes)
     except Exception as e:  # noqa: BLE001 — every refusal is one line + exit 1
-        if isinstance(e, SystemExit):
-            raise
         sys.exit(f"{args.action}: refusing — {e}")
 
 

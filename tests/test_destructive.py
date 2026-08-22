@@ -59,6 +59,29 @@ def test_reset_with_yes_removes_exactly_the_profile_lake(tmp_path: Path) -> None
     assert (tmp_path / "data" / "x").exists()
 
 
+def test_reset_that_cannot_remove_fails_loud_not_green(tmp_path: Path) -> None:
+    # A clean-stack target that prints "removed" over a lake it could not remove
+    # would load that stale lake and shift the pins silently (round 4). Make the
+    # root unremovable (a non-writable subdirectory holding a file) and assert a
+    # non-zero exit with no "removed".
+    import os
+    import stat
+
+    locked = tmp_path / "data" / "lake" / "tiny" / "locked"
+    locked.mkdir(parents=True)
+    (locked / "f").write_text("x")
+    locked.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        res = _run(tmp_path, "reset", "--profile", "tiny", "--yes")
+    finally:
+        locked.chmod(stat.S_IRWXU)
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    assert res.returncode != 0
+    assert "removed" not in res.stdout
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
 def test_lake_root_env_is_refused_outside_pytest(tmp_path: Path) -> None:
     # LAKE_ROOT is a test-only override; an entry point refuses it.
     res = _run(tmp_path, "reset", "--profile", "tiny", "--yes", env={"LAKE_ROOT": "/"})

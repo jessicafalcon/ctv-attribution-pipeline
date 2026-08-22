@@ -1,6 +1,6 @@
 """Dagster job `lake_maintenance` (Phase 17, spec D10); run by
-`python -m orchestration.run maintain` (`make lake-maintain`). Two ops, one per
-raw table, each running
+`python -m lake.destructive maintain` (`make lake-maintain`, which prompts). Two
+ops, one per raw table, each running
 `lake.maintenance.maintain`: compact the day partitions that accumulated small
 files, then expire snapshots older than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7).
 Not part of `make run` — hygiene on a schedule, never on the write path.

@@ -134,10 +134,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make replay-serving PROFILE=<p> [CONFIRM=yes]` — rebuild the ClickHouse serving
   tables FROM THE LAKE, no Kafka: TRUNCATE `exposures_landed` +
   `attributed_conversions` (destructive → prompts unless CONFIRM=yes), reload every
-  day the lake holds (current rows: hot or reconciled), stamp `eval_meta`; `make
-  eval` then reproduces the pins (Phase 17)
+  day the lake holds (current rows: hot or reconciled), stamp `eval_meta` in the
+  same process; `make eval` then reproduces the pins (Phase 17)
 - `make lake-reset PROFILE=<p> [CONFIRM=yes]` — one of the three sanctioned destructive
-  path beside `make down`: delete this profile's lake (`data/lake/<p>/`); prompts
+  paths (`lake/destructive.py`; the others are `replay-serving` and `lake-maintain`),
+  beside `make down`: delete this profile's lake (`data/lake/<p>/`); prompts
   unless CONFIRM=yes. `make down` never touches `data/lake/`. The clean-stack
   `test-int-*` targets pass CONFIRM=yes for their own profile (a clean stack is a
   clean lake — the lake outlives `make down` and ClickHouse is loaded from it)
