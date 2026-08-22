@@ -40,3 +40,42 @@ def test_backticked_link_text_is_still_a_link() -> None:
     assert check_docs._links("[plain](docs/X.md)") == ["docs/X.md"]
     assert check_docs._links("a `PartitionSpec(bucket[8](household_id))` spec") == []
     assert check_docs._links("[ext](https://x.y) [same](#anchor)") == []
+
+
+def test_link_outside_the_repo_is_rejected() -> None:
+    root = check_docs.ROOT
+    assert not check_docs._inside_root(
+        "../../../outside.md", (root / "docs" / "../../../outside.md").resolve()
+    )
+    assert not check_docs._inside_root("/etc/passwd", (root / "/etc/passwd").resolve())
+    assert check_docs._inside_root(
+        "../README.md", (root / "docs" / "../README.md").resolve()
+    )
+
+
+def test_heading_inside_a_fence_is_not_an_anchor(tmp_path) -> None:
+    md = tmp_path / "x.md"
+    md.write_text("## Real\n\n```bash\n## not a heading\n# comment\n```\n")
+    assert check_docs._anchors(md) == {"real"}
+
+
+def test_historical_mentions_are_skipped_by_the_target_scan() -> None:
+    text = (
+        "| ~~`make gone-target`~~ DONE |\n"
+        "row `make also-gone` <!-- historical -->\n"
+        "live `make still-here`\n"
+    )
+    living = check_docs._living(text)
+    assert "gone-target" not in living
+    assert "also-gone" not in living
+    assert "still-here" in living
+
+
+def test_derived_block_regexes_anchor_on_labels_not_cells() -> None:
+    for _label, name, block_re, _readme_re in check_docs._DERIVED:
+        assert not any(
+            ch.isdigit()
+            for ch in block_re.replace("_2a", "")
+            .replace("Lever 1", "")
+            .replace("Lever 3", "")
+        ), name

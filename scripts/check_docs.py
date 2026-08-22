@@ -57,8 +57,10 @@ def _slug(heading: str) -> str:
 
 
 def _anchors(md: Path) -> set[str]:
+    """Heading slugs in `md`; a `#` line inside a fenced block is a comment, not
+    a heading."""
     slugs: set[str] = set()
-    for line in md.read_text().splitlines():
+    for line in _FENCE.sub("", md.read_text()).splitlines():
         m = re.match(r"#{1,6}\s+(.*)", line)
         if m:
             slugs.add(_slug(m.group(1)))
@@ -66,6 +68,14 @@ def _anchors(md: Path) -> set[str]:
 
 
 # ---------------------------------------------------------------- 1. links
+
+
+def _inside_root(path_part: str, target: Path) -> bool:
+    """A doc link may only point inside the repo (the guard runs in CI against
+    branch-controlled text; an absolute or `../../` target is never a doc link)."""
+    return not Path(path_part).is_absolute() and (
+        target == ROOT or ROOT in target.parents
+    )
 
 
 def _links(text: str) -> list[str]:
@@ -78,12 +88,15 @@ def _links(text: str) -> list[str]:
 def check_links(errors: list[str]) -> int:
     n = 0
     for md in [*_docs(), *_LINK_ONLY]:
-        text = _TICK.sub("", _FENCE.sub("", md.read_text()))
+        text = md.read_text()
         for raw in _links(text):
             n += 1
             path_part, _, anchor = raw.partition("#")
             target = (md.parent / path_part).resolve()
             where = md.relative_to(ROOT)
+            if not _inside_root(path_part, target):
+                errors.append(f"{where}: link escapes the repo: {raw}")
+                continue
             if not target.exists():
                 errors.append(f"{where}: broken link {raw} -> missing file {path_part}")
                 continue
@@ -135,6 +148,12 @@ def _markers() -> list[tuple[str, Path, str, str]]:
     ]
 
 
+def _first_screen(readme: str) -> str:
+    """README up to its first `## ` heading — the only place block copies live."""
+    cut = re.search(r"(?m)^## ", readme)
+    return readme[: cut.start()] if cut else readme
+
+
 def _block(doc: Path, begin: str, end: str) -> str:
     text = doc.read_text()
     return text[text.index(begin) + len(begin) : text.index(end)]
@@ -159,28 +178,36 @@ _DERIVED: list[tuple[str, str, str, str]] = [
     (
         "lever 1 rows ratio",
         "cost-levers",
-        r"\| rows read \| 25,168 \| 16,384 \| ([\d.]+)x \|",
+        r"\*\*Lever 1 [\s\S]*?\| rows read \|[^|\n]*\|[^|\n]*\| ([\d.]+)x \|",
         r"projection[^|\n]*\|[^|\n]*\|[^|\n]*?([\d.]+)× fewer rows",
     ),
     (
         "lever 2a bytes ratio",
         "cost-levers",
-        r"\| bytes read \| 226,512 \| 855,712 \| ([\d.]+)x \|",
+        r"_2a [\s\S]*?\| bytes read \|[^|\n]*\|[^|\n]*\| ([\d.]+)x \|",
         r"FINAL-avoidance[^|\n]*\|[^|\n]*\|[^|\n]*?([\d.]+)× the bytes",
     ),
     (
         "lever 3 bytes ratio",
         "cost-levers",
-        r"\| bytes read \| 8,061,895 \| 6,660,392 \| ([\d.]+)x \|",
+        r"\*\*Lever 3 [\s\S]*?\| bytes read \|[^|\n]*\|[^|\n]*\| ([\d.]+)x \|",
         r"PREWHERE[^|\n]*\|[^|\n]*\|[^|\n]*?([\d.]+)× fewer bytes",
     ),
 ]
+# The block-side patterns anchor on the lever heading and the row LABEL, never on
+# the measured cells, so a legitimate regeneration reports drift instead of
+# "cannot find".
 
 
 def check_generated(errors: list[str]) -> int:
     n = 0
     blocks: dict[str, str] = {}
-    for name, doc, begin, end in _markers():
+    try:
+        markers = _markers()
+    except (KeyError, FileNotFoundError) as exc:
+        errors.append(f"generated-block marker constant unreadable: {exc}")
+        return 0
+    for name, doc, begin, end in markers:
         text = doc.read_text()
         rel = doc.relative_to(ROOT)
         if text.count(begin) != 1 or text.count(end) != 1:
@@ -197,7 +224,7 @@ def check_generated(errors: list[str]) -> int:
             continue
         blocks[name] = body
         n += 1
-    readme = README.read_text()
+    readme = _first_screen(README.read_text())
     for label, name, block_re, readme_re in _DERIVED:
         if name not in blocks:
             continue
@@ -242,6 +269,8 @@ TRACES: list[tuple[str, str]] = [
     ("tests/test_money_domain.py", "CENT_DOMAIN"),
     ("producer/generate.py", "spend=round(rng.uniform"),
     ("docs/ARCHITECTURE.md", "TRUNCATES the binary value"),
+    ("docs/RUNBOOK.md", "Incident 1"),
+    ("docs/RUNBOOK.md", "Incident 4"),
     ("reconcile/reconcile.py", "toUnixTimestamp64Milli"),
     ("reconcile/reconcile.py", "_max_ingest"),
     ("reconcile/reconcile.py", "pick_household"),
@@ -270,6 +299,17 @@ TRACES: list[tuple[str, str]] = [
 ]
 
 
+_STRUCK = re.compile(r"~~.*?~~", re.S)
+HISTORICAL = "<!-- historical -->"
+
+
+def _living(text: str) -> str:
+    """Drop the two sanctioned history forms from the target scan: struck-through
+    text and any line tagged `<!-- historical -->`. No broader escape."""
+    lines = [ln for ln in _STRUCK.sub("", text).splitlines() if HISTORICAL not in ln]
+    return "\n".join(lines)
+
+
 def _make_targets() -> set[str]:
     targets: set[str] = set()
     for line in (ROOT / "Makefile").read_text().splitlines():
@@ -290,7 +330,7 @@ def check_traces(errors: list[str]) -> int:
             errors.append(f"trace lost: token '{needle}' not in {rel}")
     targets = _make_targets()
     for md in _docs():
-        text = md.read_text()
+        text = _living(md.read_text())
         commands = _FENCE.findall(text) + _TICK.findall(_FENCE.sub("", text))
         for name in sorted({m for c in commands for m in _MAKE.findall(c)}):
             n += 1

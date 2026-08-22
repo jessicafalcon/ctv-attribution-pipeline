@@ -97,6 +97,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
 - `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
   `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
+- `common/` — `kafka.py`, the shared start→end topic drain (producer + engine).
 - `tests/` — pytest unit (no services); `tests/integration/` needs `make up`.
 - `fixtures/tiny/` — golden producer output + expected resolved/attributed
   rows. READ-ONLY ground truth after Phase 1.
@@ -192,7 +193,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   promtool alert fixtures; a CLEAN-STACK capture: `make down && make lake-reset
   PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p>` first — over a
   populated lake the reconcile candidates are the lake's current rows and a second
-  capture differs; recaptured in Phase 18)
+  capture differs; recaptured in Phase 18a)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
   prometheus image: the four alert rules fire on long_delay's captured values;
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
@@ -202,8 +203,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   `make`-generated block (`scale-curve`, `cost-levers`) is present under its
   generator's marker and the README first-screen copies of its numbers match it;
   every guard/alert/`make` target the docs name exists in source as an EXACT token
-  (offline; not a pytest file, to avoid the run-tests-hook full-suite re-trigger;
-  runs in the CI lint job). Accuracy TABLE cells: `tests/test_docs_accuracy_pins.py`
+  (offline; a standalone script, not a pytest file, so a docs-only edit does not
+  re-trigger the full suite — `tests/test_check_docs.py` does run the trace/target
+  half under `make test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
+  `tests/test_docs_accuracy_pins.py`
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
   (API tokens; ask first)
@@ -506,8 +509,8 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
 (PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
 reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
-"Process"). Open BACKLOG rows: see `BACKLOG.md` (the un-struck rows; reviewed at every
-phase exit). The per-phase table (0–17 + the fix PRs) lives in `README.md` → History;
+"Process"). Open BACKLOG rows: **26** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–17 + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
 

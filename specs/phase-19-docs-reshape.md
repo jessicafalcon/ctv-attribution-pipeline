@@ -119,7 +119,9 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   sourced from here; RESULTS keeps the long-form), `docs/PHASES.md` (rows 16, 17, 18a, 18b, 19 — already present; verify they match
   README `## History`),
   `scripts/check_docs.py` + Makefile, `.github/workflows` (run `make check-docs` in the
-  lint job), BACKLOG (close or re-defer the two docs-guard rows), DECISIONS Phase 19.
+  lint job), `tests/test_check_docs.py` (the BACKLOG-37 partial-rename pin Done-when 4
+  requires — the one test file the "docs-only" pinned decision admits), BACKLOG (close
+  or re-defer the two docs-guard rows), DECISIONS Phase 19.
 
 ## Record updates (REQUIRED)
 

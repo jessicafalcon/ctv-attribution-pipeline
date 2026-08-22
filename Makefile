@@ -335,8 +335,9 @@ test-alerts:
 # generator's marker and the README copies of its numbers match, and every guard /
 # alert / make target the docs name exists in source as an EXACT token
 # (scripts/check_docs.py). Standalone script, not a pytest file, so it doesn't
-# re-trigger the full suite on a docs-only change. No variable, no delete, no
-# input. No services, no network.
+# re-trigger the full suite on a docs-only change (tests/test_check_docs.py runs the
+# trace/target half under pytest on purpose). No variable, no delete, no input. No
+# services, no network.
 check-docs:
 	uv run python scripts/check_docs.py
 

@@ -138,10 +138,11 @@ below, never deleted.
 - **Alerts are proven by `promtool test rules` against REAL captured stage registries;
   `ConsumerLag` is the batch backlog proxy and `WatermarkStall` the peak-lateness
   proxy; no annotations until the live push path.** ([Phase 7](#phase-7))
-- **Every docs number traces to `tests/pins.py` or a `make`-regenerated block
-  (`scale-curve`, `cost-levers`); the scaling constant is a structural measure,
-  never `tracemalloc`; the runbook elevates recorded incidents and invents nothing;
-  one docs guard, `make check-docs`.** ([Phase 14](#phase-14), [Phase 15](#phase-15),
+- **The docs' accuracy tables trace to `tests/pins.py` and the scaling / cost-lever
+  numbers to a `make`-regenerated block (`scale-curve`, `cost-levers`) — guarded; the
+  benchmark, agent-eval and lakehouse tables are dated captures, labelled as such;
+  the scaling constant is a structural measure, never `tracemalloc`; the runbook
+  elevates recorded incidents and invents nothing; one docs guard, `make check-docs`.** ([Phase 14](#phase-14), [Phase 15](#phase-15),
   [Phase 19](#phase-19))
 
 ## Process
@@ -1955,10 +1956,10 @@ below, never deleted.
   each linking its phase) over a chronological appendix; superseded entries are
   annotated in place, never deleted.** The per-phase log was newest-first for the
   post-plan phases (17 above 12) — re-ordered 0 → 19 under `## Appendix — by phase`
-  with the entries' text unchanged except the added `Superseded …` pointers (nine
-  entries gained one: Phase 0 tag-pinning, Phase 2 `conversions_resolved` ×2, Phase 3
-  Bytewax, Phase 5 Bytewax order, Phase 6 leaf read, Phase 12 dual-write, Phase 16
-  graph-from-topic, Phase 16 MatchRate "Phase 18" → 18a). Rejected: deleting
+  with the entries' text unchanged except eight added `Superseded …` pointers (Phase
+  0 tag-pinning, Phase 2 `conversions_resolved` ×2, Phase 3 Bytewax, Phase 5 Bytewax
+  order, Phase 6 leaf read, Phase 12 dual-write, Phase 16 graph-from-topic) and one
+  content edit (Phase 16 MatchRate "revisit in Phase 18" → 18a, the split's new name). Rejected: deleting
   superseded entries (the record of why a rule exists is the rule's evidence).
 - **One docs guard, `scripts/check_docs.py`, is `docs/check_runbook.py` moved with
   `git mv` and extended — history preserved, never a second script.** Three checks
@@ -1973,9 +1974,13 @@ below, never deleted.
   (`tests/test_check_docs.py`); BACKLOG 47 is re-deferred — the exact-token check does
   not cover every accuracy number in README/RESULTS prose against `tests/pins.py`
   (a prose scan needs a per-site allowlist to tell a pinned recall from an
-  `ip_resolved_fraction`), trigger "next change to `tests/pins.py`". Rejected: a pytest
-  file (the run-tests hook would re-run the full suite on every docs edit — the same
-  reason as Phase 15); importing the generators for their markers (pulls
+  `ip_resolved_fraction`), trigger "next change to `tests/pins.py`". Rejected: making
+  the guard itself a pytest file (the run-tests hook would re-run the full suite on
+  every docs edit — the same reason as Phase 15); `tests/test_check_docs.py` does run
+  the trace/target half under `make test`, deliberately — a renamed guard then fails
+  both gates, not only the lint job. Historical mentions of a removed target are
+  allowed inside `~~…~~` or on a line tagged `<!-- historical -->` (review gate);
+  links may not resolve outside the repo root (security review). Rejected: importing the generators for their markers (pulls
   clickhouse-connect and the engine into a docs check).
 - **ARCHITECTURE §3 describes the post-17 system as it runs on main today; "Phase N
   added…" parentheticals in §3.2–3.4 became DECISIONS links; §7 points at README
