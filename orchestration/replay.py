@@ -56,8 +56,9 @@ class EmptyLakeError(ValueError):
 
 
 def truncate_and_reload(days: set[str]) -> dict[str, int]:
-    """The act: TRUNCATE both serving tables, reload `days`. Callers (the
-    destructive CLI) have already refused an empty lake and confirmed."""
+    """The act: TRUNCATE the three serving tables (exposures_landed,
+    attributed_conversions, eval_meta), reload `days`. Callers (the destructive
+    CLI) have already refused an empty or out-of-calendar lake and confirmed."""
     if not days:
         raise EmptyLakeError("replay-serving: no days to reload")
     apply_ddl()

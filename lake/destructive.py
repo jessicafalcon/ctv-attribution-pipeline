@@ -1,8 +1,9 @@
 """The destructive paths — ONE process that validates, confirms, then acts.
 
 Three operations mutate state the pipeline cannot recompute from Kafka:
-`reset` deletes a profile's lake of record, `replay` TRUNCATEs the two ClickHouse
-serving tables before reloading them from the lake, `maintain` rewrites the lake's
+`reset` deletes a profile's lake of record, `replay` TRUNCATEs the three ClickHouse
+serving tables (`exposures_landed`, `attributed_conversions`, `eval_meta`) before
+reloading them from the lake, `maintain` rewrites the lake's
 data files (row content unchanged). Rounds 2 and 3 of the Phase-17 review each
 found a new hole in a Make-level guard ($(origin) → MAKEFLAGS; separate recipe
 lines → `make -i`): Make's variable model and multi-shell recipes cannot express
@@ -31,7 +32,13 @@ from collections.abc import Callable
 
 from lake.iceberg_catalog import LakeRootUnset, _lake_root, configure, profile
 from lake.read_attributed import PrePhase17RowError
-from orchestration.replay import EmptyLakeError
+
+
+class RefusalError(ValueError):
+    """Base for refusals raised inside the replay branch (imported lazily there:
+    `reset` must not pay the DuckDB/ClickHouse import cost of the replay
+    stack). `orchestration.replay.EmptyLakeError` and
+    `orchestration.run.UnknownPartitionError` are re-raised as this."""
 
 
 def confirm_or_abort(action: str, *, yes: bool) -> None:
@@ -70,22 +77,36 @@ def reset(yes: bool) -> None:
 
 
 def replay(yes: bool) -> None:
-    """`make replay-serving`: TRUNCATE exposures_landed + attributed_conversions,
-    then reload every day the lake holds (no broker). Refuses an empty lake
-    before the prompt — truncating to reload nothing is data loss with a green
-    exit code."""
+    """`make replay-serving`: TRUNCATE exposures_landed, attributed_conversions
+    and eval_meta, then reload every day the lake holds (no broker). Every
+    refusal happens BEFORE the prompt and the TRUNCATE: an empty lake (truncating
+    to reload nothing is data loss with a green exit code) and a lake day outside
+    the static calendar (round 7: a regression once let that raise AFTER the
+    truncate)."""
+    # Lazy, with a reason: the replay stack pulls in DuckDB + clickhouse-connect;
+    # `reset` — the recovery path — must not pay for it.
+    from orchestration.assets import DAY_PARTITIONS
     from orchestration.replay import lake_days, truncate_and_reload
 
     days = lake_days()
     if not days:
-        raise EmptyLakeError(
+        raise RefusalError(
             f"replay-serving: the lake for PROFILE={profile()} holds no days "
             "(never populated, or the wrong profile) — refusing to truncate the "
             "serving tables"
         )
+    known = DAY_PARTITIONS.get_partition_keys()
+    unknown = sorted(d for d in days if d not in known)
+    if unknown:
+        raise RefusalError(
+            f"replay-serving: the lake holds day(s) {unknown} outside the static "
+            f"calendar {known[0]} … {known[-1]} — refusing to truncate the serving "
+            "tables (nothing would reload them)"
+        )
     confirm_or_abort(
-        "replay-serving TRUNCATEs exposures_landed + attributed_conversions and "
-        f"reloads {len(days)} day(s) from the lake {_lake_root().resolve()}",
+        "replay-serving TRUNCATEs exposures_landed, attributed_conversions and "
+        f"eval_meta, then reloads {len(days)} day(s) from the lake "
+        f"{_lake_root().resolve()}",
         yes=yes,
     )
     loaded = truncate_and_reload(days)
@@ -148,7 +169,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         configure(args.profile)  # validates [a-z0-9_]+ BEFORE anything else
         ACTIONS[args.action](args.yes)
-    except (LakeRootUnset, EmptyLakeError, PrePhase17RowError) as e:
+    except (LakeRootUnset, RefusalError, PrePhase17RowError) as e:
         # Refusals — the explicit refusal classes only, never bare ValueError
         # (a pydantic ValidationError would masquerade as one) — are one line +
         # exit 1. Anything else (a PermissionError from rmtree, a ClickHouse

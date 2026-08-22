@@ -47,15 +47,16 @@ and byte-identical.
    replay-idempotent. **No timestamp** — the marker is fully deterministic (only
    a profile string), so it needs no §8 tz-safe epoch-millis handling.
 
-2. **`clickhouse/write_marker.py`** — `--profile P`: `insert into eval_meta values
-   (0, P)`. Idempotent (single-row replace). Invoked as one extra step in **every
-   populate make target that leaves a scoreable DB** — `run`, `run-hot`,
-   `lake-land`, AND `metrics-capture` (it runs the same resolve→engine→reconcile
-   sink stages with `--metrics-out`, so an un-stamped `metrics-capture` would
-   leave a stale marker and re-open the silent false-pass) — with `--profile
-   $(PROFILE)`. The DB then self-describes which profile it holds.
-   `reconcile-dagster` needs no stamp: it runs after `lake-land` (same PROFILE
-   already stamped) and its reconcile output is byte-identical.
+2. **`clickhouse/write_marker.py`** — `write_marker(P)`: `insert into eval_meta
+   values (0, P)`. Idempotent (single-row replace). *As built in PR #25:* a CLI
+   invoked as one extra Makefile step in every populate target (`run`, `run-hot`,
+   `lake-land`, `metrics-capture`). *Since Phase 17:* no CLI — the function is
+   called IN-PROCESS by each populate path after its load succeeds (the engine,
+   the reconcile job, `lake.destructive replay`), because a separate recipe line
+   is run by `make -i` over a failed step and stamps a green marker over an
+   incomplete DB; `lake-land` is gone. The DB still self-describes which profile
+   it holds. `reconcile-dagster` needs no stamp: it runs after `run-hot` (same
+   PROFILE already stamped) and its reconcile output is byte-identical.
 
 3. **`accuracy/run.py` assertion** — after `connect()`, read the marker
    (`select profile from eval_meta final`) and assert it equals `--profile`:

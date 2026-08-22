@@ -5,7 +5,8 @@ This is the ONLY token-spending path in the eval (§2 cost posture: 30 invocatio
 ~1-2k context + a ~3-8k cached prefix each — well under $10). CLAUDE.md gates it behind
 developer approval; every offline test mocks the client.
 
-Isolation: each scenario gets its own clean stack (`make down && up && seed && run`) —
+Isolation: each scenario gets its own clean stack + lake (`make down && lake-reset
+&& up && seed && run`) —
 tiny/medium/faults share `conversion_id` space (DECISIONS Phase 5), so two profiles
 cannot co-reside in the serving tables. `make run` (full, not `run-hot`): `late_burst`
 needs the restatement, and every scenario needs `report_snapshots` for the context's

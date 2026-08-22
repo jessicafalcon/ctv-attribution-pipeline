@@ -204,7 +204,8 @@ agent-run:
 
 # Phase-10 fault->diagnosis sweep: every fault profile + the no-fault baseline, run
 # EVAL_REPS times, scored against the pure rubric, both tables written to
-# docs/RESULTS.md. Drives its own clean stack per scenario (down/up/seed/run — profiles
+# docs/RESULTS.md. Drives its own clean stack + lake per scenario
+# (down/lake-reset/up/seed/run — profiles
 # share conversion_id space, DECISIONS Phase 5), so run it on a free machine, not over a
 # stack you want to keep. This is the ONLY eval path that calls the LLM — it costs API
 # tokens (30 invocations, well under $10), so ask the developer before running (CLAUDE.md).

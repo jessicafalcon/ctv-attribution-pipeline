@@ -216,7 +216,9 @@ Two honesty boundaries on what this proves:
 
 Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
 
-> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** The three
+> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** (Since Phase 17
+> `make agent-eval` resets each scenario's lake itself, so the BACKLOG-49 re-run is
+> safe to schedule; API tokens, ask first.) The three
 > tables below were captured by `make agent-eval` (30 live invocations) before
 > Phase 16 deferred shared-IP conversions to reconciliation. Since then the
 > context a fault profile presents has moved in one place: three profiles carry

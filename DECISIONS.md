@@ -1016,7 +1016,8 @@ Phase 17 sits directly below the fixes.
   = 5` per scenario is exactly why the tables report a rate (k/5), not a single-run claim;
   verdict/hypothesis stability across reps is a measurement, never a gated assertion — the
   AI edge is carved out of the byte-identical guarantee (CLAUDE.md). The sweep drives its
-  own clean stack per scenario (`make down && up && seed && run`, full run for the
+  own clean stack per scenario (`make down && up && seed && run` — since Phase 17
+  `lake-reset` between down and up, full run for the
   restatement field) because profiles share `conversion_id` space (Phase 5); FG2 (BACKLOG
   31) is satisfied by rendering each profile's deterministic live context headline into a
   dedicated per-profile headline table in RESULTS (`tables.headline_table`, all six
@@ -1318,9 +1319,13 @@ Phase 17 sits directly below the fixes.
   of `x" ; touch pwned ; echo "` used to run its payload before the refusal — a
   real hole, closed and pinned (dry-run: the `case` is the first command and the
   text appears nowhere; sandbox: nothing runs — that `case` guard was itself
-  superseded in round 3 by the one-process `lake/destructive.py`, after which a
-  quoted PROFILE still splits the recipe line but the detached `--yes` means the
-  action only aborts: the quote case joined the stated residuals below). Residual, stated: an
+  superseded in round 3 by the one-process `lake/destructive.py`; the Makefile
+  pin for the quote case went with it. What is true NOW: a quoted command-line
+  PROFILE such as `x" ; touch pwned ; echo "` still splits the recipe line — the
+  `touch pwned` EXECUTES — and the destructive action itself only aborts because
+  `--yes` lands on the detached echo. Mistake-class under the threat model (the
+  PROFILE is the developer's own command line), a stated residual, not a closed
+  hole). Residual, stated: an
   environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
   `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
   single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
@@ -1355,8 +1360,8 @@ Phase 17 sits directly below the fixes.
   (`lake_rows_loaded_total{table}`) like every stage; stale prose (RESULTS
   cost-lever provenance, `read_exposures` header, CI description in CLAUDE.md)
   corrected. Left as-is on the developer's ruling: type hints outside touched
-  code. (The continuous-follow labels were later normalized to "Phase 18+"
-  everywhere — round 2, item 7.)
+  code. (The continuous-follow labels were later normalized to "Phase 18+" in
+  every living doc; frozen specs keep their wording — round 2, item 7.)
 - **`reconciled_at` stays anchored in ClickHouse (`_max_ingest` over the loaded
   serving tables), not in the lake — for now.** Reconciliation reads the record
   for candidates and exposures but stamps its version from the derived store;

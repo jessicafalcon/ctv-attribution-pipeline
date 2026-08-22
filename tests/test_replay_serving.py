@@ -77,6 +77,26 @@ def test_replay_truncates_both_tables_then_reloads_every_lake_day(monkeypatch) -
     assert loaded == [{"2026-08-01", "2026-08-05"}]
 
 
+def test_destructive_replay_refuses_an_out_of_calendar_day_before_truncate(
+    monkeypatch,
+) -> None:
+    # Round 7: narrowing the refusal tuple once let an UnknownPartitionError
+    # escape from materialize_load AFTER the TRUNCATE. Now the lake's days are
+    # checked against the static calendar before the prompt; nothing is truncated.
+    # (replay() directly: main() would refuse the test's own LAKE_ROOT first; the
+    # CLI mapping RefusalError → one line + exit 1 is pinned in test_destructive.)
+    import lake.destructive as d
+    import lake.iceberg_catalog as cat
+
+    monkeypatch.setattr(cat, "_profile", "tiny")
+    land([_exp("e-1", datetime(2020, 1, 1, 12, tzinfo=UTC))])  # outside the calendar
+    client, loaded = _Client(), []
+    _stub(monkeypatch, client, loaded)
+    with pytest.raises(d.RefusalError, match="2020-01-01.*outside the static calendar"):
+        d.replay(yes=True)
+    assert client.commands == [] and loaded == []  # no truncate, no load
+
+
 def test_replay_refuses_an_empty_lake_before_touching_clickhouse(monkeypatch) -> None:
     # the CLI refuses BEFORE truncate (tests/test_destructive.py); the library
     # act refuses too, so no caller can truncate to reload nothing

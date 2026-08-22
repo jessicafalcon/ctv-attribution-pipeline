@@ -58,10 +58,21 @@ def test_current_docs_never_go_down_then_up_without_a_lake_reset() -> None:
     ]
     # … and every product .py file: an error MESSAGE that tells the user to
     # `make down && make up` is a documented chain too (round 5: the validator's).
-    for pkg in ("producer", "lake", "reconcile", "streaming", "orchestration", "agent"):
+    for pkg in (
+        "producer",
+        "lake",
+        "reconcile",
+        "streaming",
+        "orchestration",
+        "agent",
+        "observability",
+    ):
         files += [str(p.relative_to(ROOT)) for p in (ROOT / pkg).rglob("*.py")]
     for rel in files:
-        assert "make down && make up" not in (ROOT / rel).read_text(), rel
+        text = (ROOT / rel).read_text()
+        # both the full form and the `down && up` / `down/up/seed` short forms
+        for stale in ("make down && make up", "make down && up", "down/up/seed"):
+            assert stale not in text, f"{rel}: `{stale}` — a chain without lake-reset"
 
 
 def test_every_seed_then_run_chain_carries_the_same_profile() -> None:

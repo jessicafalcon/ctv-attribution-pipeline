@@ -424,12 +424,12 @@ and their instructions forbid fixing, committing, or working around
 findings. A finding is fixed in the main session or explicitly accepted —
 never auto-fixed, ignored, or committed around.
 
-- `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is;
-  since Phase 17 a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`,
-  which only the `make test-int*` targets export — so the hook cannot seed the
-  live broker or re-stamp `eval_meta`
+- `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
   from trial-signal-assistant); after any .py edit inside this repo, runs
-  pytest and blocks on red; treats "no tests collected" as skip. WIRING is
+  pytest and blocks on red; treats "no tests collected" as skip. Since Phase 17
+  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, which only the
+  `make test-int*` targets export — so the hook cannot seed the live broker or
+  re-stamp `eval_meta`. WIRING is
   local-only by design (a committed settings.json would auto-execute an
   inbound PR branch's hook + pytest + conftest.py for anyone opening it in
   Claude Code). One-time re-enable — copy into the gitignored
