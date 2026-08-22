@@ -153,3 +153,41 @@ make test && make lint && make test-alerts \
 - Continuous follow / stream framework — still the open question after Phase 17.
 - Cost attribution per *advertiser* (multi-tenant chargeback) — needs a tenant
   dimension the event model does not have; recorded as a README "Next steps" item.
+
+## Pre-branch reconciliation required (2026-08-22)
+
+This spec was written before Phase 17 merged (PR #31) and its body has NOT been
+rewritten — that rewrite is the Phase-18 branch's commit 1 (CLAUDE.md Workflow
+rules: spec-reconciliation amendment first, stop for approval, no implementation
+before it is approved). The amendment must resolve every item of BACKLOG row 56
+(Phase-17 coherence audit D2 + Q3/Q4):
+
+- **`streaming/sink.py` → the lake landing step.** Done-when 1 and 3 name the
+  hot-path ClickHouse sink, deleted in Phase 17. The engine lands to the lake
+  (`lake/land_*`); the ONE serving-table writer is the Dagster load
+  (`lake/load_serving.py`). The "Phase 17 is NOT a dependency" sentence is false.
+- **Dirty set owned by the loader.** The loader already knows the days/keys it
+  touched (Phase-17 D6), so `rollup_dirty` recording moves to the loader, and
+  async inserts belong on the loader's `client.insert`, not on a sink that no
+  longer exists.
+- **DONE command gains `lake-reset` + `PROFILE=long_delay`.** As written (`make
+  down && make up && make seed PROFILE=long_delay && make run`) it no longer runs:
+  it needs `make lake-reset PROFILE=long_delay CONFIRM=yes` after `make down` and
+  `PROFILE=long_delay` on `make run` (the engine binds its lake from `--profile`).
+- **Loader-owned dirty-set gate (developer ruling, Phase-17 review).** After a
+  reconcile pass that restates ≥ 1 campaign, the set of `(campaign_id, hour)` in
+  `rollup_dirty` must equal the set of keys whose `campaign_hourly` rows differ
+  between pre- and post-refresh FULL rebuilds — the dirty set is the contract
+  between the loader and the rollup; a wrong set is silently wrong while the
+  full-refresh oracle still passes.
+- **`reconciled_at` anchoring question.** Whether `reconciled_at` should anchor
+  in the lake rather than ClickHouse `_max_ingest` (Phase-17 coherence Q3; kept in
+  ClickHouse for now) — it interacts with the dirty-set design and must be decided
+  in the amendment.
+- **Recapture procedure.** Done-when 2 recaptures the promtool fixtures via `make
+  metrics-capture`, which since Phase 17 reproduces its numbers ONLY from a clean
+  stack AND a clean lake: `make down && make lake-reset PROFILE=<p> CONFIRM=yes &&
+  make up && make seed PROFILE=<p> && make metrics-capture PROFILE=<p>`.
+
+The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:
+Evidence, Record updates, Threat model (every new target here takes a variable).

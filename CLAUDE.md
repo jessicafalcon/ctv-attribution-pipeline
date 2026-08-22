@@ -369,6 +369,10 @@ standard way over the clever way.
   off in the report, diffed by the coherence auditor), and **Threat model**
   (required whenever the phase adds a Makefile target that takes a variable,
   deletes anything, or takes user input).
+- A phase spec is finalized only after its predecessor merges. The FIRST
+  commit on a phase branch is a spec-reconciliation amendment against main as
+  it is (Phase-17 precedent: F1–F3 → commit 1, stop for approval). No
+  implementation before that commit is approved.
 - Before a phase: restate its "Done when" from docs/PHASES.md.
 - At each phase exit: run the coherence audit and review BACKLOG.md for due
   items.
