@@ -345,13 +345,24 @@ golden re-frozen once for the additive column (0 decision changes — now a rule
 DECISIONS Phase 17). Found live: clickhouse-connect writes naive datetimes as
 local time (ARCHITECTURE §8).
 
-## Phase 18 — Cost and ops levers (PROPOSED)
+## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, part-count and merge-lag (PROPOSED)
 
 **Goal.** Incremental rollups from a dirty set (the Phase-16
 `engine_conversions_ambiguous_deferred_total` / `reason` column are its
-precursors), part-count alerts, async inserts, a query-cost table, schema
-compatibility BACKWARD; the alert rules get recaptured here (revisit the
-`MatchRateOutOfBand` headroom then). Spec: `specs/phase-18-cost-and-ops.md`.
+precursors) with the loader-owned dirty-set gate (BACKLOG row 56), part-count and
+merge-lag metrics + alert rules; the alert rules get recaptured here (revisit the
+`MatchRateOutOfBand` headroom then). Split 2026-08-22 from Phase 18 under the
+phase-size rule (≤ ~6 pinned decisions / Done-when items per spec; CLAUDE.md
+Workflow rules). Spec: `specs/phase-18a-cost-and-ops.md` — carries a "Pre-branch
+reconciliation required" banner; the branch's commit 1 is that amendment.
+
+## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (PROPOSED)
+
+**Goal.** Async inserts measured, a query-cost table (`query_cost_daily`), schema
+compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook
+`groupKey` dedupe, the shard-key note. The other half of the 2026-08-22 split;
+depends on 18a merged. Spec: `specs/phase-18b-cost-and-ops.md` — same
+reconciliation banner, same commit-1 rule.
 
 ## Phase 19 — Docs reshape (PROPOSED)
 
