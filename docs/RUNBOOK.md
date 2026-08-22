@@ -1,6 +1,6 @@
 # Runbook — attribution pipeline
 
-For the next on-call engineer. Two incidents that already happened, in
+For the next on-call engineer. Three incidents that already happened, in
 post-incident form, plus one known limitation you should not rediscover the hard
 way. Every fact here traces to [`ARCHITECTURE.md` §8 "Gotchas"](ARCHITECTURE.md#8-gotchas),
 a [`DECISIONS.md`](../DECISIONS.md) entry, or a [`RESULTS.md`](RESULTS.md) number —
@@ -121,6 +121,65 @@ bug's signature is the opposite: a delta that has collapsed toward zero because 
 before/after snapshots stopped pairing, which sits *below* the threshold and keeps
 the rule silent. So the one alert that touches restatements would not fire on this
 failure mode; the code-level guard is the only thing standing in front of it.
+
+---
+
+## Incident 3 — the snapshot that disagreed with itself in the 15th digit
+
+**Symptom.** In 2 of 11 full DONE runs, `make run`'s second reconciliation pass
+leaves `report_snapshots` holding two rows for the same `(reported_at,
+campaign_id)` whose ROAS differ in the last float digit
+(`130.64573570759137` vs `130.6457357075914`, camp-02). `restatement.run()`
+before and after the pass then disagree, and the Phase-6 idempotency test
+fails — on a re-run it passes.
+
+**Detection.** Found by running the full DONE chain more times than any phase
+before (the Phase-17 review gate ran it eleven times). No pin could see it:
+every accuracy, report and parity assertion rounds to 4–6 dp, and the exact
+comparison that did catch it was read as a flake twice before it was diagnosed.
+The determinism question — "could this step give a different answer on a
+re-run?" — had a "rarely" answer for every monetary aggregate in a versioned
+table.
+
+**Root cause.** `sum(revenue)` / `sum(spend)` were Float64 sums. Float addition
+is not associative; ClickHouse sums the rows in the order it visits the parts,
+and that order differs between two passes over the same rows (a merge in
+between is enough). Each pass wrote a "re-run-identical" row that was not:
+ReplacingMergeTree keeps both twins until it merges, and `argMax(roas,
+reported_at)` over equal versions returns either. See
+[`DECISIONS.md`](../DECISIONS.md) (Post-Phase-11 fixes, "Monetary aggregates in
+versioned tables are computed in Decimal").
+
+**Fix.** [`reconcile/rollup.py`](../reconcile/rollup.py): every monetary sum
+written to `campaign_hourly` or `report_snapshots` is `sum(toDecimal64(toString(x), 4))`
+— exact in any order — cast `toFloat64` on write; the ratios are Float64
+divisions of those exact sums (full precision, deterministic). The conversion
+goes through `toString`: `toDecimal64(<Float64>, 4)` TRUNCATES the binary value
+(`26.08` is `26.0799…` → `26.0799`; the first cut of this fix understated
+revenue by 4e-4 and `make bench` caught it in CI) while the decimal string parses
+exactly — exact because the producer quantizes money to cents (pinned). Column
+types and every reported number are unchanged; `make bench` equality and the
+per-campaign value pin prove it.
+
+**Generalization.** A versioned table's row must be a pure function of its
+inputs, and a Float64 aggregate over a ClickHouse table is not — its value is a
+function of the part layout. The rule: any float aggregate WRITTEN to a versioned
+table must be order-independent (Decimal); COMPARED floats use a dp gate (the
+`report.sql`/`bench.sql` pair — its open half is a BACKLOG row). Rounding at
+write is not a fix: it shrinks the window, it does not close it. And the string
+conversion is a bridge: money stored as Float64 is the root cause; Decimal64(4)
+end-to-end is the destination (BACKLOG, Phase 18a).
+
+**Would catch it next time.** Two exact two-pass pins in
+[`tests/integration/test_reconcile.py`](../tests/integration/test_reconcile.py):
+the merge-immune one (every key's money in both versioned tables, read at full
+precision, is identical before and after a second pass — whichever twin a merge
+keeps) and the direct one (the raw, un-`FINAL` twins of both tables are
+byte-identical per key whenever a merge has not yet collapsed them), plus the
+value pin (stored money equals the source to the cent) and the offline SQL guard
+[`tests/test_rollup_decimal.py`](../tests/test_rollup_decimal.py) (no money
+`sum()` without `toDecimal64`). **No alert covers a recurrence**: a last-digit
+difference moves no metric past any threshold.
 
 ---
 

@@ -17,6 +17,12 @@ bit.
 
 from dataclasses import dataclass
 
+# ClickHouse (digest-pinned image, 24.8.14.39): how many of the 100,000 cent
+# values 0.00 … 999.99 `toDecimal64(<Float64>, 4)` truncates (RUNBOOK incident 3;
+# ARCHITECTURE §8). Asserted live in tests/integration/test_reconcile.py; the
+# docs cite it through tests/test_docs_accuracy_pins.py. An image bump may move it.
+TODECIMAL_TRUNCATED_CENT_VALUES = 5228
+
 
 @dataclass(frozen=True)
 class AccuracyPin:

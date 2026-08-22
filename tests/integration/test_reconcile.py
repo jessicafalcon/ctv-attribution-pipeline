@@ -14,9 +14,12 @@ Proves the Done-when against ClickHouse FINAL after `make run`:
   reconciled row count and the restatement unchanged.
 """
 
+import json
 import os
+from pathlib import Path
 
 import pytest
+from clickhouse_connect.driver.client import Client
 from confluent_kafka import Consumer
 
 from accuracy.run import load_truth
@@ -24,9 +27,14 @@ from accuracy.score import score
 from clickhouse.client import connect, read_exposure_households
 from queries import restatement
 from reconcile import reconcile
-from tests.pins import LONG_DELAY_HOT, LONG_DELAY_POST
+from tests.pins import (
+    LONG_DELAY_HOT,
+    LONG_DELAY_POST,
+    TODECIMAL_TRUNCATED_CENT_VALUES,
+)
 
 BROKER = os.environ.get("KAFKA_BROKER", "127.0.0.1:19092")
+FIXTURES = Path(__file__).parent.parent.parent / "fixtures" / "tiny"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -139,18 +147,176 @@ def test_restatement_shows_the_metric_rising_between_snapshots() -> None:
         assert r[6] > 0  # positive revenue delta
 
 
+def _versioned_money(client: Client) -> dict[str, tuple]:
+    """Per-key money (and money-derived ratios) in both versioned tables, read at
+    full precision — the merge-immune identity used by the two-pass pin (a
+    ReplacingMergeTree merge may collapse twins at any moment; the money of the
+    surviving row is what must not move)."""
+    out: dict[str, tuple] = {}
+    for r in client.query(
+        "select campaign_id, hour, argMax(spend, reported_at), "
+        "argMax(revenue, reported_at) from campaign_hourly final "
+        "group by campaign_id, hour order by campaign_id, hour"
+    ).result_rows:
+        out[f"hourly:{r[0]}:{r[1]}"] = (r[2], r[3])
+    for r in client.query(
+        "select campaign_id, period, argMax(spend, reported_at), "
+        "argMax(revenue, reported_at), argMax(roas, reported_at), "
+        "argMax(cpa, reported_at) "
+        "from report_snapshots final group by campaign_id, period order by campaign_id"
+    ).result_rows:
+        out[f"snap:{r[0]}:{r[1]}"] = (r[2], r[3], r[4], r[5])
+    return out
+
+
 def test_second_pass_is_idempotent() -> None:
     # A fresh reconciliation pass recovers nothing new (the 29 caused misses + 3
     # ambiguous were recovered by `make run`; only the 3 unmatched organics remain
     # candidates), and leaves the reconciled count and the restatement unchanged.
+    client = connect()
     before_restate = restatement.run()
+    before_money = _versioned_money(client)
 
     counts = reconcile.run(connect())
     assert counts["recovered"] == 0
     assert counts["candidates"] == 3  # the 3 organics with no in-90d exposure
 
     assert _reconciled_count() == _RECONCILED
-    assert restatement.run() == before_restate
+    # Merge-immune two-pass pin FIRST (RUNBOOK incident 3): the money every key
+    # holds after the second pass equals, EXACTLY, what it held before — whichever
+    # twin the ReplacingMergeTree keeps. Decimal-summed money makes the twins
+    # identical, so the survivor cannot differ. Ahead of the restatement check so
+    # a regression is reported by the pin that names it.
+    assert _versioned_money(client) == before_money
+    assert restatement.run() == before_restate  # exact, not 6 dp
+
+
+def test_second_pass_twins_are_byte_identical() -> None:
+    # Direct twin identity, both versioned tables: the raw (un-FINAL) rows of the
+    # two passes must be byte-identical per key. Twins are observable in both —
+    # campaign_hourly (versioned) and report_snapshots (no version column) both
+    # keep the passes' parts unmerged for a while (merges are background and
+    # asynchronous; a version column does not defer them). If a merge happened
+    # to collapse a table's twins before the read there is nothing to compare
+    # and that table is skipped — the money pin above is the always-on guard.
+    client = connect()
+    reconcile.run(connect())  # a further pass → one more twin per key
+    compared: list[str] = []
+    for table, key in (
+        ("campaign_hourly", "reported_at, campaign_id, hour"),
+        ("report_snapshots", "reported_at, campaign_id, period"),
+    ):
+        cols = ", ".join(
+            r[0]
+            for r in client.query(
+                "select name from system.columns where database = currentDatabase() "
+                f"and table = '{table}' order by position"
+            ).result_rows
+        )
+        # toString(tuple(...)): NULL-safe (a NULL cpa would make cityHash64 of
+        # bare columns NULL and uniqExact skip the row)
+        rows, distinct_keys, distinct_rows = client.query(
+            f"select count(), uniqExact({key}), "
+            f"uniqExact(cityHash64(toString(tuple({cols})))) from {table}"
+        ).result_rows[0]
+        assert distinct_rows == distinct_keys, f"{table}: a re-written row differs"
+        if rows > distinct_keys:
+            compared.append(table)
+    if not compared:
+        pytest.skip("both tables' twins merged before the read; the money pin holds")
+
+
+def test_versioned_money_equals_the_source_sums_exactly() -> None:
+    # Value-level pin (the twin pin alone let a truncating conversion through —
+    # `make bench` caught it in CI): the stored money in both versioned tables
+    # equals the source rows' money to the cent, per campaign, EXACTLY. The
+    # source side deliberately MIRRORS the rollup's credit join and its Decimal
+    # expression: this pins the numeric path (no loss between source and
+    # versioned row), not the credit definition — that is `make bench`'s job.
+    client = connect()
+    # spend from exposures alone (a join to conversions would multiply an
+    # exposure's spend by the conversions credited to it); revenue via the credit
+    spend = dict(
+        client.query(
+            "select campaign_id, toFloat64(sum(toDecimal64(toString(spend), 4))) "
+            "from exposures_landed final group by campaign_id"
+        ).result_rows
+    )
+    revenue = dict(
+        client.query(
+            "select e.campaign_id, "
+            "toFloat64(sum(toDecimal64(toString(a.revenue), 4))) "
+            "from attributed_conversions as a final "
+            "inner join exposures_landed as e final on a.exposure_id = e.exposure_id "
+            "where a.attributed = 1 group by e.campaign_id"
+        ).result_rows
+    )
+    src = {c: (spend[c], revenue.get(c, 0.0)) for c in spend}
+    hourly = {
+        r[0]: (r[1], r[2])
+        for r in client.query(
+            "select campaign_id, toFloat64(sum(toDecimal64(toString(spend), 4))), "
+            "toFloat64(sum(toDecimal64(toString(revenue), 4))) "
+            "from campaign_hourly final group by campaign_id"
+        ).result_rows
+    }
+    snap = {
+        r[0]: (r[1], r[2])
+        for r in client.query(
+            "select campaign_id, argMax(spend, reported_at), "
+            "argMax(revenue, reported_at) "
+            "from report_snapshots final group by campaign_id"
+        ).result_rows
+    }
+    assert hourly == src, f"campaign_hourly money != source: {hourly} vs {src}"
+    assert snap == src, f"report_snapshots money != source: {snap} vs {src}"
+
+
+def test_string_decimal_path_is_exact_over_the_whole_cent_domain() -> None:
+    # ClickHouse truncates toDecimal64(<Float64>) at the binary value (5.2 % of
+    # 2-dp values lose a ten-thousandth); the toString path is exact for every
+    # cent value 0.00 … 999.99 — the producer's domain (tests/test_money_domain.py).
+    bad_direct, bad_string, n = (
+        connect()
+        .query(
+            "select "
+            "countIf(toDecimal64(x, 4) != toDecimal64(toString(x), 4)), "
+            "countIf(toFloat64(toDecimal64(toString(x), 4)) != x), "
+            "count() "
+            "from (select round(number / 100, 2) as x from numbers(100000))"
+        )
+        .result_rows[0]
+    )
+    assert n == 100000
+    assert bad_string == 0
+    # Pinned exactly (tests/pins.py, cited in ARCHITECTURE §8): the image is
+    # digest-pinned, so this is a property of THAT ClickHouse; an image bump is
+    # allowed to move it — update the pin and §8 together. IEEE truncation is
+    # arithmetic, not platform-specific, but the number is measured on arm64 and
+    # asserted on amd64 in CI — if they ever disagree, CI says so.
+    assert bad_direct == TODECIMAL_TRUNCATED_CENT_VALUES
+    # … and the doubles the PRODUCER actually emits (Python round(x, 2) → JSON)
+    # round-trip too, not only ClickHouse's own construction of the domain.
+    fixture_values = sorted(
+        {
+            json.loads(ln)["spend"]
+            for ln in (FIXTURES / "exposures.jsonl").read_text().splitlines()
+        }
+        | {
+            json.loads(ln)["revenue"]
+            for ln in (FIXTURES / "conversions.jsonl").read_text().splitlines()
+        }
+    )
+    bad = (
+        connect()
+        .query(
+            "select countIf(toFloat64(toDecimal64(toString(x), 4)) != x) "
+            "from (select arrayJoin({vals:Array(Float64)}) as x)",
+            parameters={"vals": fixture_values},
+        )
+        .result_rows[0][0]
+    )
+    assert bad == 0 and len(fixture_values) > 10
 
 
 def _hot_attributed_rows() -> dict[str, tuple]:
