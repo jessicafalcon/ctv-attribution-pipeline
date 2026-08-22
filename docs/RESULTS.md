@@ -1,5 +1,10 @@
 # RESULTS.md
 
+The long-form source of the README first screen: its accuracy table is pinned by
+`tests/pins.py` (guard: `tests/test_docs_accuracy_pins.py`), its cost-lever and
+scaling numbers are copies of the `make cost-levers` / `make scale-curve` generated
+blocks (guard: `make check-docs`). Nothing here is hand-typed twice on purpose.
+
 Measured outcomes, three ways the pipeline is validated: **attribution accuracy**
 against ground truth, the **rollup benchmark**, and the **agent eval**. The accuracy
 numbers are deterministic (seed-reproducible, asserted by the integration tests) and
@@ -292,7 +297,7 @@ local **Iceberg** lake (via **DuckDB** `iceberg_scan`) instead of ClickHouse, an
 runs as a **Dagster** day-partitioned asset — without changing the pipeline's
 output. Measured on a clean `long_delay` stack (`make test-int-lakehouse` +
 `make run-hot PROFILE=long_delay && make reconcile-dagster PROFILE=long_delay &&
-make eval PROFILE=long_delay`; Phase 12 ran the since-removed `make lake-land`).
+make eval PROFILE=long_delay`; Phase 12 ran the `lake-land` target, removed in Phase 17).
 
 ### Byte-identical source swap (Done-when #2)
 

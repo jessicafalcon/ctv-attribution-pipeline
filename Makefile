@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-runbook lint
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -330,12 +330,15 @@ test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
 
-# Phase-15 docs trace check: every RUNBOOK.md cross-reference resolves and every
-# named guard/alert still exists in source (docs/check_runbook.py). Standalone
-# script, not a pytest file, so it doesn't re-trigger the full suite on a docs-only
-# change. No services, no network.
-check-runbook:
-	uv run python docs/check_runbook.py
+# The one docs guard (Phase 19; was check-runbook, Phase 15): every link/anchor in
+# README.md + docs/ resolves, every `make`-generated block is present under its
+# generator's marker and the README copies of its numbers match, and every guard /
+# alert / make target the docs name exists in source as an EXACT token
+# (scripts/check_docs.py). Standalone script, not a pytest file, so it doesn't
+# re-trigger the full suite on a docs-only change. No variable, no delete, no
+# input. No services, no network.
+check-docs:
+	uv run python scripts/check_docs.py
 
 lint:
 	uv run pre-commit run --all-files
