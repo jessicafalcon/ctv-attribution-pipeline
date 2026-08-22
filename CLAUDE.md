@@ -362,6 +362,13 @@ standard way over the clever way.
   is the only definition of done. Do not weaken failing tests. If a spec,
   fixture, or ARCHITECTURE.md seems wrong, STOP and report — never silently
   repair.
+- Specs follow `specs/TEMPLATE.md`. Its three added sections are mandatory:
+  **Evidence** (every Done-when item names the test or command output that
+  proves it — an item without evidence is not a Done-when item), **Record
+  updates** (the explicit list of record files the phase must change; checked
+  off in the report, diffed by the coherence auditor), and **Threat model**
+  (required whenever the phase adds a Makefile target that takes a variable,
+  deletes anything, or takes user input).
 - Before a phase: restate its "Done when" from docs/PHASES.md.
 - At each phase exit: run the coherence audit and review BACKLOG.md for due
   items.
