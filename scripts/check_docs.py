@@ -30,7 +30,9 @@ RESULTS = DOCS / "RESULTS.md"
 SCALING = DOCS / "SCALING.md"
 
 # [text](target) where target is a relative path (not http, not a bare #anchor).
-_LINK = re.compile(r"\[[^\]]+\]\((?!https?://)(?!#)([^)]+)\)")
+# Link text may be empty: code spans are stripped before scanning, and a link whose
+# text is `code` (most of ours) is then `[](target)`.
+_LINK = re.compile(r"\[[^\]]*\]\((?!https?://)(?!#)([^)]+)\)")
 # `make <target>` named as a command: inside backticks or a fenced code block
 # (prose "make sure" is not a target).
 _MAKE = re.compile(r"\bmake ([a-z][a-z0-9-]*)")
@@ -66,12 +68,18 @@ def _anchors(md: Path) -> set[str]:
 # ---------------------------------------------------------------- 1. links
 
 
+def _links(text: str) -> list[str]:
+    """Relative link targets in markdown `text`; fenced / inline code is not a
+    link (`bucket[8](household_id)` is code), but a link whose TEXT is code
+    (`[`docs/X.md`](docs/X.md)`) is still a link."""
+    return _LINK.findall(_TICK.sub("", _FENCE.sub("", text)))
+
+
 def check_links(errors: list[str]) -> int:
     n = 0
     for md in [*_docs(), *_LINK_ONLY]:
-        # links inside fenced / inline code are not links
         text = _TICK.sub("", _FENCE.sub("", md.read_text()))
-        for raw in _LINK.findall(text):
+        for raw in _links(text):
             n += 1
             path_part, _, anchor = raw.partition("#")
             target = (md.parent / path_part).resolve()
