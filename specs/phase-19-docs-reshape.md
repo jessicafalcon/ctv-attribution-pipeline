@@ -1,4 +1,4 @@
-# Phase 19 — Docs reshape (PROPOSED)
+# Phase 19 — Docs reshape (RECONCILED)
 
 Contract for the `phase-19-docs-reshape` branch. Source: post-plan extension — **not**
 in the original `docs/PHASES.md` plan. Origin: the Phase-15 architecture review
@@ -9,8 +9,7 @@ docs. Depends on Phases 16–17 merged — NOT 18: reordered 2026-08-22 to run B
 18a/18b (DECISIONS "Process" entry — the consolidation removes the drift tax every
 later phase would otherwise pay again). Docs-only — no pipeline code.
 
-**Status: PROPOSED — do not start until Phases 16–17 have merged and this is approved.**
-No new dependencies.
+**Status: RECONCILED 2026-08-22 against main @ fd0e28f.** No new dependencies.
 
 ## Why
 
@@ -24,8 +23,8 @@ the fold. Phase 15's "elevate, never invent" constraint applies verbatim.
 ## The central constraint
 
 **Move, merge, delete — never invent.** Every number in the reshaped docs traces to
-`tests/pins.py`, a `make`-regenerated block (`scale-curve`, `cost-levers`,
-`rollup-bench`, `cost-report`), or a recorded DECISIONS entry. No new measurements are
+`tests/pins.py`, a `make`-regenerated block (`scale-curve` and `cost-levers` only —
+the two generators that exist on main), or a recorded DECISIONS entry. No new measurements are
 taken in this phase; if a claim needs one, it is cut. The docs-vs-pins guard
 (`tests/test_docs_accuracy_pins.py`) and the regenerated-block markers are the proof.
 
@@ -48,9 +47,10 @@ make test && make lint && make check-docs
 1. **README first screen (≤ 60 lines before the first `##`).** In order: one-sentence
    what-it-is; the constraint equation with the measured constant and the 8.6 TB
    consequence; the two-path answer in two sentences; the accuracy/restatement table
-   (tiny / medium / long_delay, from `pins.py`); the cost-lever table (projection,
-   PREWHERE, incremental rollup, async inserts — direction + measured delta, from the
-   generated blocks); the 30/30 agent eval line; one "run the headline demo" command.
+   (tiny / medium / long_delay, from `pins.py`); the cost-lever table (the Phase-13 rows
+   only: projection WIN, FINAL-avoidance DOCUMENTED NEGATIVE, PREWHERE WIN — direction
+   + measured delta, from the `cost-levers` generated block); the 30/30 agent eval line; one "run the headline demo" command.
+   *Evidence: row 1 of the Evidence table.*
    Then `## Architecture` (diagram as today), `## How it's proven`, `## Scaling`, `##
    Run it`, `## Repo map`, `## History` (the phase table, moved here from CLAUDE.md
    "Current status", which keeps a one-line pointer + the current phase only), `## Next
@@ -64,13 +64,18 @@ make test && make lint && make check-docs
    The per-phase log moves under `## Appendix — by phase`, unchanged in content and
    re-ordered chronologically (today 15 precedes 12).
 3. **ARCHITECTURE.md is the end-state spec.** §3.2 diagram, §3.3 components and §3.4
-   table describe the post-18 system; every "Phase N added…" parenthetical is reduced to
+   table describe the post-17 system (lake of record) as it runs on main today — 18a/18b
+   edit §3.4 when they land; every "Phase N added…" parenthetical is reduced to
    a DECISIONS link. §8 Gotchas stays as-is (it is the raw incident record the runbook
    elevates). §7 "Build order" points to README `## History`.
 4. **One docs guard, not three.** `make check-docs` subsumes `check_runbook.py` and the
    Phase-11 README link check; `tests/test_docs_accuracy_pins.py` stays (it guards
-   numbers, not prose). The BACKLOG "prose-citation guard" row is closed by the exact-
-   token check in (c) or explicitly re-deferred with a reason — never silently dropped.
+   numbers, not prose). BACKLOG row 37 (substring-blind trace check) closes ONLY when a
+   test pins a partial-rename failure (`_canonicalize` vs `_canonicalize_tables`)
+   against the exact-token check. BACKLOG row 47 (prose accuracy citations) closes ONLY
+   if the exact-token check also covers every accuracy number in README/RESULTS prose
+   against `tests/pins.py`; otherwise it is re-deferred with trigger "next change to
+   `tests/pins.py`". Neither row is silently dropped.
 5. **CLAUDE.md shrinks to what the next session needs.** Architecture block, repo map,
    commands, policies, conventions, workflow rules stay. The status table moves to
    README `## History`; "Current status" becomes: current phase, last merged PR, open
@@ -78,6 +83,22 @@ make test && make lint && make check-docs
 6. **Honesty boundary stays on the first screen.** The README keeps a two-sentence
    "what this does NOT show" line (batch drain, single node, laptop-scale numbers) above
    the fold — the review praised the honesty boundaries; burying them would undo that.
+
+## Evidence (REQUIRED)
+
+Every Done-when item names the test or command output that proves it.
+
+| Done-when | Proof (test file / `make` target / command output) |
+|---|---|
+| 1 | `awk '/^## /{exit} {n++} END{print n}' README.md` (line count up to the first `##`) ≤ 60, pasted; `make check-docs` output (link/anchor + exact-token); `tests/test_docs_accuracy_pins.py` green |
+| 2 | `make check-docs` output (link/anchor + exact-token); `tests/test_docs_accuracy_pins.py` green |
+| 3 | `make check-docs` output (link/anchor + exact-token); `tests/test_docs_accuracy_pins.py` green |
+| 4 | Three hand-run negative tests — a deliberately broken anchor, a stale generated block, a renamed guard — each showing `make check-docs` FAIL, output pasted in the PR body; plus the row-37 partial-rename test and the row-47 prose-coverage check (or its re-deferral) named in Done-when 4 |
+| 5 | `make check-docs` output (link/anchor + exact-token); `tests/test_docs_accuracy_pins.py` green |
+| 6 | `make check-docs` output (link/anchor + exact-token); `tests/test_docs_accuracy_pins.py` green |
+
+The same table, filled with the actual run's output, is item 2 of the "Before
+reporting DONE" checklist (CLAUDE.md Workflow rules).
 
 ## Pinned decisions (do not re-litigate)
 
@@ -87,16 +108,41 @@ make test && make lint && make check-docs
   survive the move to README `## History`.
 - **Numbers come from pins and generated blocks only.** A docs number with no source
   is a bug, not a style choice.
-- **Docs-only, no code** except `scripts/check_docs.py` (or the existing
-  `check_runbook.py` renamed and extended) and its Makefile target.
+- **Docs-only, no code** except `scripts/check_docs.py` and its Makefile target.
+- **`scripts/check_docs.py` is `docs/check_runbook.py` moved with `git mv` and
+  extended** — one file, history preserved, never a second script.
 
 ## Scope (files)
 
 - `README.md`, `DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` (status section,
   commands: `check-runbook` → `check-docs`), `docs/RESULTS.md` (first-screen tables are
-  sourced from here; RESULTS keeps the long-form), `docs/PHASES.md` (rows for 16–19),
+  sourced from here; RESULTS keeps the long-form), `docs/PHASES.md` (rows 16, 17, 18a, 18b, 19 — already present; verify they match
+  README `## History`),
   `scripts/check_docs.py` + Makefile, `.github/workflows` (run `make check-docs` in the
   lint job), BACKLOG (close or re-defer the two docs-guard rows), DECISIONS Phase 19.
+
+## Record updates (REQUIRED)
+
+The explicit list of record files this phase must change; checked off in the report
+(checklist item 6), diffed by the coherence auditor against the actual diff.
+
+- [ ] `README.md` — first screen, `## History` (phase table moved from CLAUDE.md)
+- [ ] `DECISIONS.md` — binding/appendix split + Phase-19 entry
+- [ ] `docs/ARCHITECTURE.md` — §3 (end-state, post-17) + §7 (points to README `## History`)
+- [ ] `CLAUDE.md` — status section; `check-runbook` → `check-docs` in Commands and
+      Project tooling
+- [ ] `docs/PHASES.md` — rows 16, 17, 18a, 18b, 19 verified against README `## History`
+- [ ] `docs/RESULTS.md` — long-form source of the first-screen tables
+- [ ] `BACKLOG.md` — rows 37 + 47: close or re-defer (conditions in Done-when 4), never
+      silent
+- [ ] `Makefile` — `check-runbook` → `check-docs`
+- [ ] `.github/workflows` — lint job runs `make check-docs`
+- [ ] every `.claude/agents/*.md` and `.claude/commands/*.md` that names
+      `check-runbook` or `check_runbook.py`
+
+## Threat model (REQUIRED when the phase adds a Makefile target that takes a variable, deletes anything, or takes user input)
+
+None — `make check-docs` takes no variable, deletes nothing, takes no input.
 
 ## Review & stack risk
 
@@ -116,22 +162,25 @@ make test && make lint && make check-docs
 - A rendered site / diagrams-as-images — Markdown in-repo only.
 - Re-running `make agent-eval` for fresher verdict numbers (API tokens; the Phase-10
   numbers stand, labelled with their date).
+- 18a and 18b each append one row to the README cost-lever table (recorded in their
+  own Record-updates lists).
 
 ## Pre-branch reconciliation required (2026-08-22)
 
 This spec was written assuming Phase 18 had landed. The 2026-08-22 reorder runs it
-BEFORE 18a/18b, so the branch's commit 1 (CLAUDE.md Workflow rules: the
-spec-reconciliation amendment, stop for approval) must resolve the clauses that
-still reference unbuilt Phase-18 deliverables — listed, not resolved, here:
+BEFORE 18a/18b. Resolved by this branch's commit 1 (the spec-reconciliation
+amendment, CLAUDE.md Workflow rules) against main @ fd0e28f:
 
-- Central constraint: the `make`-regenerated blocks named include `rollup-bench` and
-  `cost-report` (18a / 18b targets that do not exist yet).
-- Done-when 1: the first-screen cost-lever table lists "incremental rollup, async
-  inserts" (18a / 18b levers) beside the Phase-13 projection / PREWHERE rows.
-- Done-when 3: ARCHITECTURE §3.2–3.4 "describe the post-18 system".
-- `docs/PHASES.md` scope: "rows for 16–19" now means 16, 17, 18a, 18b, 19 in the
-  reordered sequence.
+- Central constraint: generated blocks are `scale-curve` and `cost-levers` only
+  (`rollup-bench` / `cost-report` struck — 18a / 18b targets that do not exist).
+- Done-when 1: the first-screen cost-lever table holds the Phase-13 rows only
+  ("incremental rollup, async inserts" struck).
+- Done-when 3: ARCHITECTURE §3.2–3.4 describe the post-17 system as it runs on main
+  today; 18a/18b edit §3.4 when they land.
+- `docs/PHASES.md` scope: rows 16, 17, 18a, 18b, 19 (already present; verified
+  against README `## History`).
 
-The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:
-Evidence, Record updates, Threat model (`make check-docs` takes no variable and
-deletes nothing — expected to be "None", stated).
+The amendment also added the three `specs/TEMPLATE.md` sections this spec predated
+(Evidence, Record updates, Threat model), the `git mv` pinned decision for
+`scripts/check_docs.py`, the BACKLOG 37/47 close conditions in Done-when 4, and the
+18a/18b cost-lever-row note under Out of scope.
