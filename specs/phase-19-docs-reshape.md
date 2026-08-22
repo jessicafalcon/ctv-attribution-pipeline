@@ -135,12 +135,14 @@ The explicit list of record files this phase must change; checked off in the rep
       Project tooling
 - [ ] `docs/PHASES.md` — rows 16, 17, 18a, 18b, 19 verified against README `## History`
 - [ ] `docs/RESULTS.md` — long-form source of the first-screen tables
+- [ ] `docs/SCALING.md` — Phase-17 wording (reconciliation reads the lake), 18a pointer
+- [ ] `tests/test_check_docs.py` — the BACKLOG-37 partial-rename pin (Done-when 4)
 - [ ] `BACKLOG.md` — rows 37 + 47: close or re-defer (conditions in Done-when 4), never
       silent
 - [ ] `Makefile` — `check-runbook` → `check-docs`
 - [ ] `.github/workflows` — lint job runs `make check-docs`
 - [ ] every `.claude/agents/*.md` and `.claude/commands/*.md` that names
-      `check-runbook` or `check_runbook.py`
+      `check-runbook` or `check_runbook.py` (grep at reconciliation and at exit: no hits)
 
 ## Threat model (REQUIRED when the phase adds a Makefile target that takes a variable, deletes anything, or takes user input)
 

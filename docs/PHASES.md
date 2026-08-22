@@ -368,7 +368,7 @@ BACKLOG triage the spec never carried; corrected at exit — the spec is authori
 negative tests (a broken anchor, a stale generated block, a renamed guard) each
 failing `make check-docs`, pasted in the PR body.
 
-**Delivered (2026-08-22).** README first screen 47 lines; `make check-docs` (links /
+**Delivered (2026-08-22).** README first screen ≤ 60 lines (`make check-docs` asserts it); `make check-docs` (links /
 anchors across README + docs/, the two generated blocks under their generators'
 markers with the README copies compared, exact-token traces + every `make <target>`
 the docs name); BACKLOG 37 closed (partial-rename failure pinned by
@@ -380,7 +380,7 @@ pipeline file changed.
 
 **Goal.** Incremental rollups from a dirty set (the Phase-16
 `engine_conversions_ambiguous_deferred_total` / `reason` column are its
-precursors) with the loader-owned dirty-set gate (BACKLOG row 56), part-count and
+precursors) with the loader-owned dirty-set gate (BACKLOG, the loader-owned dirty-set row), part-count and
 merge-lag metrics + alert rules; the alert rules get recaptured here (revisit the
 `MatchRateOutOfBand` headroom then). Split 2026-08-22 from Phase 18 under the
 phase-size rule (≤ ~6 pinned decisions / Done-when items per spec; CLAUDE.md

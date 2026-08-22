@@ -79,3 +79,9 @@ def test_derived_block_regexes_anchor_on_labels_not_cells() -> None:
             .replace("Lever 1", "")
             .replace("Lever 3", "")
         ), name
+
+
+def test_first_screen_is_within_budget_today() -> None:
+    text = check_docs.README.read_text()
+    lines = check_docs._first_screen(text).count("\n")
+    assert lines <= check_docs.FIRST_SCREEN_MAX_LINES

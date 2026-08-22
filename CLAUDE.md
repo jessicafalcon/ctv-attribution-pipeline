@@ -97,7 +97,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
 - `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
   `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
-- `common/` — `kafka.py`, the shared start→end topic drain (producer + engine).
+- `common/` — `kafka.py`, the shared start→end topic drain (engine + graph loader).
 - `tests/` — pytest unit (no services); `tests/integration/` needs `make up`.
 - `fixtures/tiny/` — golden producer output + expected resolved/attributed
   rows. READ-ONLY ground truth after Phase 1.
@@ -509,8 +509,8 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
 (PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
 reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
-"Process"). Open BACKLOG rows: **26** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
-reviewed at every phase exit). The per-phase table (0–17 + the fix PRs) lives in `README.md` → History;
+"Process"). Open BACKLOG rows: **32** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
 

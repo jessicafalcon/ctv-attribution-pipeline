@@ -21,6 +21,7 @@ PIPELINE_DIRS = [
     "queries",
     "lake",
     "orchestration",
+    "common",
 ]
 
 

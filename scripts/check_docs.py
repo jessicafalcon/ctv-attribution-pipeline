@@ -148,8 +148,12 @@ def _markers() -> list[tuple[str, Path, str, str]]:
     ]
 
 
+FIRST_SCREEN_MAX_LINES = 60
+
+
 def _first_screen(readme: str) -> str:
-    """README up to its first `## ` heading — the only place block copies live."""
+    """README up to its first `## ` heading — the first screen, where the guarded
+    block copies live (prose copies further down are not compared)."""
     cut = re.search(r"(?m)^## ", readme)
     return readme[: cut.start()] if cut else readme
 
@@ -204,7 +208,7 @@ def check_generated(errors: list[str]) -> int:
     blocks: dict[str, str] = {}
     try:
         markers = _markers()
-    except (KeyError, FileNotFoundError) as exc:
+    except (KeyError, FileNotFoundError, SyntaxError, ValueError) as exc:
         errors.append(f"generated-block marker constant unreadable: {exc}")
         return 0
     for name, doc, begin, end in markers:
@@ -225,6 +229,13 @@ def check_generated(errors: list[str]) -> int:
         blocks[name] = body
         n += 1
     readme = _first_screen(README.read_text())
+    first_screen_lines = readme.count("\n")
+    n += 1
+    if first_screen_lines > FIRST_SCREEN_MAX_LINES:
+        errors.append(
+            f"README.md: {first_screen_lines} lines before the first `## ` "
+            f"(limit {FIRST_SCREEN_MAX_LINES}, Phase-19 Done-when 1)"
+        )
     for label, name, block_re, readme_re in _DERIVED:
         if name not in blocks:
             continue
@@ -305,7 +316,8 @@ HISTORICAL = "<!-- historical -->"
 
 def _living(text: str) -> str:
     """Drop the two sanctioned history forms from the target scan: struck-through
-    text and any line tagged `<!-- historical -->`. No broader escape."""
+    text and any line tagged `<!-- historical -->` (line-granular; the whole line is
+    skipped). Nothing else is exempt."""
     lines = [ln for ln in _STRUCK.sub("", text).splitlines() if HISTORICAL not in ln]
     return "\n".join(lines)
 

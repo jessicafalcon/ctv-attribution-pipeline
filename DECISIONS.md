@@ -140,7 +140,8 @@ below, never deleted.
   proxy; no annotations until the live push path.** ([Phase 7](#phase-7))
 - **The docs' accuracy tables trace to `tests/pins.py` and the scaling / cost-lever
   numbers to a `make`-regenerated block (`scale-curve`, `cost-levers`) — guarded; the
-  benchmark, agent-eval and lakehouse tables are dated captures, labelled as such;
+  agent-eval and lakehouse tables are dated captures, the benchmark table is
+  reproduced by the command it states;
   the scaling constant is a structural measure, never `tracemalloc`; the runbook
   elevates recorded incidents and invents nothing; one docs guard, `make check-docs`.** ([Phase 14](#phase-14), [Phase 15](#phase-15),
   [Phase 19](#phase-19))
@@ -1943,7 +1944,8 @@ below, never deleted.
 ### Phase 19
 
 - **The reader meets the constraint before the history (docs reshape, docs-only).**
-  README's first screen (47 lines, ≤ 60 before the first `##`) is: what it is → the
+  README's first screen (≤ 60 lines before the first `##`; `make check-docs`
+  asserts it) is: what it is → the
   measured constraint (~571 B/exposure → ~8.6 TB) → the two-path answer → the pinned
   accuracy/restatement table → the Phase-13 cost-lever table → the 30/30 agent line →
   the honesty boundary → one demo command. Everything below the fold was moved or
@@ -1956,9 +1958,11 @@ below, never deleted.
   each linking its phase) over a chronological appendix; superseded entries are
   annotated in place, never deleted.** The per-phase log was newest-first for the
   post-plan phases (17 above 12) — re-ordered 0 → 19 under `## Appendix — by phase`
-  with the entries' text unchanged except eight added `Superseded …` pointers (Phase
-  0 tag-pinning, Phase 2 `conversions_resolved` ×2, Phase 3 Bytewax, Phase 5 Bytewax
-  order, Phase 6 leaf read, Phase 12 dual-write, Phase 16 graph-from-topic) and one
+  with the entries' text unchanged except six added `Superseded …` pointers (Phase 0
+  tag-pinning, Phase 2 `ResolvedConversion` and resolve-stage ×2, Phase 3 Bytewax,
+  Phase 12 dual-write, Phase 16 graph-from-topic — the Phase-3 "Bytewax delivery
+  order" and Phase-6 leaf-read pointers were Phase 16's), one extended pointer (Phase
+  6 leaf read: + the Phase-17 lake read) and one
   content edit (Phase 16 MatchRate "revisit in Phase 18" → 18a, the split's new name). Rejected: deleting
   superseded entries (the record of why a rule exists is the rule's evidence).
 - **One docs guard, `scripts/check_docs.py`, is `docs/check_runbook.py` moved with
