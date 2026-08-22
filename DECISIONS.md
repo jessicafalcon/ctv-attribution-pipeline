@@ -1025,6 +1025,46 @@ Phase 16 sits directly below the fixes.
 
 ## Post-Phase-11 fixes
 
+- **Monetary aggregates in versioned tables are computed in Decimal; Float64
+  summation order is not deterministic across part layouts
+  (`fix/snapshot-float-determinism`, RUNBOOK incident 3).** Found by running
+  the Phase-17 DONE chain more times than any phase before: `make run`'s second
+  reconcile pass re-writes `report_snapshots` / `campaign_hourly` rows with the
+  same data-derived `reported_at`, and in 2 of 11 runs a twin's ROAS differed in
+  the 15th digit (`130.64573570759137` vs `…5914`, camp-02) — `sum(revenue)` and
+  `sum(spend)` are Float64 sums whose order follows the parts ClickHouse
+  happens to visit, which differs between passes; `argMax(roas, reported_at)`
+  over two twins with equal versions then picks either. Every pin rounds (4–6
+  dp), so none could see it; the determinism question had a "rarely" answer.
+  Fix: `sum(toDecimal64(toString(x), 4))` for spend/revenue in both versioned
+  writes (`reconcile/rollup.py`), cast with `toFloat64` on write — Decimal
+  addition is exact in any order, and the cast of an identical Decimal is
+  identical. THROUGH `toString`, not `toDecimal64(<Float64>)`: ClickHouse
+  truncates the binary value (26.08 → 26.0799; 5.2 % of cent values lose a
+  ten-thousandth — the first cut of this fix understated revenue by 4e-4 and
+  `make bench` caught it), while the decimal string parses exactly. Exact
+  because the producer quantizes money to cents (`producer/generate.py`
+  `round(…, 2)`, pinned by `tests/test_money_domain.py` on the fixtures and
+  every profile). A bridge, not the destination: money stored as Float64 is the
+  root cause — Decimal64(4) end-to-end (pydantic, DDL, Iceberg) is a BACKLOG row
+  for Phase 18a. The
+  ratios (ROAS, CPA) are divided as Float64 OF those exact sums, not as
+  Decimal: Decimal division has a fixed scale (it would truncate a stored ROAS
+  to 4 dp — a precision change to a metric), while Float64 division of
+  identical operands is deterministic at full precision. Column types, the
+  report's 4-dp output and every pin are unchanged — proven by `make bench`'s
+  naive-vs-rollup equality and the exact per-campaign value pin, not assumed. Rejected: rounding at write
+  (shrinks the flake to ~1 in 10⁹ — two sums can still straddle a rounding
+  boundary; the question wants "no", not "rarely"); comparing the test at 6 dp
+  (hides the write-side defect; 6-dp comparisons stay where they belong, cross-
+  engine parity). Pinned EXACT, three ways (`tests/integration/test_reconcile.py`):
+  merge-immune — every key's money in both versioned tables is identical before
+  and after a second pass; direct — the raw twins of both tables are
+  byte-identical per key when a merge has not yet collapsed them; value — the
+  stored money equals the source to the cent. Plus an offline guard that no money
+  `sum()` in the versioned SQL is Float64 (`tests/test_rollup_decimal.py`) and the
+  producer's cent quantization (`tests/test_money_domain.py`).
+
 - **`make bench` canonicalizes both read sides to merged steady state before measuring
   (BACKLOG 29, `fix/bench-direction-guard`).** Adding the magnitude-free direction assert
   (`optimized read_rows < naive`, the row-29 guard) surfaced a latent non-determinism it

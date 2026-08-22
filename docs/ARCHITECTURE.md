@@ -510,6 +510,20 @@ handled.*
   silently reintroduce this non-determinism (a re-run could throw, or measure before
   the merge completes). Rule: never treat a `FINAL` scan's `read_rows` as a stable
   structural number without first forcing the merge.
+- **`toDecimal64(<Float64>, s)` TRUNCATES the binary value; a Float64 `sum()` is
+  not order-independent.** Two ClickHouse facts behind RUNBOOK incident 3. (1)
+  `sum(spend)` over the same rows (camp-01, long_delay) gave `8.529999999999996`
+  and `8.53` depending
+  on the order the parts were visited, so two reconcile passes wrote
+  "identical" versioned rows that differed in the 15th digit. (2) The Decimal
+  fix's first cut, `toDecimal64(revenue, 4)`, truncated the binary float:
+  `26.08` (really `26.0799999…`) became `26.0799`, understating revenue by
+  4e-4 (5,228 of the 100,000 cent values 0.00–999.99 lose a ten-thousandth;
+  `round()` and `accurateCast` do not help). The exact path is
+  `toDecimal64(toString(x), 4)` — the shortest decimal string parses exactly —
+  and it is exact only because the producer quantizes money to cents (pinned).
+  Money as Float64 is the root cause; Decimal64(4) end-to-end is the BACKLOG
+  destination.
 - **A projection on a ReplacingMergeTree needs `deduplicate_merge_projection_mode`
   set, and cannot serve a `FINAL` query.** Adding a projection to a
   ReplacingMergeTree (Phase-13 cost levers, `queries/cost_levers.sql`) raises code

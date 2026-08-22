@@ -9,7 +9,13 @@ covered (see tests/pins.py). Pure/offline — no services.
 
 from pathlib import Path
 
-from tests.pins import LONG_DELAY_HOT, LONG_DELAY_POST, MEDIUM_HOT, TINY_HOT
+from tests.pins import (
+    LONG_DELAY_HOT,
+    LONG_DELAY_POST,
+    MEDIUM_HOT,
+    TINY_HOT,
+    TODECIMAL_TRUNCATED_CENT_VALUES,
+)
 
 REPO_ROOT = Path(__file__).parent.parent
 README = REPO_ROOT / "README.md"
@@ -86,3 +92,8 @@ def test_results_accuracy_table_matches_pins() -> None:
         _counts_ok((c[2], c[3], c[4]), pin, f"RESULTS {profile}/{path}")
         _precision_ok(c[5], pin, shown, f"RESULTS {profile}/{path}")
         _recall_ok(c[6], pin, f"RESULTS {profile}/{path}")
+
+
+def test_architecture_cites_the_pinned_todecimal_truncation_count() -> None:
+    text = (Path(__file__).parent.parent / "docs" / "ARCHITECTURE.md").read_text()
+    assert f"{TODECIMAL_TRUNCATED_CENT_VALUES:,} of the 100,000" in text

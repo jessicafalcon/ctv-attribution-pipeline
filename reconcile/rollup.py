@@ -9,6 +9,21 @@ per (reported_at, campaign_id) so a period's number is queryable as of each pass
 
 Both read FINAL on the source ReplacingMergeTree tables (DECISIONS Phase 4), so
 duplicate exposure landings and pre-reduction rows never inflate a denominator.
+
+Monetary aggregates are summed in DECIMAL, never Float64 (fix/snapshot-float-
+determinism, RUNBOOK incident 3): a Float64 `sum()` depends on the order
+ClickHouse visits the parts, which differs between two passes over the same
+rows, so two "identical" versioned rows could disagree in the 15th digit and
+`argMax` over the ReplacingMergeTree twins picked either. Decimal addition is
+exact in any order; the sums are cast to Float64 on write (`toFloat64` of an
+identical Decimal is identical) and the ratios are divided as Float64 of those
+exact sums — full precision, deterministic. The conversion goes THROUGH
+`toString`: `toDecimal64(<Float64>, 4)` truncates the binary value (26.08 is
+26.0799999… → 26.0799, found live by `make bench`), while the decimal string
+("26.08") parses exactly. Exact because the producer quantizes money to cents
+(`producer/generate.py` `round(…, 2)`; pinned by tests/test_money_domain.py);
+scale 4 leaves headroom. Bridge, not destination: money stored as Float64 is the
+root cause — Decimal64(4) end-to-end is a BACKLOG row for Phase 18a.
 """
 
 from clickhouse_connect.driver.client import Client
@@ -36,12 +51,12 @@ insert into campaign_hourly
 select
     campaign_id,
     hour,
-    sum(spend) as spend,
+    toFloat64(sum(toDecimal64(toString(spend), 4))) as spend,
     sum(is_exposure) as exposures,
     sum(is_conversion) as attributed_conversions,
     sum(is_purchase) as purchases,
     sum(is_site_visit) as site_visits,
-    sum(rev) as revenue,
+    toFloat64(sum(toDecimal64(toString(rev), 4))) as revenue,
     (
         select max(t) from
         (
@@ -113,7 +128,7 @@ spend_by_campaign as
 (
     select
         campaign_id,
-        sum(spend) as spend,
+        toFloat64(sum(toDecimal64(toString(spend), 4))) as spend,
         count() as exposures
     from exposures
     group by campaign_id
@@ -136,7 +151,7 @@ conv_by_campaign as
         count() as conversions,
         countIf(conversion_type = 'purchase') as purchases,
         countIf(conversion_type = 'site_visit') as site_visits,
-        sum(revenue) as revenue
+        toFloat64(sum(toDecimal64(toString(revenue), 4))) as revenue
     from credited
     group by campaign_id
 )
