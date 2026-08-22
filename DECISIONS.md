@@ -1241,10 +1241,10 @@ Phase 17 sits directly below the fixes.
   mixed-profile lake the testers created by accident in round 3. State that
   outlives compose volumes must be addressed explicitly; a required `--profile`
   is the cheapest possible form of explicit, and the env-var shortcut is what
-  was banned. `lake/` is not a junk drawer (eight modules, one role each); the
+  was banned. `lake/` is not a junk drawer (ten modules, one role each); the
   smell is the lander/reader PAIRS — rule of three, BACKLOG row, collapse on the
   third table.
-- **Review gate, rounds 4–5 (three things that only lived in code comments,
+- **Review gate, rounds 4–5 (four things that only lived in code comments,
   now recorded).** (1) The `eval_meta` marker is stamped IN-PROCESS, after the
   load, by every populate path — the engine (`streaming.dataflow`), the reconcile
   job and `lake.destructive replay` — never a separate Makefile line: under `make
@@ -1317,7 +1317,10 @@ Phase 17 sits directly below the fixes.
   target-specific `export`, never make-interpolated into the recipe): a PROFILE
   of `x" ; touch pwned ; echo "` used to run its payload before the refusal — a
   real hole, closed and pinned (dry-run: the `case` is the first command and the
-  text appears nowhere; sandbox: nothing runs). Residual, stated: an
+  text appears nowhere; sandbox: nothing runs — that `case` guard was itself
+  superseded in round 3 by the one-process `lake/destructive.py`, after which a
+  quoted PROFILE still splits the recipe line but the detached `--yes` means the
+  action only aborts: the quote case joined the stated residuals below). Residual, stated: an
   environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
   `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
   single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
@@ -1335,7 +1338,8 @@ Phase 17 sits directly below the fixes.
   durable state that outlives compose volumes — that is the point; folding it
   into `make down` would make the record as ephemeral as a volume. The README
   says so in one sentence (Phase 19 makes it the first-screen honesty line). (7)
-  The continuous-follow framework label is "Phase 18+" everywhere (was a mix of
+  The continuous-follow framework label is "Phase 18+" in every living doc (frozen
+  specs keep their wording; was a mix of
   17+/18+): Phase 18's spec does not decide it either; the label means "after
   18". (8) Phase 18 gets its own gate for the loader-owned dirty set and a
   corrected DONE command — both on the BACKLOG amendment row, so they are in the
@@ -1362,7 +1366,7 @@ Phase 17 sits directly below the fixes.
   orchestrated pass cannot stamp a different version than `make run` (review
   gate). Recorded as a Phase-18 question — it interacts with the dirty-set
   design (BACKLOG, Phase-18 spec row).
-- **`make replay-serving` TRUNCATEs the two landed tables under explicit
+- **`make replay-serving` TRUNCATEs the two landed tables — and `eval_meta` — under explicit
   confirmation — and refuses an empty lake.** Truncating the serving tables to
   reload nothing would be data loss with a green exit code (review gate):
   `lake_days()` must be non-empty before the TRUNCATE (`EmptyLakeError`).

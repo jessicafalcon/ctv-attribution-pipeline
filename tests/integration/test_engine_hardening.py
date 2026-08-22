@@ -1,7 +1,8 @@
 """Feature 3 — LIVE medium hardening proof against a CLEAN medium-only stack
-(`make test-int-medium`: make down && up && seed medium && run medium). This is
-NOT part of the shared `make test-int`, which stays tiny-only: tiny and medium
-share conversion_id space (both start at c-000000), so a shared stack would
+(`make test-int-medium`: make down && lake-reset && up && seed medium && run-hot
+medium). This is NOT part of the shared `make test-int`, which stays tiny-only:
+tiny and medium share conversion_id space (both start at c-000000), so a shared
+stack would
 interleave their ReplacingMergeTree rows and pollute FINAL (DECISIONS Phase 5).
 Isolation comes from the sanctioned `make down`, not a per-test TRUNCATE.
 

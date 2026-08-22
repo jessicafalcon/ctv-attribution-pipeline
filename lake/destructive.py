@@ -30,6 +30,8 @@ import sys
 from collections.abc import Callable
 
 from lake.iceberg_catalog import LakeRootUnset, _lake_root, configure, profile
+from lake.read_attributed import PrePhase17RowError
+from orchestration.replay import EmptyLakeError
 
 
 def confirm_or_abort(action: str, *, yes: bool) -> None:
@@ -72,7 +74,7 @@ def replay(yes: bool) -> None:
     then reload every day the lake holds (no broker). Refuses an empty lake
     before the prompt — truncating to reload nothing is data loss with a green
     exit code."""
-    from orchestration.replay import EmptyLakeError, lake_days, truncate_and_reload
+    from orchestration.replay import lake_days, truncate_and_reload
 
     days = lake_days()
     if not days:
@@ -146,10 +148,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         configure(args.profile)  # validates [a-z0-9_]+ BEFORE anything else
         ACTIONS[args.action](args.yes)
-    except (LakeRootUnset, ValueError) as e:
-        # Refusals are one line + exit 1. Anything else (a PermissionError from
-        # rmtree, a ClickHouse error) is a FAILURE and propagates with its
-        # traceback — a failure must not read as a refusal (review gate).
+    except (LakeRootUnset, EmptyLakeError, PrePhase17RowError) as e:
+        # Refusals — the explicit refusal classes only, never bare ValueError
+        # (a pydantic ValidationError would masquerade as one) — are one line +
+        # exit 1. Anything else (a PermissionError from rmtree, a ClickHouse
+        # error) is a FAILURE and propagates with its traceback.
         sys.exit(f"{args.action}: refusing — {e}")
 
 

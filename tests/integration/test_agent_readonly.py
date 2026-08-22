@@ -1,7 +1,8 @@
 """Phase-9 LIVE read-only proof on a CLEAN shared_ip_spike-only stack
-(`make test-int-agent`: make down && up && seed shared_ip_spike && run). NOT part of
-the shared `make test-int` (tiny-only): profiles share conversion_id space, so a
-shared stack interleaves ReplacingMergeTree rows (DECISIONS Phase 5).
+(`make test-int-agent`: make down && lake-reset && up && seed shared_ip_spike &&
+run). NOT part of the shared `make test-int` (tiny-only): profiles share
+conversion_id space, so a shared stack interleaves ReplacingMergeTree rows
+(DECISIONS Phase 5).
 
 Two things, both against the live database:
 - Done-when 2 (the DB-enforced guarantee): the agent's `agent_ro` user CANNOT write —

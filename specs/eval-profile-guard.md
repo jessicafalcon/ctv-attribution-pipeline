@@ -26,8 +26,7 @@ failure. Verified: `producer/generate.py` numbers ids sequentially.
 `streaming.dataflow`, `reconcile.reconcile`) do not take `--profile` — the engine
 reads from topics and never knows the profile name. Threading profile into the
 engine would touch the byte-identical path. Instead a **standalone marker-writer**
-(`clickhouse/write_marker.py`, `--profile`) is invoked by the populate make
-targets, where `PROFILE` is already in scope. The engine path stays untouched
+(`clickhouse/write_marker.py`, `--profile`) is called in-process by each populate path after its load (Phase 17; the standalone CLI this spec first described is gone), where `PROFILE` is already in scope. The engine path stays untouched
 and byte-identical.
 
 ## Deliverables

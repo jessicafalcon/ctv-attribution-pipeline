@@ -101,7 +101,7 @@ reconcile-dagster:
 	uv run python -m orchestration.run reconcile --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
 
 # Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
-# the rows of exposures_landed + attributed_conversions (TRUNCATE — destructive,
+# the rows of exposures_landed + attributed_conversions + eval_meta (TRUNCATE — destructive,
 # so CONFIRM=yes or the tty prompt), reloads every day the lake holds (hot AND
 # reconciled current rows), stamps eval_meta in the SAME process (one recipe
 # line — `make -i` cannot re-stamp after a refusal); `make eval` then reproduces the

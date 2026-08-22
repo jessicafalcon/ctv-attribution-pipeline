@@ -58,7 +58,7 @@ def test_current_docs_never_go_down_then_up_without_a_lake_reset() -> None:
     ]
     # … and every product .py file: an error MESSAGE that tells the user to
     # `make down && make up` is a documented chain too (round 5: the validator's).
-    for pkg in ("producer", "lake", "reconcile", "streaming", "orchestration"):
+    for pkg in ("producer", "lake", "reconcile", "streaming", "orchestration", "agent"):
         files += [str(p.relative_to(ROOT)) for p in (ROOT / pkg).rglob("*.py")]
     for rel in files:
         assert "make down && make up" not in (ROOT / rel).read_text(), rel

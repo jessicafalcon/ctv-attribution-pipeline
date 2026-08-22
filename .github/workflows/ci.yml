@@ -60,7 +60,7 @@ jobs:
       - run: make test-int
       # Reconciliation coverage: its rollup/restatement/RMT-supersession logic is
       # live-only (no offline oracle), so it must run in CI. Its own clean
-      # long_delay stack (the target does down && up && seed && run), which tiny
+      # long_delay stack (the target does down && lake-reset && up && seed && run), which tiny
       # can't substitute — tiny's 3 state-misses have no exposure inside 90d and
       # its 5 shared-IP deferrals (Phase 16) are in-window, so a long-window pass
       # recovers no state-miss there. Costs a second stack cycle.

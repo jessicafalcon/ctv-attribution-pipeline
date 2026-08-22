@@ -15,6 +15,7 @@ import pytest
 import orchestration.replay as rp
 from lake.land_exposures import land
 from producer.models import Exposure
+from tests._env import clean_env
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -94,6 +95,7 @@ def _dry_run(*args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        env=clean_env(),
     ).stdout
 
 

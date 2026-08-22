@@ -2,7 +2,8 @@
 5): rebuild the ClickHouse serving tables FROM THE LAKE with no Kafka involvement.
 Library code — the validate/confirm/act sequence lives in `lake.destructive`.
 
-Truncates `exposures_landed` and `attributed_conversions`, then materializes the
+Truncates `exposures_landed`, `attributed_conversions` and `eval_meta` (a stale
+marker over a half-loaded DB is what the guard refuses), then materializes the
 two load assets for EVERY day the lake holds — the days
 come from the data (distinct event_time days in both raw tables), never from the
 wall clock — so the current row per conversion_id (hot, or its later reconciled

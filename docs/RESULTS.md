@@ -124,11 +124,15 @@ over the `bench_large` serving tables (a multi-granule profile — `attributed_c
 granule every lever is a no-op). The pre-aggregation rollup (`make bench`, above) is the
 *least* specific lever; these are the specific, explainable ones a data platform rewards.
 Measured by `make cost-levers`, reusing `bench.py`'s canonicalization and summary reader.
-The block below is regenerated verbatim by that command:
+The block below is regenerated verbatim by that command. Caveat (Phase 17, kept
+OUTSIDE the block so a regeneration cannot erase it): the figures were measured on
+the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16)
+and `candidate_households` (Phase 17) and the projection is `select *`, so a re-run
+regenerates different byte figures — the direction asserts are what is pinned.
 
 <!-- COST_LEVERS_START -->
 
-_Measured by `make cost-levers` on `bench_large` (attributed_conversions 25,168 rows ≈ 3 granules; exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged steady state first; rows/bytes are ClickHouse's cache-independent `X-ClickHouse-Summary`. Re-run byte-stable on the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16) and `candidate_households` (Phase 17) and the projection is `select *`, so a re-run regenerates different byte figures — the direction asserts are what is pinned._
+_Measured by `make cost-levers` on `bench_large` (attributed_conversions 25,168 rows ≈ 3 granules; exposures_landed 55,000 ≈ 7 granules). Both tables canonicalized to merged steady state first; rows/bytes are ClickHouse's cache-independent `X-ClickHouse-Summary`. Re-run byte-stable._
 
 **Lever 1 — projection ordered by `event_time` (WINS).** A date-scoped reporting slice over `attributed_conversions`. The base table is sorted by `conversion_id`, so `event_time` is scattered across every granule and the range predicate prunes nothing; the projection keeps an alternate copy ordered by `event_time` that ClickHouse auto-picks for the range.
 
@@ -330,6 +334,8 @@ reconciled_conversions[2026-08-19] materialized
 ... (2026-08-20 … 2026-08-27, 2026-08-29 … 2026-08-31)
 reconcile-dagster: 15 day-partition(s) recovered + finalize
 ```
+(Phase-12 transcript; since Phase 17 the last line also reports the corrected rows
+reloaded over the touched days.)
 
 15 day-partitions cover all candidate days (13 before Phase 16; the 3 deferred
 shared-IP conversions add 2026-08-02 and 2026-08-09); the union reproduces the full

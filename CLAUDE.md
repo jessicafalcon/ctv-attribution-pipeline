@@ -136,7 +136,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (ephemeral instance, no webserver). `PARTITION=<YYYY-MM-DD>` materializes one day.
   Output is byte-identical to `make run`'s reconcile pass. Run after `make run-hot`
 - `make replay-serving PROFILE=<p> [CONFIRM=yes]` — rebuild the ClickHouse serving
-  tables FROM THE LAKE, no Kafka: TRUNCATE `exposures_landed` +
+  tables FROM THE LAKE, no Kafka: TRUNCATE `exposures_landed` + `eval_meta` +
   `attributed_conversions` (destructive → prompts unless CONFIRM=yes), reload every
   day the lake holds (current rows: hot or reconciled), stamp `eval_meta` in the
   same process; `make eval` then reproduces the pins (Phase 17)
@@ -424,7 +424,10 @@ and their instructions forbid fixing, committing, or working around
 findings. A finding is fixed in the main session or explicitly accepted —
 never auto-fixed, ignored, or committed around.
 
-- `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
+- `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is;
+  since Phase 17 a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`,
+  which only the `make test-int*` targets export — so the hook cannot seed the
+  live broker or re-stamp `eval_meta`
   from trial-signal-assistant); after any .py edit inside this repo, runs
   pytest and blocks on red; treats "no tests collected" as skip. WIRING is
   local-only by design (a committed settings.json would auto-execute an

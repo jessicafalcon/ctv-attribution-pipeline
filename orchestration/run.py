@@ -37,6 +37,11 @@ from orchestration.assets import (
 )
 from reconcile.reconcile import candidate_days
 
+
+class UnknownPartitionError(ValueError):
+    """A day outside the static calendar — a refusal, not a failure."""
+
+
 _LOAD_ASSETS = (
     ("exposures", clickhouse_exposures_landed),
     ("attributed", clickhouse_attributed_conversions),
@@ -74,8 +79,8 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     known = DAY_PARTITIONS.get_partition_keys()
     unknown = sorted(d for d in days if d not in known)
     if unknown:
-        raise ValueError(
-            f"load: unknown day partition(s) {unknown} — the static day calendar "
+        raise UnknownPartitionError(
+            f"unknown day partition(s) {unknown} — the static day calendar "
             f"covers {known[0]} … {known[-1]} (orchestration.assets.DAY_PARTITIONS)"
         )
     instance = DagsterInstance.ephemeral()
@@ -135,7 +140,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"load: {loaded}")
         else:
             run_reconcile(args.partition)
-    except (LakeRootUnset, ValueError) as e:  # refusals: one line, exit 2
+    except (LakeRootUnset, UnknownPartitionError) as e:  # refusals: one line, exit 1
         sys.exit(f"{args.command}: {e}")
 
 
