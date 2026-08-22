@@ -31,6 +31,7 @@ from datetime import timedelta
 from confluent_kafka import Consumer
 from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
+from clickhouse.write_marker import write_marker
 from common.kafka import drain
 from lake.iceberg_catalog import configure
 from lake.land_attributed import land_attributed
@@ -224,6 +225,11 @@ def main(argv: list[str] | None = None) -> None:
     run = run_engine(broker)
     days = land_run(run)
     loaded = materialize_load(days)
+    # The eval_meta profile marker (BACKLOG 43) is stamped HERE, after the load,
+    # in the same process — never a separate recipe line that `make -i` would run
+    # over a failed engine (review gate, round 5; the replay path got the same
+    # treatment in round 4).
+    write_marker(args.profile)
     print(
         f"engine: {len(run.exposures)} exposures, {run.resolved} resolved "
         f"({run.suppressed} re-sends deduped) → lake raw.exposures + "

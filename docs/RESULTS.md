@@ -32,8 +32,8 @@ real failure mode, wrong-household (shared-IP) attribution.
   on `tiny` is a labeled diagnostic only (3/47 = 0.064), never the headline.
 - **Hot recall below 1.0 on `tiny`/`medium` is the Phase-16 deferral, not a miss.**
   tiny's 3 and medium's 1 caused shared-IP conversions are emitted unattributed
-  (reason ambiguous_ip) and credited by the reconciliation pass, which re-enumerates
-  the candidate households from the device graph and applies the most-recent-exposure
+  (reason ambiguous_ip) and credited by the reconciliation pass, which explodes the row's persisted
+  `candidate_households` (Phase 17 — no device graph, no broker) and applies the most-recent-exposure
   rule there. Post-reconcile, tiny is 52/35/35 and medium 130/92/92 — exactly the
   pre-Phase-16 hot numbers. Same answer after reconciliation; fewer moving parts.
 - **`long_delay` is the reconciliation story.** Its caused conversions arrive days

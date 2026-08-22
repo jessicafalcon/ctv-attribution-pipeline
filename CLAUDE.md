@@ -83,11 +83,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (`raw.exposures`, `raw.attributed_conversions`, `day × bucket(8, household_id)`),
   landing (returns touched days), DuckDB reads (dedup / argMax current),
   `load_serving.py` (the ONE ClickHouse writer of the landed tables),
-  `maintenance.py` (compact + expire). Data under gitignored `data/lake/<profile>/`.
+  `maintenance.py` (compact + expire), `destructive.py` (the THREE destructive paths
+  — `reset | replay | maintain` — one process each: validate the profile, derive
+  the root, tty prompt, act; `replay` stamps `eval_meta` in-process). Data under
+  gitignored `data/lake/<profile>/`.
 - `orchestration/` — Dagster assets: per-day lake → ClickHouse load, day-partitioned
-  bucket-aligned reconciliation, finalize; `lake_maintenance` job; ONE headless CLI,
-  `run.py` (`load | reconcile | replay | maintain`, `--profile` required on each —
-  it binds the lake), with `replay.py` / `maintenance.py` as its library code.
+  bucket-aligned reconciliation, finalize; the `lake_maintenance` job (not
+  registered in the UI code location — destructive, one entry point); ONE headless
+  CLI, `run.py` (`load | reconcile`, `--profile` required — it binds the lake);
+  `replay.py` / `maintenance.py` are library code for `lake/destructive.py`.
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
 - `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).

@@ -101,6 +101,33 @@ def test_a_late_row_touches_its_old_event_day_not_its_ingest_day() -> None:
     assert land([late]) == {"2026-08-05"}  # the day to RELOAD, not 2026-08-20
 
 
+def test_engine_driver_stamps_eval_meta_only_after_a_successful_load(
+    monkeypatch,
+) -> None:
+    # Round 5: the marker is written in-process AFTER the load; a failing load
+    # (or engine) leaves the marker untouched — never a green marker over a
+    # failed step.
+    import orchestration.run as run
+
+    run_ = df.EngineRun(exposures=[_exp("e-1", T)], rows=[], resolved=0, suppressed=0)
+    events: list[str] = []
+    monkeypatch.setattr(df, "run_engine", lambda broker: run_)
+    monkeypatch.setattr(df, "write_marker", lambda p: events.append(f"marker:{p}"))
+
+    def boom(days):
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr(run, "materialize_load", boom)
+    with pytest.raises(RuntimeError):
+        df.main(["--profile", "tiny"])
+    assert events == []
+    monkeypatch.setattr(
+        run, "materialize_load", lambda days: {"exposures": 1, "attributed": 0}
+    )
+    df.main(["--profile", "tiny"])
+    assert events == ["marker:tiny"]
+
+
 def test_engine_driver_loads_exactly_the_touched_days(monkeypatch, capsys) -> None:
     run = df.EngineRun(
         exposures=[_exp("e-1", T), _exp("e-2", T + timedelta(days=1))],
@@ -110,6 +137,7 @@ def test_engine_driver_loads_exactly_the_touched_days(monkeypatch, capsys) -> No
     )
     seen: list[set[str]] = []
     monkeypatch.setattr(df, "run_engine", lambda broker: run)
+    monkeypatch.setattr(df, "write_marker", lambda p: None)
     monkeypatch.setattr(
         orchestration.run,
         "materialize_load",

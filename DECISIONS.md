@@ -1232,6 +1232,28 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Review gate, rounds 4–5 (three things that only lived in code comments,
+  now recorded).** (1) The `eval_meta` marker is stamped IN-PROCESS, after the
+  load, by every populate path — the engine (`streaming.dataflow`), the reconcile
+  job and `lake.destructive replay` — never a separate Makefile line: under `make
+  -i` a separate line stamps a green marker over a failed step, the wrong-profile
+  scoring bug (BACKLOG 43) in a new coat; pinned (a failing load leaves the marker
+  untouched). This supersedes the Phase-6/PR-#25 "standalone write_marker step"
+  argument, whose premise (the engine never knows the profile) no longer holds.
+  (2) `lake-reset` RAISES on a failed removal (exit 1, no "removed"): a
+  clean-stack target that says "removed" over a stale lake loads that lake and
+  shifts the pins silently (pinned with an unremovable root). (3) One scrub list
+  (`tests/_env.py`) for every test that runs a real recipe or the destructive
+  CLI in a subprocess — LAKE_ROOT, PYTEST_CURRENT_TEST, CONFIRM, MAKEFLAGS — pinned
+  so no helper grows its own. (4) The Dagster UI code location registers NO jobs:
+  `lake_maintenance` rewrites the record's data files, is destructive by this
+  repo's definition, and has exactly one entry point — the prompting
+  `lake.destructive maintain`; the UI is a viewer plus a profile-bound
+  materialize of the non-destructive assets. Threat model, restated once: these
+  guards are for mistakes — typos, stray env, a wrong-profile stack, a wrong
+  `-C` — not for a user who controls the environment. Every destructive prompt
+  prints the RESOLVED root, so a wrong working directory is visible at the one
+  place it can be caught.
 - **Review gate, round 3: stop hardening shell guards in Make — the destructive
   paths are one Python process, and the threat model is written down.** Rounds 2
   and 3 each found a new hole in the guard the previous round added (`$(origin
@@ -1703,7 +1725,11 @@ Phase 17 sits directly below the fixes.
     folded it into the engine) do not take `--profile`
     — the engine reads from topics and never knows the profile name. Threading it in
     would touch the byte-identical path; a standalone `write_marker.py` step in the
-    populate targets keeps the engine untouched.
+    populate targets keeps the engine untouched. *(Superseded in Phase 17: every
+    stage takes a required `--profile` — it binds the lake of record — and stamps
+    the marker in-process after its load; a separate recipe line would be run by
+    `make -i` over a failed step. The marker stays a table off the golden path;
+    only WHO writes it moved.)*
   - **Why a versionless single-row RMT keyed on a constant, no timestamp:** the marker
     must be deterministic (off the golden-compared path, so gate-0 stays byte-identical)
     and replay-idempotent. Constant key `k=0` makes every write replace the one row; no

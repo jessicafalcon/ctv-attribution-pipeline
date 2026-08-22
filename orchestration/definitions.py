@@ -1,7 +1,8 @@
 """Dagster Definitions — the code location the webserver loads.
 
 `make dagster-ui` = `DAGSTER_PROFILE=<p> dagster dev -m orchestration.definitions`:
-the asset-graph viewer, with materialize working for the ONE profile bound here
+the asset-graph viewer, with materialize of the non-destructive assets working for
+the ONE profile bound here
 (there is no default lake root — an unbound code location renders the graph but
 every asset fails loud with `LakeRootUnset`). The headless CLI
 (`orchestration.run`) binds its own profile from `--profile` and never loads this.
@@ -20,7 +21,6 @@ from orchestration.assets import (
     reconciled_conversions,
     reconciled_report,
 )
-from orchestration.maintenance import lake_maintenance
 
 if os.environ.get("DAGSTER_PROFILE"):
     configure(os.environ["DAGSTER_PROFILE"])
@@ -34,5 +34,8 @@ defs = Definitions(
         reconciled_conversions,
         reconciled_report,
     ],
-    jobs=[lake_maintenance],
+    # No jobs: `lake_maintenance` rewrites the record's data files — destructive
+    # by this repo's definition — and has exactly ONE entry point, the prompting
+    # `lake.destructive maintain` (review gate, round 5). The UI is a viewer plus
+    # a profile-bound materialize of the NON-destructive assets.
 )

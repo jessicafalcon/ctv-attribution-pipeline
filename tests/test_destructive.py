@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._env import clean_env
+
 REPO_ROOT = Path(__file__).parent.parent
 INJECTION = 'x" ; touch pwned ; echo "'
 
@@ -18,17 +20,12 @@ INJECTION = 'x" ; touch pwned ; echo "'
 def _run(tmp_path: Path, *args: str, env: dict | None = None, stdin=subprocess.DEVNULL):
     (tmp_path / "data" / "lake" / "tiny").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "x").mkdir(exist_ok=True)
-    clean = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"LAKE_ROOT", "PYTEST_CURRENT_TEST"}
-    }
     return subprocess.run(
         [sys.executable, "-m", "lake.destructive", *args],
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        env={**clean, "PYTHONPATH": str(REPO_ROOT), **(env or {})},
+        env=clean_env(PYTHONPATH=str(REPO_ROOT), **(env or {})),
         stdin=stdin,
     )
 
@@ -64,7 +61,6 @@ def test_reset_that_cannot_remove_fails_loud_not_green(tmp_path: Path) -> None:
     # would load that stale lake and shift the pins silently (round 4). Make the
     # root unremovable (a non-writable subdirectory holding a file) and assert a
     # non-zero exit with no "removed".
-    import os
     import stat
 
     locked = tmp_path / "data" / "lake" / "tiny" / "locked"

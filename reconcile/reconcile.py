@@ -53,6 +53,7 @@ from prometheus_client import REGISTRY, start_http_server, write_to_textfile
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
+from clickhouse.write_marker import write_marker
 from lake.iceberg_catalog import bucket_of, configure
 from lake.land_attributed import land_attributed
 from lake.read_attributed import read_current
@@ -334,6 +335,7 @@ def main(argv: list[str] | None = None) -> None:
         start_http_server(args.metrics_port, addr="127.0.0.1")
     configure(args.profile)
     counts = run()
+    write_marker(args.profile)  # in-process, after the pass (see streaming.dataflow)
     print(
         f"reconcile: {counts['candidates']} candidates → "
         f"{counts['recovered']} recovered, {counts['still_missing']} still missing "

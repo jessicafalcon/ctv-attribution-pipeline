@@ -51,7 +51,8 @@ def reset(yes: bool) -> None:
     profile. The second sanctioned destructive path (spec D9)."""
     root = _lake_root()
     confirm_or_abort(
-        f"lake-reset deletes {root} (the lake of record for PROFILE={profile()})",
+        f"lake-reset deletes {root.resolve()} (the lake of record for "
+        f"PROFILE={profile()})",
         yes=yes,
     )
     # Let a failed removal RAISE (exit 1, no "removed"): a clean-stack target
@@ -59,7 +60,7 @@ def reset(yes: bool) -> None:
     # shift the pins silently (review gate, round 4). A missing root is fine.
     if root.exists():
         shutil.rmtree(root)
-    print(f"lake-reset: removed {root}")
+    print(f"lake-reset: removed {root.resolve()}")
 
 
 def replay(yes: bool) -> None:
@@ -78,7 +79,7 @@ def replay(yes: bool) -> None:
         )
     confirm_or_abort(
         "replay-serving TRUNCATEs exposures_landed + attributed_conversions and "
-        f"reloads {len(days)} day(s) from the lake",
+        f"reloads {len(days)} day(s) from the lake {_lake_root().resolve()}",
         yes=yes,
     )
     loaded = truncate_and_reload(days)
@@ -104,8 +105,8 @@ def maintain(yes: bool) -> None:
     from orchestration.maintenance import lake_maintenance
 
     confirm_or_abort(
-        f"lake-maintain rewrites the data files of {_lake_root()} (row content "
-        "unchanged) and expires old snapshots",
+        f"lake-maintain rewrites the data files of {_lake_root().resolve()} "
+        "(row content unchanged) and expires old snapshots",
         yes=yes,
     )
     result = lake_maintenance.execute_in_process()

@@ -88,9 +88,6 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
             if re.search(r"\bmake (run|run-hot)\b", ln)
             for t in _profile_tokens(ln)
         }
-        markers = {
-            t for ln in lines if "write_marker" in ln for t in _profile_tokens(ln)
-        }
         resets = {
             t
             for ln in lines
@@ -99,7 +96,9 @@ def test_every_isolated_live_target_seeds_populates_and_marks_one_profile() -> N
         }
         assert len(seeds) == 1, f"{target}: seed profiles {seeds}"
         assert populates == seeds, f"{target}: populate {populates} != seed {seeds}"
-        assert markers == seeds, f"{target}: eval_meta marker {markers} != seed {seeds}"
+        # eval_meta is stamped in-process by the populate step (no write_marker
+        # recipe line anywhere — `make -i` must not stamp over a failed step)
+        assert not any("write_marker" in ln for ln in lines), target
         # Phase 17: a clean stack is a clean lake — the target resets ITS profile's
         # lake (explicit CONFIRM=yes), else run-hot would reload an older pass.
         assert resets == seeds, f"{target}: lake-reset {resets} != seed {seeds}"
