@@ -140,8 +140,10 @@ make test && make lint && make test-alerts \
 This spec was written before Phase 17 merged (PR #31) and its body has NOT been
 rewritten — that rewrite is this branch's commit 1 (CLAUDE.md Workflow rules:
 spec-reconciliation amendment first, stop for approval, no implementation before
-it is approved). The amendment must resolve the items of BACKLOG row 56 (Phase-17
-coherence audit D2 + Q3/Q4) that fall in this half:
+it is approved). The amendment must resolve the items of the BACKLOG row "Phase 18
+spec needs a Phase-17 follow-up edit BEFORE its branch opens (Phase-17 coherence
+audit D2)" (cited by TITLE — BACKLOG line numbers shift, Phase-19 audit D-b) that
+fall in this half:
 
 - **`streaming/sink.py` → the lake landing step.** Done-when 1 and 3 name the
   hot-path ClickHouse sink, deleted in Phase 17. The engine lands to the lake
@@ -151,6 +153,11 @@ coherence audit D2 + Q3/Q4) that fall in this half:
   down && make up && make seed PROFILE=long_delay && make run`) it no longer runs:
   it needs `make lake-reset PROFILE=long_delay CONFIRM=yes` after `make down` and
   `PROFILE=long_delay` on `make run` (the engine binds its lake from `--profile`).
+- **"cost writer user" → reuses `metrics_ro`.** Phase 18a creates ONE SELECT-only
+  ClickHouse user, `metrics_ro` (`clickhouse/users.d/metrics-ro.xml`); this spec's
+  Scope line "`clickhouse/users` (cost writer user)" and the pinned decision
+  "The scraper and cost writer use a separate user" must be rewritten to reuse it —
+  no second user (Phase-18a amendment, 2026-08-22).
 
 
 The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:
