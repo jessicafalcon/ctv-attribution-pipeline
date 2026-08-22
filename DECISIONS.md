@@ -2,7 +2,28 @@
 
 One entry per non-obvious choice. Order: Phases 0–11 oldest first, then the
 "Post-Phase-11 fixes" section, then the post-plan phases (12+) NEWEST FIRST —
-Phase 17 sits directly below the fixes.
+Phase 17 sits directly below the fixes. The "Process" section (2026-08-22, how the
+phases are run — not what they build) sits first.
+
+## Process
+
+- **Phase 19 (docs reshape) runs BEFORE 18a/18b (2026-08-22).** The Phase-16 and
+  Phase-17 review gates each took three rounds; the retrospective classified ~60 %
+  of the findings as record files lagging code (nine overlapping docs, ~8 places to
+  update per change, each fix round creating the next round's stragglers) and ~15 %
+  as spec clauses written before the predecessor phase landed. The docs
+  consolidation removes the drift tax that every later phase would otherwise pay
+  again: single-sourced numbers + one `make check-docs` with exact-token checks turn
+  most record findings into edit-time tool failures instead of review-round
+  findings. So 19 moves ahead of the two code phases that would otherwise pay the
+  tax twice. Same day, same cause, the structural fixes recorded in CLAUDE.md
+  Workflow rules: `specs/TEMPLATE.md` (Evidence / Record updates / Threat model
+  mandatory), spec finalized only after the predecessor merges (commit 1 = the
+  reconciliation amendment), ≤ ~6 items per spec (Phase 18 → 18a/18b), and the
+  "Before reporting DONE" self-review whose output the phase report must include.
+  Rejected: "think harder" at the gate — the findings were structural, not
+  attentional; rejected: reshaping after 18 (the original order) — that is
+  reshaping twice.
 
 ## Phase 0
 

@@ -56,6 +56,9 @@ missing their stage prefix.
   PHASES.md, never the spec/DECISIONS/RESULTS to match it — those are
   authoritative.)
 A stale record corrupts every future check — flag these as BLOCKERs.
+- Diff the spec's Record-updates list and the report's item-6 list against the
+  actual diff; any file on either list not in the diff is a finding.
+  (`specs/TEMPLATE.md` "Record updates"; CLAUDE.md "Before reporting DONE".)
 
 ### 4. Forward coherence
 Look at the NEXT phase in docs/PHASES.md. Does what was just built actually
