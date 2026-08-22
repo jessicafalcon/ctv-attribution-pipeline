@@ -146,7 +146,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   unless CONFIRM=yes. `make down` never touches `data/lake/`. The clean-stack
   `test-int-*` targets pass CONFIRM=yes for their own profile (a clean stack is a
   clean lake — the lake outlives `make down` and ClickHouse is loaded from it)
-- `make lake-maintain PROFILE=<p>` — the `lake_maintenance` Dagster job: compact
+- `make lake-maintain PROFILE=<p> [CONFIRM=yes]` — the `lake_maintenance` Dagster job (prompts unless CONFIRM=yes — it rewrites the record's data files): compact
   each day partition that accumulated >1 file per bucket (one file per (day,
   bucket)) and expire snapshots older than `LAKE_SNAPSHOT_MAX_AGE_DAYS` (7). Off
   the `make run` path; rows unchanged (Phase 17)
@@ -203,20 +203,20 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   (API tokens; ask first)
 - `make test` — pytest, no services, no network
 - `make test-int` — pytest against running compose stack (tiny profile)
-- `make test-int-medium` — clean medium-only stack (make down && up && seed
+- `make test-int-medium` — clean medium-only stack + lake (make down && lake-reset && up && seed
   medium && run-hot) → the Phase-5 live hardening proof (hot engine only — a
   reconcile pass would shift the pinned hot precision); isolated because
   tiny/medium share conversion_id space (DECISIONS Phase 5)
-- `make test-int-long-delay` — clean long_delay-only stack (make down && up && seed
+- `make test-int-long-delay` — clean long_delay-only stack + lake (make down && lake-reset && up && seed
   long_delay && run long_delay) → the Phase-6 live reconciliation proof; isolated
   for the same shared-conversion_id reason (DECISIONS Phase 5/6)
-- `make test-int-shared-ip` — clean shared_ip_spike-only stack (make down && up &&
+- `make test-int-shared-ip` — clean shared_ip_spike-only stack + lake (make down && lake-reset && up &&
   seed shared_ip_spike && run-hot; the test runs the reconcile pass itself) → the
   Phase-8/16 live fault-harness proof: hot `caused_wrong_household=0` (ambiguous
   deferred), post-reconcile 69/80 correct / 11 wrong-household (the fault observed,
   same pick the old hot reduce made), and the `AttributionContext` is populated;
   isolated for the same shared-conversion_id reason
-- `make test-int-agent` — clean shared_ip_spike-only stack (make down && up && seed &&
+- `make test-int-agent` — clean shared_ip_spike-only stack + lake (make down && lake-reset && up && seed &&
   run) → the Phase-9 live read-only proof: the SELECT-only `agent_ro` user cannot write
   (INSERT/ALTER/DROP/CREATE → ACCESS_DENIED) and the whole collector+probe read path
   runs under it (SN2). No LLM call, no API tokens; isolated for the same reason
@@ -485,7 +485,7 @@ the `specs/` file where one was cited.
 | 14 | 08-20 | #19 | *post-plan* — measured scaling curve: `make scale-curve` drains the real engine over 1k/10k/100k tiers → **~571 B/exposure** (→ ~8.6 TB extrapolation at 25k/s × 7d); tracemalloc console-only, never committed | PASSED (coherence BLOCKER — tracemalloc-in-doc non-idempotency — CLOSED) | `phase-14-scaling-curve` |
 | 15 | 08-20 | #18 | *post-plan* — runbook + incident log (`docs/RUNBOOK.md`): 2 incidents (CI benchmark FINAL read_rows; tz round-trip snapshots) + batch-drain limitation; neither is alert-covered (said so); `make check-runbook` trace check | PASSED | `phase-15-runbook` |
 | 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
-| 17 | 08-21 | — | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (2nd destructive path), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | pending review | `phase-17-lake-of-record` |
+| 17 | 08-21 | — | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (one of the three destructive paths, `lake/destructive.py`), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | pending review | `phase-17-lake-of-record` |
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).

@@ -235,6 +235,26 @@ campaign-grain number and every alert rule exactly where it was.
 
 ---
 
+## Known limitation — two state stores: a clean stack is not a clean lake
+
+Since Phase 17 the Iceberg lake under `data/lake/<profile>/` is the system of
+record and ClickHouse is loaded from it. `make down` removes compose volumes
+only; the lake outlives it on purpose (a record as ephemeral as a volume is not a
+record). Consequence: after any `make run`, a later `make run-hot` over the same
+profile loads the lake's CURRENT rows — which now include that pass's reconciled
+corrections — so a hot-only proof shifts its pins, and a second
+`make metrics-capture` sees zero reconcile candidates. Seen live in Phase 17
+(three of four lakehouse checks failed against a carried-over lake; a
+profile-mixed lake at a default root). The rule, everywhere a clean state is
+documented: `make down && make lake-reset PROFILE=<p> CONFIRM=yes && make up`,
+and the same `PROFILE=<p>` on every step — each entry point binds its own lake
+from `--profile` (no default root). The clean-stack `test-int-*` targets do
+this; `tests/test_clean_state_chains.py` pins every documented chain. See
+[`DECISIONS.md`](../DECISIONS.md) (Phase 17, "A clean stack is a clean lake")
+and [`lake/destructive.py`](../lake/destructive.py).
+
+---
+
 ## Known limitation — the engine is a batch drain, not a continuous follow
 
 Not a bug — a scope boundary, owned out loud so it isn't rediscovered as a

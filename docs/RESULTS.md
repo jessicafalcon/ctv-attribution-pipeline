@@ -336,7 +336,8 @@ shared-IP conversions add 2026-08-02 and 2026-08-09); the union reproduces the f
 recovery (recall 0.9733). Provenance: the transcript above was captured live in
 Phase 12 (13 days) and its day list re-derived OFFLINE for Phase 16 from the
 long_delay candidate set (the logic now in `reconcile.candidate_days()`, which reads
-the lake's current hot-unattributed rows; then, over the hot output), not re-captured from a live `make reconcile-dagster`; the 32-row recovery
+the lake's current hot-unattributed rows — applied, for this transcript, over the
+hot output), not re-captured from a live `make reconcile-dagster`; the 32-row recovery
 itself is live-pinned by `make test-int-lakehouse` / `test-int-long-delay`. Iceberg snapshot ids / commit times and Dagster run ids
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).

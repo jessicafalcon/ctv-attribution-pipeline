@@ -158,7 +158,7 @@ def test_mixed_topic_fanout_is_refused_with_a_reseed_message() -> None:
     # pair and an ambiguous row arrives with fewer candidates than its count. The
     # validator must name the real fix (re-seed a clean broker), not
     # "re-run the engine" (review gate, functionality-tester F3).
-    with pytest.raises(ValueError, match="MIXED topic.*re-seed"):
+    with pytest.raises(ValueError, match="MIXED profiles.*lake-reset"):
         attribute_household(
             [],
             [_res("c-1", "h-a", T, ambiguous=True, candidate_count=2)],

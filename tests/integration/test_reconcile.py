@@ -1,5 +1,5 @@
 """Phase-6 LIVE reconciliation proof on a CLEAN long_delay-only stack
-(`make test-int-long-delay`: make down && up && seed long_delay && run
+(`make test-int-long-delay`: make down && lake-reset && up && seed long_delay && run
 long_delay — where `run` is resolve → engine → reconcile). NOT part of the shared
 `make test-int` (tiny-only): tiny/medium/long_delay share conversion_id space, so
 a shared stack interleaves ReplacingMergeTree rows (DECISIONS Phase 5).

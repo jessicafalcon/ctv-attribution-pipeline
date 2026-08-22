@@ -74,6 +74,8 @@ def _check_traces(errors: list[str]) -> None:
         ("reconcile/reconcile.py", "toUnixTimestamp64Milli"),
         ("reconcile/reconcile.py", "_max_ingest"),
         ("lake/load_serving.py", "_utc"),
+        ("lake/destructive.py", "confirm_or_abort"),
+        ("tests/test_clean_state_chains.py", "lake-reset"),
         ("tests/test_tz_invariance.py", "tzset"),
         (
             "docs/ARCHITECTURE.md",

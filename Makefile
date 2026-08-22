@@ -66,9 +66,10 @@ resolve:
 # Phase 17: the lake is the record. One lake per PROFILE (profiles share
 # conversion_id space — the same isolation `make down` gives ClickHouse, without a
 # destructive step): engine and reconcile land under data/lake/<profile>/ (bound by
-# each entry point's --profile) and the Dagster load reads it back. Plain `=`, not `?=`: a child make re-derives it from
-# its own PROFILE instead of inheriting the parent's exported value (the
-# test-int-* targets run `$(MAKE) run PROFILE=<p>` from a tiny-default parent).
+# each entry point's --profile) and the Dagster load reads it back. Each
+# clean-stack test-int-* target pins `PROFILE` target-wide so its pytest line
+# (run by the parent make) binds the same lake as the `$(MAKE) run PROFILE=<p>`
+# child.
 # No LAKE_ROOT here: every Python entry point takes `--profile` and binds its own
 # lake (lake.iceberg_catalog.configure → data/lake/<profile>); LAKE_ROOT in the
 # environment is test-only (tmp fixtures) and refused outside pytest.
@@ -158,15 +159,6 @@ bench:
 cost-levers:
 	uv run python -m queries.measure_levers
 
-# Dump each stage's TERMINAL Prometheus registry from a REAL knobbed run to
-# textfiles under data/out/<profile>/metrics/. This is the provenance of the
-# promtool alert fixtures (observability/gen_alert_fixtures.py bakes these into
-# observability/rules/tests/alerts_test.yml): the threshold-crossing numbers come
-# from a real stage run, never hand-authored.
-# Live-stack (run after `make up && make seed PROFILE=<p>`): resolve_input_backlog
-# needs a real consumer and reconcile_restatement_roas_abs_delta needs ClickHouse
-# FINAL, so these two are not producible service-free — like test-int-long-delay.
-# The resolve_ series live in engine.prom since Phase 16 (resolve runs in-process).
 # Dump each stage's terminal Prometheus registry from a REAL run (the provenance
 # of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make
 # lake-reset PROFILE=<p> CONFIRM=yes && make up && make seed PROFILE=<p> && make

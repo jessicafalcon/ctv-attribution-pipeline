@@ -294,9 +294,8 @@ def run(client: Client | None = None) -> dict[str, int]:
     client = client or connect()
 
     # Imported at call time, not module top: the offline suites import this
-    # module (and streaming.dataflow) and must not pay for, or depend on, the
-    # Dagster stack; orchestration.replay's lazy import is the other reason — a
-    # genuine cycle (orchestration.run imports replay).
+    # module (and streaming.dataflow, and orchestration.replay) and must not pay
+    # for, or depend on, the Dagster stack. Same reason in all three places.
     from orchestration.run import materialize_load
 
     reconciled_at = reconciled_at_for(_max_ingest(client))

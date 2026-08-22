@@ -1,7 +1,8 @@
-"""`make replay-serving` (Done-when 5): truncate the two serving tables, reload every
-day the lake holds, stamp eval_meta. Offline: tmp lake, stub ClickHouse client,
-Dagster load captured at its seam. Also the Makefile side: the target stamps the
-marker for its PROFILE and passes --confirm only under CONFIRM=yes.
+"""`make replay-serving` (Done-when 5): truncate the serving tables, reload every
+day the lake holds, stamp eval_meta — all in one process (`lake.destructive
+replay`). Offline: tmp lake, stub ClickHouse client, Dagster load captured at its
+seam. Also the Makefile side: the recipe is one line and passes --yes only under
+a command-line CONFIRM=yes.
 """
 
 import re
@@ -66,7 +67,12 @@ def test_replay_truncates_both_tables_then_reloads_every_lake_day(monkeypatch) -
     assert client.commands == [
         "truncate table exposures_landed",
         "truncate table attributed_conversions",
+        "truncate table eval_meta",  # a stale marker over a half-loaded DB, never
     ]
+    # derived state is NOT touched by a replay (the next reconcile pass refreshes
+    # it) — the documented boundary, pinned
+    derived = ("campaign_hourly", "report_snapshots")
+    assert not any(d in c for c in client.commands for d in derived)
     assert loaded == [{"2026-08-01", "2026-08-05"}]
 
 

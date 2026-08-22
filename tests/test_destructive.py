@@ -81,7 +81,7 @@ def test_reset_that_cannot_remove_fails_loud_not_green(tmp_path: Path) -> None:
 def test_lake_root_env_is_refused_outside_pytest(tmp_path: Path) -> None:
     # LAKE_ROOT is a test-only override; an entry point refuses it.
     res = _run(tmp_path, "reset", "--profile", "tiny", "--yes", env={"LAKE_ROOT": "/"})
-    assert res.returncode != 0 and "test-only" in res.stderr
+    assert res.returncode != 0 and "LAKE_ROOT is set" in res.stderr
     assert (tmp_path / "data" / "lake" / "tiny").exists()
 
 

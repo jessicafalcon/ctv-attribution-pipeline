@@ -13,6 +13,7 @@ Phase 12): `load` is what the engine and the reconcile job call after landing,
 """
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from dagster import (
@@ -24,7 +25,7 @@ from dagster import (
 
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect
-from lake.iceberg_catalog import configure
+from lake.iceberg_catalog import LakeRootUnset, configure
 from orchestration.assets import (
     DAY_PARTITIONS,
     attributed_iceberg,
@@ -127,12 +128,15 @@ def main(argv: list[str] | None = None) -> None:
         "--partition", default=None, help="materialize only this day (YYYY-MM-DD)"
     )
     args = parser.parse_args(argv)
-    configure(args.profile)
-    if args.command == "load":
-        loaded = materialize_load(set(args.days))
-        print(f"load: {loaded}")
-    else:
-        run_reconcile(args.partition)
+    try:
+        configure(args.profile)
+        if args.command == "load":
+            loaded = materialize_load(set(args.days))
+            print(f"load: {loaded}")
+        else:
+            run_reconcile(args.partition)
+    except (LakeRootUnset, ValueError) as e:  # refusals: one line, exit 2
+        sys.exit(f"{args.command}: {e}")
 
 
 if __name__ == "__main__":

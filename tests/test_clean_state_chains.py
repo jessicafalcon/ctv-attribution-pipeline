@@ -49,13 +49,18 @@ def test_current_docs_never_go_down_then_up_without_a_lake_reset() -> None:
     # The negative form: `make down && make up` with nothing in between is the
     # stale pattern this guard exists to catch (living docs only; PHASES keeps
     # earlier phases' Done-when commands verbatim).
-    for rel in (
+    files = [
         "README.md",
         "CLAUDE.md",
         "specs/phase-17-lake-of-record.md",
         "docs/RESULTS.md",
         "Makefile",
-    ):
+    ]
+    # … and every product .py file: an error MESSAGE that tells the user to
+    # `make down && make up` is a documented chain too (round 5: the validator's).
+    for pkg in ("producer", "lake", "reconcile", "streaming", "orchestration"):
+        files += [str(p.relative_to(ROOT)) for p in (ROOT / pkg).rglob("*.py")]
+    for rel in files:
         assert "make down && make up" not in (ROOT / rel).read_text(), rel
 
 

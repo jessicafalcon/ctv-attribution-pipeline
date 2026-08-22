@@ -8,9 +8,10 @@
 2. The lake binding is process-global (`lake.iceberg_catalog._profile`); a test
    that binds a profile (a driver test calling `main(["--profile", …])`) must not
    leave it bound, or a later test that forgot its tmp-lake fixture would write to
-   the real data/lake/<profile> instead of raising `LakeRootUnset`. Reset per
-   test. CONFIRM / MAKEFLAGS are scrubbed so the Makefile guard tests see a clean
-   environment.
+   the real data/lake/<profile> instead of raising `LakeRootUnset`. Saved and
+   restored around each test: a module-scoped binding (the integration modules
+   bind the stack's profile) survives; a per-test one does not. CONFIRM /
+   MAKEFLAGS are scrubbed so the Makefile guard tests see a clean environment.
 """
 
 import os

@@ -19,15 +19,17 @@ What it guarantees: the profile is validated (`[a-z0-9_]+`, via
 `lake.iceberg_catalog.configure`) BEFORE anything else; the root is derived from
 the profile — there is no path argument to escape with; the prompt is answered
 only by a tty (`--yes` skips it; `n`, EOF or a non-tty print "aborted" and exit
-1); the action runs last.
+1); the action runs last. `LAKE_ROOT` in the environment is refused outright —
+this CLI has no path input of any kind.
 """
 
 import argparse
+import os
 import shutil
 import sys
 from collections.abc import Callable
 
-from lake.iceberg_catalog import _lake_root, configure, profile
+from lake.iceberg_catalog import LakeRootUnset, _lake_root, configure, profile
 
 
 def confirm_or_abort(action: str, *, yes: bool) -> None:
@@ -48,7 +50,7 @@ def confirm_or_abort(action: str, *, yes: bool) -> None:
 
 def reset(yes: bool) -> None:
     """`make lake-reset`: delete data/lake/<profile> — the lake of record for that
-    profile. The second sanctioned destructive path (spec D9)."""
+    profile. One of the three sanctioned destructive paths (spec D9)."""
     root = _lake_root()
     confirm_or_abort(
         f"lake-reset deletes {root.resolve()} (the lake of record for "
@@ -58,8 +60,10 @@ def reset(yes: bool) -> None:
     # Let a failed removal RAISE (exit 1, no "removed"): a clean-stack target
     # that reports "removed" over a stale lake would load that lake's rows and
     # shift the pins silently (review gate, round 4). A missing root is fine.
-    if root.exists():
-        shutil.rmtree(root)
+    if not root.exists():
+        print(f"lake-reset: nothing to remove at {root.resolve()}")
+        return
+    shutil.rmtree(root)
     print(f"lake-reset: removed {root.resolve()}")
 
 
@@ -131,10 +135,21 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--yes", action="store_true", help="skip the prompt")
     args = parser.parse_args(argv)
+    if os.environ.get("LAKE_ROOT"):
+        # Refused outright here, pytest or not: the destructive CLI derives its
+        # root from --profile and nothing else (closes the forged
+        # PYTEST_CURRENT_TEST path; the subprocess tests scrub both variables).
+        sys.exit(
+            f"{args.action}: refusing — LAKE_ROOT is set; this CLI binds its "
+            "lake from --profile only"
+        )
     try:
         configure(args.profile)  # validates [a-z0-9_]+ BEFORE anything else
         ACTIONS[args.action](args.yes)
-    except Exception as e:  # noqa: BLE001 — every refusal is one line + exit 1
+    except (LakeRootUnset, ValueError) as e:
+        # Refusals are one line + exit 1. Anything else (a PermissionError from
+        # rmtree, a ClickHouse error) is a FAILURE and propagates with its
+        # traceback — a failure must not read as a refusal (review gate).
         sys.exit(f"{args.action}: refusing — {e}")
 
 

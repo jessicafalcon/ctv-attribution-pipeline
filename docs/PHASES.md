@@ -339,7 +339,7 @@ engine → lake → Dagster load (touched days) → ClickHouse on every path,
 `--lake-land` / dual-write gone, the direct sink now `tests/oracle.py`;
 bucket-aligned reconcile over the lake == the single pass byte-for-byte
 (long_delay, shared_ip_spike); `make replay-serving` (Kafka-free), `make
-lake-reset` (2nd sanctioned destructive path, per-profile lake root), `make
+lake-reset` (one of three sanctioned destructive paths, all in `lake/destructive.py`; per-profile lake root), `make
 lake-maintain` (Dagster job). Every pin in `tests/pins.py` unchanged; the tiny
 golden re-frozen once for the additive column (0 decision changes — now a rule,
 DECISIONS Phase 17). Found live: clickhouse-connect writes naive datetimes as

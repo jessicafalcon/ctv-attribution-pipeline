@@ -1,5 +1,6 @@
 """Phase-8/16 LIVE proof on a CLEAN shared_ip_spike-only stack
-(`make test-int-shared-ip`: make down && up && seed shared_ip_spike && run-hot,
+(`make test-int-shared-ip`: make down && lake-reset && up && seed shared_ip_spike
+&& run-hot,
 then the reconcile pass runs IN this test so both sides are pinned). NOT part of
 the shared `make test-int` (tiny-only): profiles share conversion_id space, so a
 shared stack interleaves ReplacingMergeTree rows (DECISIONS Phase 5).

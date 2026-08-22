@@ -187,18 +187,32 @@ def test_confirm_counts_only_from_the_command_line(target: str) -> None:
 
 
 @pytest.mark.parametrize("flags", [[], ["-i"]])
-def test_lake_reset_hostile_profile_refused_even_under_make_i(
-    tmp_path: Path, flags
+@pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
+def test_hostile_profile_refused_even_under_make_i(
+    tmp_path: Path, flags: list[str], target: str
 ) -> None:
     # `make -i` steps over failed recipe LINES; it cannot step inside one process
-    # (round 3: the shell-level guard was bypassed exactly this way).
-    res = _make_in_sandbox(
-        tmp_path, *flags, "lake-reset", "PROFILE=../x", "CONFIRM=yes"
-    )
-    assert "refusing" in res.stdout + res.stderr
-    assert (tmp_path / "data" / "x").exists() and (
-        tmp_path / "data" / "lake" / "tiny"
-    ).exists()
+    # (round 3: the shell-level guard was bypassed exactly this way). Executed
+    # for all three targets (round 5) — a refused replay must not reach the
+    # eval_meta stamp either (it is in the same process, after the load).
+    res = _make_in_sandbox(tmp_path, *flags, target, "PROFILE=../x", "CONFIRM=yes")
+    out = res.stdout + res.stderr
+    assert "refusing" in out
+    assert "marker set" not in out and "removed" not in out
+    assert (tmp_path / "data" / "x").exists()
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+def test_docs_say_confirm_for_every_destructive_target() -> None:
+    # docs-vs-behaviour: each destructive target's CLAUDE.md Commands bullet
+    # names CONFIRM (round 5: lake-maintain's did not, and the live command
+    # aborts without it).
+    text = (REPO_ROOT / "CLAUDE.md").read_text()
+    for target in ("lake-reset", "replay-serving", "lake-maintain"):
+        pat = rf"^- `make {target} PROFILE=<p> \[CONFIRM=yes\]`"
+        assert re.search(pat, text, re.M), (
+            f"CLAUDE.md: `make {target}` must show CONFIRM"
+        )
 
 
 def test_lake_reset_without_confirm_aborts_even_under_make_i(tmp_path: Path) -> None:

@@ -1155,7 +1155,9 @@ Phase 17 sits directly below the fixes.
   exactly those partitions of both load assets. Partition keys stay the Phase-12
   static calendar; which ones run comes from the data, never "today". A late row
   lands in an old day and reloads that day.
-- **One lake per profile: `LAKE_ROOT = data/lake/$(PROFILE)`.** Profiles share
+- **One lake per profile: `data/lake/<profile>`, bound by each entry point's
+  `--profile` (the Makefile variable this bullet first described is gone — round
+  2 of the review gate; see the round-2 and round-3 entries).** Profiles share
   conversion_id space (DECISIONS Phase 5) and the lake outlives `make down`, so a
   shared lake would load tiny's current rows into a long_delay stack (seen live:
   510 = 360 + 150 exposures). Per-profile roots give the same isolation `make
@@ -1232,6 +1234,16 @@ Phase 17 sits directly below the fixes.
   `make run`, wall-clock by nature and therefore outside the byte-identical
   guarantee like all lake metadata. Live on long_delay: 14 attributed day
   partitions compacted, `make eval` unchanged after `replay-serving`.
+- **Lake-as-record, reaffirmed after five review rounds (developer ruling on
+  the audit's "would you make the decision again").** Every entry point must now
+  be told its profile — and that requirement is the PROOF the decision is right,
+  not a cost of it. The alternative, a global default root, is precisely the
+  mixed-profile lake the testers created by accident in round 3. State that
+  outlives compose volumes must be addressed explicitly; a required `--profile`
+  is the cheapest possible form of explicit, and the env-var shortcut is what
+  was banned. `lake/` is not a junk drawer (eight modules, one role each); the
+  smell is the lander/reader PAIRS — rule of three, BACKLOG row, collapse on the
+  third table.
 - **Review gate, rounds 4–5 (three things that only lived in code comments,
   now recorded).** (1) The `eval_meta` marker is stamped IN-PROCESS, after the
   load, by every populate path — the engine (`streaming.dataflow`), the reconcile
@@ -1355,7 +1367,7 @@ Phase 17 sits directly below the fixes.
   reload nothing would be data loss with a green exit code (review gate):
   `lake_days()` must be non-empty before the TRUNCATE (`EmptyLakeError`).
   The destructive-command rule allows TRUNCATE with explicit
-  confirmation; the Makefile passes `--confirm` only under `CONFIRM=yes`, else the
+  confirmation; the Makefile passes `--yes` only under a command-line `CONFIRM=yes`, else the
   runner prompts. The rollup/snapshot tables are derived and left alone (the next
   reconcile pass refreshes them); `eval_meta` is re-stamped. Days come from the
   data (`lake_days`: distinct event_time days in both raw tables). Live: 360
@@ -1439,7 +1451,8 @@ Phase 17 sits directly below the fixes.
   holds byte-for-byte — it was always a property of `attribute.py`. `bytewax` is
   out of `pyproject.toml`, `uv.lock` and the CLAUDE.md allowlist (the first package
   removal). Continuous follow is a framework choice (Bytewax proper vs Flink) for
-  Phase 17+, chosen with fresh eyes; SCALING.md's mapping table is retained as the
+  Phase 18+ ("after 18" — normalized in the Phase-17 review), chosen with fresh
+  eyes; SCALING.md's mapping table is retained as the
   port target, re-headed "Engine construct here".
 - **Fixture re-freeze: the one sanctioned exception, one commit, signed off.**
   `fixtures/tiny/expected/attributed.jsonl`: every line gains the new `reason`

@@ -78,7 +78,7 @@ class AttributedConversion(ResolvedConversion):
     — no in-window exposure in a certain household. Null when attributed.
     `candidate_households` (Phase 17) is the FULL candidate set the engine saw
     at deferral time — the shared IP's sorted owner households — and is the
-    truth reconciliation explodes over; `household_id` on an ambiguous row is
+    set reconciliation explodes over; `household_id` on an ambiguous row is
     the min-candidate placeholder, the RMT key, never a decision. Empty when
     `candidate_count == 1`. A reconciled credit keeps the array (provenance:
     the pick was made among these)."""
@@ -105,10 +105,11 @@ class AttributedConversion(ResolvedConversion):
             raise ValueError(
                 f"{self.conversion_id}: candidate_households must be the "
                 f"{self.candidate_count} sorted distinct candidates, got {hhs} "
-                "(fewer candidates than candidate_count usually means a MIXED "
-                "topic — two profiles' events under shared conversion_ids, so "
-                "dedup collapsed a fan-out pair; re-seed a clean broker: "
-                "make down && make up && make seed PROFILE=<p>)"
+                "(fewer candidates than candidate_count usually means MIXED "
+                "profiles under shared conversion_ids — a topic seeded twice, or "
+                "a lake carried over — so dedup collapsed a fan-out pair; start "
+                "clean: make down && make lake-reset PROFILE=<p> CONFIRM=yes && "
+                "make up && make seed PROFILE=<p>)"
             )
         if self.household_id not in hhs:
             raise ValueError(
