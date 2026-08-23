@@ -106,9 +106,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `scripts/` — the offline guards, none a pytest file: `check_docs.py` (the one
   docs guard, `make check-docs`; was `docs/check_runbook.py`, Phase 19),
   `review_gate.py` (`make review-gate`), `mutate.py` (`make mutate`),
-  `round_tag.py` (the `review-round-N` tag: write / read / the cap rule, all
-  code), `review_common.py` (their shared SPEC validator / section parser /
-  reduced child env — `review_common.py env <tree>` prints it for `env -i`).
+  `round_tag.py` (the `review-round-N` boundary tag: write / read, message
+  `round=N` and nothing else, ancestry-checked), `review_common.py` (their shared
+  SPEC validator / section parser / reduced child env — `review_common.py exec
+  <tree> -- <cmd>` runs a command under it with no shell between).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -454,15 +455,14 @@ standard way over the clever way.
 - Review cap: if two consecutive review rounds report correctness findings
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
-  fourth round of patches on patches. `scripts/round_tag.py cap N` is this rule
-  as code: "cap watch" after the FIRST such round, "CAP" after the second (N ≥ 3);
-  round 1 has no previous fixes (`cap=n/a`); a round with zero correctness
-  findings is `cap=no` (no findings is no evidence); round N−1's value is read
-  from its annotated tag with an anchored parser — a bad tag stops, never defaults.
+  fourth round of patches on patches. This is a rule a HUMAN applies — the
+  architect compares round N's finding table to round N−1's; `/review-round`
+  prints the table and the reminder, never a verdict (PR #35 spent rounds 3–5
+  hardening a cap parser the design did not need; deleted — DECISIONS "Process").
 - `/review-round N` is the review gate: its deterministic half (`make
   review-gate`, `make mutate`) runs before any agent is spawned, in every round.
-- Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
-  list (`/review-round N+1`). A finding on code NOT changed inside that range —
+- Scoped re-review: round N reviews round N−1's diff plus the spec's invariant
+  list (`/review-round N`). A finding on code NOT changed inside that range —
   code an earlier round already reviewed — is labelled **"missed in round N−1"**
   (N−1 = the round whose fixes the range covers; the one literal form)
   so the review's own drift is visible alongside the code's.
@@ -528,10 +528,12 @@ Index only — hooks fire from the developer's local, gitignored
 `.claude/settings.local.json`; agents and commands self-describe in their
 own files. All agents are report-only by contract: none carry Write/Edit
 (one stated carve-out: functionality-tester may `git worktree add` a throwaway
-checkout under `mktemp -d`, mutate THERE, and remove it — a write to the system
-temp dir plus a registration under `.git/worktrees/`, never an edit in the
-working tree; `git status --porcelain` AND `git worktree list` must match before
-and after),
+checkout under `mktemp -d`, mutate THERE or run a service-free record-rewriting
+DONE command THERE, and remove it — a write to the system temp dir plus a
+registration under `.git/worktrees/`, never an edit in the working tree; `git
+status --porcelain` AND `git worktree list` must match before and after; a
+command that needs the live stack or issues DDL on it is never run by an agent
+unasked),
 and their instructions forbid fixing, committing, or working around
 findings. A finding is fixed in the main session or explicitly accepted —
 never auto-fixed, ignored, or committed around.
@@ -572,19 +574,17 @@ never auto-fixed, ignored, or committed around.
   commit (suite, DONE command, determinism, fixtures), then stops.
 - `/review-round N` command — `.claude/commands/review-round.md`; phase branches
   only (a `tooling/*` / `fix/*` / `docs/*` branch gets one line — run the agents
-  directly, the PR-#35 precedent). Checks the `review-round-N` tag is new, runs
+  directly, the PR-#35 precedent). Refuses an existing `review-round-N` tag, runs
   `make review-gate` + `make mutate` first (red → no agents spawned), derives the
-  range (round 1 `main...HEAD`; round N the local tag `review-round-(N−1)..HEAD`),
-  prints the spec's Invariants list, runs code-reviewer + functionality-tester
-  scoped to the range with the "missed in round N−1" labelling (+
-  security-reviewer in round 1 when CI / compose / ClickHouse users / .env /
-  agent are touched), then writes the round's ANNOTATED local tag (six `key=value`
-  lines: round, range, agents, correctness, cap, gate — never pushed) BEFORE the cap check, prints the
-  consolidated finding table and the CAP / "cap watch" / "no cap" line, then
-  stops — the tag written and read by `scripts/round_tag.py`, and the cap check
-  run as `round_tag.py cap N` (the two-round rule as code): a missing or
-  unparsable previous tag is a parse error that STOPS the command, never a
-  default. Read-only, report-only.
+  range (round 1 `main...HEAD`; round N `review-round-(N−1)..HEAD`, the tag
+  verified by `scripts/round_tag.py read` — message exactly `round=N−1`, an
+  ancestor of HEAD, else STOP), prints the spec's Invariants list, runs
+  code-reviewer + functionality-tester scoped to the range with the "missed in
+  round N−1" labelling (+ security-reviewer in round 1 when CI / compose /
+  ClickHouse users / .env / agent are touched), prints the consolidated finding
+  table, tags HEAD with `round_tag.py write N` (local, never pushed; the tag
+  carries the round number and nothing else), and prints "Cap is the
+  architect's call: compare this table to round N−1's". Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 

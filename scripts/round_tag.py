@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""The round record: `review-round-N` annotated tags, written and read by CODE.
+"""The round boundary: `review-round-N` annotated tags, written and read by CODE.
 
-DECISIONS "Process" (2026-08-23): model-written text reaches a control decision
-only through fixed fields a script parses; never free text. `/review-round`
-calls this script — it never composes or parses a tag message itself.
+DECISIONS "Process" (2026-08-23): model-written text never reaches an oracle;
+the tag carries a round number and nothing else. The tag is a RANGE BOUNDARY —
+round N+1 reviews `review-round-N..HEAD` — so the only things that matter are
+that it names the right round and that it is on this branch's history.
 
-    round_tag.py write N --range R --agents a,b --correctness K --cap yes|no|n/a
-                 --gate "review-gate:OK mutate:k/s/e"       → tags HEAD, local only
-    round_tag.py read N                                      → prints the six fields
-    round_tag.py cap N --this yes|no|n/a                     → CAP | cap watch | no cap
+    round_tag.py write N   → tags HEAD `review-round-N` with the message `round=N`
+    round_tag.py read N    → prints `round=N` after the anchored parse + ancestry check
 
-The message is EXACTLY six `key=value` lines, each value matched by its own
-pattern; a trailing blank line (git adds one) is stripped before the anchored
-parse; anything else — a seventh line, a missing key, a value outside its
-pattern, finding text anywhere — is a parse error: exit 2, never a default.
-Round 1 writes `cap=n/a` (no previous fixes) and `cap N` with N=1 never reads a
-tag; N ≥ 2 reads `review-round-(N−1)`. `correctness=0` forces `cap=no`: the cap is
-about findings INSIDE the previous diff, and no findings is no evidence. Two
-clean rounds therefore print "no cap". Never pushes; never a pytest file."""
+`read` is a parse error (exit 2) when the tag is missing, its message is not
+exactly the one line `round=N`, or it is not an ancestor of HEAD (a tag from
+another branch is not this branch's boundary — `git merge-base --is-ancestor`).
+Never a default. No cap field, no counts: the two-round cap is the architect's
+call, made by comparing round N's table to round N−1's (CLAUDE.md Workflow
+rules). Both commands refuse to run outside this repo's checkout (the script
+binds ROOT; a second checkout must not tag this one). Never pushes; not a
+pytest file."""
 
 from __future__ import annotations
 
@@ -29,105 +28,64 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_common import ROOT, Refused, die, run  # noqa: E402
 
-KEYS = ("round", "range", "agents", "correctness", "cap", "gate")
-PATTERNS = {
-    "round": re.compile(r"^[1-9][0-9]*$"),
-    "range": re.compile(r"^[A-Za-z0-9_./-]+\.{2,3}[A-Za-z0-9_./-]+$"),
-    "agents": re.compile(r"^[a-z-]+(,[a-z-]+)*$"),
-    "correctness": re.compile(r"^(0|[1-9][0-9]*)$"),
-    "cap": re.compile(r"^(yes|no|n/a)$"),
-    "gate": re.compile(
-        r"^review-gate:(OK|FAIL) mutate:"
-        r"(0|[1-9][0-9]*)/(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$"
-    ),
-}
-CAP_LINE = "CAP: fixes are generating findings — write the invariant, re-implement once"
-WATCH_LINE = "cap watch: one more such round trips the cap"
+_LINE = re.compile(r"^round=([1-9][0-9]*)$")
 
 
 def tag_name(n: int) -> str:
     return f"review-round-{n}"
 
 
-def parse(message: str, n: int | None = None) -> dict[str, str]:
-    """Anchored parse of a tag message → the six fields; Refused on any deviation."""
-    if message.endswith("\n"):  # git appends exactly ONE trailing newline
+def check_cwd(root: Path = ROOT) -> None:
+    """Refuse unless the caller's cwd is inside THIS checkout (ROOT is bound to
+    the script's repo; a second checkout invoking it would tag this one)."""
+    code, out = run(["git", "rev-parse", "--show-toplevel"], Path.cwd())
+    if code != 0 or Path(out.strip()).resolve() != root.resolve():
+        raise Refused(f"refusing: run from inside {root} (cwd is another checkout)")
+
+
+def parse(message: str, n: int) -> int:
+    """Anchored parse: exactly the one line `round=N`, N matching. git appends
+    one newline to the stored message and `tag -l` one more; both stripped."""
+    if message.endswith("\n"):
         message = message[:-1]
-    lines = message.split("\n")
-    if len(lines) != len(KEYS):
-        raise Refused(f"parse error: expected {len(KEYS)} lines, got {len(lines)}")
-    fields: dict[str, str] = {}
-    for line, key in zip(lines, KEYS, strict=True):
-        k, sep, v = line.partition("=")
-        if not sep or k != key:
-            raise Refused(
-                f"parse error: line {len(fields) + 1} must be `{key}=…`, got {line!r}"
-            )
-        if not PATTERNS[key].match(v):
-            raise Refused(f"parse error: {key}={v!r} does not match its pattern")
-        fields[key] = v
-    if n is not None and int(fields["round"]) != n:
-        raise Refused(f"parse error: tag names round {fields['round']}, expected {n}")
-    if fields["round"] == "1":
-        if fields["cap"] != "n/a":
-            raise Refused("parse error: round 1 has no previous fixes; cap must be n/a")
-    elif fields["cap"] == "n/a":
-        raise Refused("parse error: cap=n/a is round 1 only")
-    elif fields["correctness"] == "0" and fields["cap"] != "no":
+    if message.endswith("\n"):
+        message = message[:-1]
+    m = _LINE.match(message)
+    if not m or "\n" in message:
         raise Refused(
-            "parse error: correctness=0 requires cap=no (no findings is no evidence)"
+            f"parse error: {tag_name(n)} message is not `round={n}`: {message!r}"
         )
-    return fields
+    if int(m.group(1)) != n:
+        raise Refused(
+            f"parse error: {tag_name(n)} names round {m.group(1)}, expected {n}"
+        )
+    return n
 
 
-def compose(
-    n: int, rng: str, agents: str, correctness: int, cap: str, gate: str
-) -> str:
-    fields = {
-        "round": str(n),
-        "range": rng,
-        "agents": agents,
-        "correctness": str(correctness),
-        "cap": cap,
-        "gate": gate,
-    }
-    message = "\n".join(f"{k}={fields[k]}" for k in KEYS)
-    parse(message, n)  # the writer validates with the reader: one shape
-    return message
-
-
-def read(n: int, root: Path = ROOT) -> dict[str, str]:
+def read(n: int, root: Path = ROOT) -> int:
     code, out = run(["git", "tag", "-l", "--format=%(contents)", tag_name(n)], root)
     if code != 0 or not out.strip():
-        raise Refused(f"parse error: tag {tag_name(n)} is missing — not a round record")
-    if out.endswith(
-        "\n"
-    ):  # `tag -l` terminates the entry; the stored message keeps its own
-        out = out[:-1]
-    return parse(out, n)
+        raise Refused(
+            f"parse error: tag {tag_name(n)} is missing — not a round boundary"
+        )
+    parse(out, n)
+    code, _ = run(["git", "merge-base", "--is-ancestor", tag_name(n), "HEAD"], root)
+    if code != 0:
+        raise Refused(
+            f"parse error: {tag_name(n)} is not an ancestor of HEAD — another "
+            "branch's round, not this one's boundary"
+        )
+    return n
 
 
-def write(n: int, message: str, root: Path = ROOT) -> None:
-    code, out = run(["git", "tag", "-l", tag_name(n)], root)
+def write(n: int, root: Path = ROOT) -> None:
+    _, out = run(["git", "tag", "-l", tag_name(n)], root)
     if out.strip():
         raise Refused(f"refusing: {tag_name(n)} exists — a round is reviewed once")
-    code, out = run(["git", "tag", "-a", tag_name(n), "HEAD", "-m", message], root)
+    code, out = run(["git", "tag", "-a", tag_name(n), "HEAD", "-m", f"round={n}"], root)
     if code != 0:
         raise Refused(f"git tag failed: {out.strip()}")
-    assert read(n, root)["round"] == str(n)  # read back what was written
-
-
-def cap_decision(n: int, this: str, root: Path = ROOT) -> str:
-    """The two-round rule as code. Round 1: no PREV. N ≥ 2: PREV is the previous
-    tag's cap, parsed anchored (a bad tag stops the command, never defaults)."""
-    if n == 1:
-        return "no cap (round 1: no previous fixes)"
-    prev = read(n - 1, root)["cap"]
-    if n >= 3 and this == "yes" and prev == "yes":
-        return CAP_LINE
-    if this == "yes":
-        return WATCH_LINE
-    return "no cap"
+    read(n, root)  # read back what was written, through the same parser
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -135,28 +93,18 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
-    w = sub.add_parser("write")
-    w.add_argument("n", type=int)
-    w.add_argument("--range", required=True, dest="rng")
-    w.add_argument("--agents", required=True)
-    w.add_argument("--correctness", required=True, type=int)
-    w.add_argument("--cap", required=True, choices=("yes", "no", "n/a"))
-    w.add_argument("--gate", required=True)
-    r = sub.add_parser("read")
-    r.add_argument("n", type=int)
-    c = sub.add_parser("cap")
-    c.add_argument("n", type=int)
-    c.add_argument("--this", required=True, choices=("yes", "no", "n/a"))
+    sub.add_parser("write").add_argument("n", type=int)
+    sub.add_parser("read").add_argument("n", type=int)
     a = ap.parse_args(argv)
     try:
+        check_cwd()
+        if a.n < 1:
+            raise Refused("refusing: N must be ≥ 1")
         if a.cmd == "write":
-            write(a.n, compose(a.n, a.rng, a.agents, a.correctness, a.cap, a.gate))
-            print(f"tagged {tag_name(a.n)} (local, annotated, six fields)")
-        elif a.cmd == "read":
-            for k, v in read(a.n).items():
-                print(f"{k}={v}")
+            write(a.n)
+            print(f"tagged {tag_name(a.n)} (local, annotated, message `round={a.n}`)")
         else:
-            print(cap_decision(a.n, a.this))
+            print(f"round={read(a.n)}")
     except Refused as e:
         die(str(e))
     return 0

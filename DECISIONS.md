@@ -216,17 +216,17 @@ below, never deleted.
   (a list nobody diffs is prose); **deleted-symbol grep** (self-review item 1 was
   the most-skipped item); **the mutation sweep** (`make mutate` — "delete this call,
   does the suite notice" found the real 18a bugs and is a loop, not a judgment);
-  **the round's diff range and the cap arithmetic** (`scripts/round_tag.py`: the
-  tag is written, read and the two-round rule decided by code — a local annotated
-  `review-round-N` tag, round N+1 reviews exactly what round N's fixes touched, no
-  hand-picked SHA). Still a PROCEDURE the command follows, not an automated edge:
-  the correctness COUNT the model passes to `round_tag.py write` is the model's
-  reading of its own table — nothing verifies it; everything downstream of that
-  number is code
+  **the round's diff range** (`scripts/round_tag.py`: a local annotated
+  `review-round-N` tag carrying `round=N` and nothing else, ancestry-checked —
+  round N+1 reviews exactly what round N's fixes touched, no hand-picked SHA).
+  NOT automated, by decision: the cap — the two-round rule is the architect's
+  call, made by comparing round N's finding table to round N−1's; the command
+  prints the table and the reminder, never a verdict
   (the written two-round rule: this round AND the previous one reported
   correctness findings only inside the previous round's fixes → print CAP; the
   first cut fired after one quiet round, and 18a is the evidence against that —
-  round 2 looked clean and round 3 found a BLOCKER inside round 2's fixes). Human,
+  round 2 found the per-key watermark bug (F1) inside round 1's fixes, and round
+  3 found a BLOCKER inside round 2's). Human,
   and why: **"is this finding real"** — a verdict needs the spec's intent, which
   only the reader of the spec holds; **"is this fix a design change"** — the
   Fix-amendments rule turns on what a change MEANS (a write path moved, not a line
@@ -237,11 +237,9 @@ below, never deleted.
   the cap can only be called from OUTSIDE the round: an agent inside the loop is
   the thing generating the findings it would have to stop, and 18a's three rounds
   were exactly a loop that could not see itself. The command therefore tags and
-  reports, and the scripts exit non-zero; the round's state is its ANNOTATED local
-  tag (six `key=value` lines: round, range, agents, correctness, cap, gate — the artifact the next
-  round's range derivation already reads; `data/` is disposable by design, so a
-  cap reading state from there would silently revert to one-round), read
-  fail-closed; `/review-round` is for phase branches only — tooling / fix / docs
+  reports, and the scripts exit non-zero; the round's boundary is its ANNOTATED
+  local tag (`round=N`, the artifact the next round's range derivation reads,
+  ancestry-checked); `/review-round` is for phase branches only — tooling / fix / docs
   PRs run the agents directly, as this one did; nothing in `scripts/review_gate.py` /
   `scripts/mutate.py` edits, commits, or pushes; the command's writes are a local
   tag and a temporary worktree, removed in `finally`. Two rulings from its review gate: `constant-return:<v>`
@@ -257,42 +255,43 @@ below, never deleted.
   safe inspection)
   after PR #35 merges. Until then the PROFILE residual stands as written.
 
-- **Model-authored text never reaches an oracle; it reaches a control decision
-  only through fixed fields a script parses, never free text (2026-08-23; PR #35
-  review cap, security track).** Rounds 2 and 3 each found a
-  hole inside the guard the previous round had added (`CTV_INT` on the sweep, then
-  `./tests/x.py` through a `startswith("tests/")` check) — the two-round cap fired
-  on the tooling branch itself, and this is the invariant it was re-implemented
-  against, once: *Model-authored text never reaches an oracle or a control
-  decision. The mutations block names where to mutate; the operators, the suite,
-  and the kill verdict are code. A prior round's tag message carries state only
-  in fixed-position fields that the parser anchors (`^key=value$`, exactly these
-  keys, anything else → parse error, never a default); finding text is never in
-  the tag. Paths from the spec are resolved once and gated on `Path.parts`, never
-  on string prefix.* Mechanisms that satisfy it: `scripts/mutate.py::_repo_path`
-  (one `normpath`, rules on the parts — pinned with `./tests/oracle.py`,
-  `tests/./oracle.py`, `lake/../tests/x.py`); the `review-round-N` tag message is
-  written and read by `scripts/round_tag.py` — exactly six `key=value` lines,
-  each value matched by its own pattern, git's one trailing newline stripped, any
-  deviation a parse error that stops the command (the scoped pass found the
-  first cut of this as PROSE in the command: unanchored values, a rule that
-  rejected git's own output, round 1 undefined — a parser that is prose cannot be
-  pinned, so the tag became a script, which is what the cap prescribed);
-  `cap=n/a` in round 1, `correctness=0` forces `cap=no` (no findings is no
-  evidence — two clean rounds print "no cap"), `round_tag.py cap N` is the
-  two-round rule as code; `gate=` keeps ERROR as a third state, never folded into
-  survived, and the verdict triple always sums to the mutation count (a worktree
-  registry change is a separate latched outcome); the functionality-tester's hand
-  worktree uses the interpreter captured absolutely in the main tree (not taken:
-  `uv run` inside the worktree — a second environment per mutation, and `uv sync`
-  is `make setup`'s job), the same `review_common.suite_env` environment through
-  `env -i` (one env builder, two callers), and compares `git worktree list`
-  before/after as its last step (the `try/finally` is `mutate.py`'s; the shell
-  recipe is linear — `git status` cannot see `.git/worktrees/`). Stated residuals, not fixes: the backticked `` `make …` ``
-  scraper checks the first target per span; `make_targets` reads `define` bodies
-  and column-0 continuations — both mitigated by the `.PHONY` equality pin, which
-  goes red on the first non-phony rule BY DESIGN: that rule then gets an explicit
-  entry.
+- **Model-written text never reaches an oracle; the tag carries a round number
+  and nothing else (2026-08-23; PR #35 review cap, security track).** Rounds 2
+  and 3 each found a hole inside the guard the previous round had added
+  (`CTV_INT` on the sweep, then `./tests/x.py` through a `startswith("tests/")`
+  check) — the two-round cap fired on the tooling branch itself. The invariant it
+  was re-implemented against, once: *model-written text never reaches an oracle;
+  the tag carries a round number and nothing else.* Mechanisms that satisfy it:
+  `scripts/mutate.py::_repo_path` (one `posixpath.normpath`, rules on the
+  `Path.parts`, `tests` casefolded — pinned with `./tests/oracle.py`,
+  `tests/./oracle.py`, `lake/../tests/x.py`, `TESTS/oracle.py`); the
+  `review-round-N` tag is a RANGE BOUNDARY written and read by
+  `scripts/round_tag.py` — message exactly `round=N`, anchored parse, and
+  `git merge-base --is-ancestor` so another branch's round can never be this
+  branch's boundary (refuses to run from another checkout); the
+  functionality-tester's hand worktree uses the interpreter captured absolutely
+  in the main tree and runs the suite through `review_common.py exec` — the same
+  `suite_env` as `mutate.py`, argv to argv, no shell (an `env -i $(…)` form
+  word-split a HOME with a space into a different command) — and compares
+  `git worktree list` before/after as its last step (`mutate.py` does the same
+  inside its `finally`; a registry change is a latched outcome of its own, and
+  KILLED + SURVIVED + ERROR always equals the mutation count). **Cut, same
+  entry:** rounds 3–5 of PR #35 were spent hardening a cap PARSER — a `cap=`
+  field in the tag, a `correctness=` count the model wrote, a `cap N` subcommand
+  deciding CAP from them. Each round found the previous round's parser wrong
+  (unanchored values, git's own trailing newline rejected, round 1 undefined,
+  this round's bit retyped as argv, a repo-global name readable from another
+  branch). The design never needed it: the two-round cap is the architect's
+  call, made by comparing two finding tables, and a human does that better than
+  a parser of model-written fields — so the cap automation was deleted, the tag
+  kept only the round number, and `/review-round` prints the table and "Cap is
+  the architect's call: compare this table to round N−1's". Not taken: an extra
+  invariant clause scoping what the cap may read — it would have added a clause
+  to keep a mechanism that should not exist. Stated residuals, not fixes: the
+  backticked `` `make …` `` scraper checks the first target per span;
+  `make_targets` reads `define` bodies and column-0 continuations — both
+  mitigated by the `.PHONY` equality pin, which goes red on the first non-phony
+  rule BY DESIGN: that rule then gets an explicit entry.
 
 - **Dates in every record are LOCAL dates (the developer's machine, `git log
   --format=%ci`), never GitHub's UTC merge timestamp (2026-08-22).** PR #34 merged at

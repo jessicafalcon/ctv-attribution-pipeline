@@ -385,120 +385,60 @@ def test_registry_change_is_its_own_latched_outcome(
 # ------------------------------------------------------------- round_tag
 
 
-def _tag(repo: Path, n: int, correctness: int, cap: str) -> None:
-    round_tag.write(
-        n,
-        round_tag.compose(
-            n,
-            "main...HEAD",
-            "code-reviewer,functionality-tester",
-            correctness,
-            cap,
-            "review-gate:OK mutate:3/0/0",
-        ),
-        repo,
-    )
-
-
-def test_round_tag_roundtrip_strips_gits_trailing_newline(repo: Path) -> None:
-    _tag(repo, 1, 2, "n/a")
-    fields = round_tag.read(1, repo)
-    assert fields == {
-        "round": "1",
-        "range": "main...HEAD",
-        "agents": "code-reviewer,functionality-tester",
-        "correctness": "2",
-        "cap": "n/a",
-        "gate": "review-gate:OK mutate:3/0/0",
-    }
+def test_round_tag_is_a_boundary_only(repo: Path) -> None:
+    round_tag.write(1, repo)
+    assert round_tag.read(1, repo) == 1
+    msg = _git(repo, "tag", "-l", "--format=%(contents)", "review-round-1")
+    assert msg == "round=1\n\n"  # git's newline + tag -l's; nothing else in it
     with pytest.raises(common.Refused, match="exists"):
-        _tag(repo, 1, 2, "n/a")
-
-
-def _msg(**over: str) -> str:
-    f = {
-        "round": "2",
-        "range": "a..b",
-        "agents": "code-reviewer",
-        "correctness": "2",
-        "cap": "yes",
-        "gate": "review-gate:OK mutate:1/0/0",
-    }
-    f.update(over)
-    return "\n".join(f"{k}={v}" for k, v in f.items())
+        round_tag.write(1, repo)
 
 
 @pytest.mark.parametrize(
-    "message",
-    [
-        _msg(correctness="2 (rollup version)"),  # finding text in a field
-        "\n".join(_msg().splitlines()[:5]),  # a key missing
-        _msg() + "\nnote: x",  # a seventh line
-        _msg(cap="maybe"),
-        _msg(correctness="0", cap="yes"),  # no findings is no evidence
-        _msg(round="1", cap="yes"),  # round 1 is n/a
-        _msg(cap="n/a"),  # n/a is round 1 only
-        _msg().replace("round=", "rounds=", 1),
-        _msg(gate="review-gate:OK mutate:-1/0/0"),
-    ],
+    "message", ["round=2", "round=1 ", "round=1\ncap=yes", "x", ""]
 )
 def test_round_tag_parse_is_anchored_and_never_defaults(message: str) -> None:
     with pytest.raises(common.Refused, match="parse error"):
-        round_tag.parse(message)
-
-
-def test_round_tag_parse_strips_one_trailing_newline_only() -> None:
-    assert round_tag.parse(_msg() + "\n")["cap"] == "yes"  # git's trailing newline
-    with pytest.raises(common.Refused, match="parse error"):
-        round_tag.parse(_msg() + "\n\n")
+        round_tag.parse(message + "\n\n", 1)
+    assert round_tag.parse("round=1\n\n", 1) == 1
 
 
 def test_round_tag_missing_or_tampered_tag_stops(repo: Path) -> None:
     with pytest.raises(common.Refused, match="missing"):
         round_tag.read(1, repo)
-    _git(repo, "tag", "-a", "review-round-1", "HEAD", "-m", "round=1\nfree text")
+    _git(repo, "tag", "-a", "review-round-1", "HEAD", "-m", "round=1\ncorrectness=2")
     with pytest.raises(common.Refused, match="parse error"):
         round_tag.read(1, repo)
-    with pytest.raises(common.Refused, match="parse error"):
-        round_tag.cap_decision(
-            2, "yes", repo
-        )  # a bad previous tag stops, never defaults
 
 
-def test_cap_rule_as_code(repo: Path) -> None:
-    assert round_tag.cap_decision(1, "n/a", repo).startswith(
-        "no cap"
-    )  # round 1 reads nothing
-    _tag(repo, 1, 3, "n/a")
-    assert round_tag.cap_decision(2, "yes", repo) == round_tag.WATCH_LINE
-    _tag(repo, 2, 2, "yes")
-    assert round_tag.cap_decision(3, "yes", repo) == round_tag.CAP_LINE
-    assert round_tag.cap_decision(3, "no", repo) == "no cap"
+def test_round_tag_requires_ancestry(repo: Path) -> None:
+    # another branch's round is not this branch's boundary
+    _git(repo, "checkout", "-q", "-b", "phase-a")
+    (repo / "a.txt").write_text("a\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "a")
+    round_tag.write(1, repo)
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "phase-b")
+    with pytest.raises(common.Refused, match="not an ancestor"):
+        round_tag.read(1, repo)
+    with pytest.raises(common.Refused, match="exists"):
+        round_tag.write(1, repo)  # the name is taken; the developer decides
 
 
-def test_two_clean_rounds_print_no_cap(repo: Path) -> None:
-    _tag(repo, 1, 0, "n/a")
-    _tag(repo, 2, 0, "no")  # zero findings is no evidence: compose forces cap=no
-    with pytest.raises(common.Refused, match="correctness=0 requires cap=no"):
-        round_tag.compose(
-            3, "a..b", "code-reviewer", 0, "yes", "review-gate:OK mutate:1/0/0"
-        )
-    assert round_tag.cap_decision(3, "no", repo) == "no cap"
+def test_round_tag_refuses_another_checkout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(common.Refused, match="another checkout"):
+        round_tag.check_cwd()
 
 
-def test_env_builder_has_two_callers(tmp_path: Path) -> None:
-    # the hand-mutation recipe runs `review_common.py env <tree>` into `env -i`
-    out = subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).parent.parent / "scripts" / "review_common.py"),
-            "env",
-            str(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    assert dict(ln.split("=", 1) for ln in out.splitlines()) == common.suite_env(
-        tmp_path
+def test_exec_under_suite_env_uses_no_shell(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-for-children")
+    code = common.exec_under_suite_env(
+        tmp_path, [sys.executable, "-c", "import os; print(sorted(os.environ))"]
     )
+    out = capsys.readouterr().out
+    assert code == 0
+    seen = set(eval(out.strip()))  # the interpreter adds LC_CTYPE etc. on macOS
+    assert {"CTV_INT", "HOME", "PATH", "PYTHONPATH"} <= seen
+    assert "ANTHROPIC_API_KEY" not in seen

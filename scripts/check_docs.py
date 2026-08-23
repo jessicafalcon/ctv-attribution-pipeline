@@ -316,8 +316,9 @@ TRACES: list[tuple[str, str]] = [
     ("scripts/mutate.py", "swap-sort-key"),
     ("specs/TEMPLATE.md", "```mutations"),
     (".claude/commands/review-round.md", "review-round-"),
-    ("scripts/round_tag.py", "cap_decision"),
-    ("tests/test_review_tools.py", "test_two_clean_rounds_print_no_cap"),
+    ("scripts/round_tag.py", "is-ancestor"),
+    ("tests/test_review_tools.py", "test_round_tag_requires_ancestry"),
+    ("scripts/review_common.py", "exec_under_suite_env"),
 ]
 
 

@@ -1,7 +1,11 @@
-"""Shared by scripts/review_gate.py and scripts/mutate.py (not a pytest file).
+"""Shared by scripts/review_gate.py, scripts/mutate.py and scripts/round_tag.py
+(not a pytest file).
 
-One spec-path validator, one section parser, one subprocess runner. No package
-beyond the stdlib (ast, subprocess, pathlib)."""
+One spec-path validator, one section parser, one subprocess runner, one reduced
+child environment (`suite_env`) — and `review_common.py exec <tree> -- <cmd…>`,
+which runs a command under that environment with NO shell in between (the
+functionality-tester's hand-mutation recipe; `mutate.py` calls `suite_env`
+directly). No package beyond the stdlib (subprocess, pathlib)."""
 
 from __future__ import annotations
 
@@ -76,9 +80,16 @@ def die(msg: str, code: int = 2) -> None:
     sys.exit(code)
 
 
-if __name__ == "__main__":  # `review_common.py env <tree>` → K=V lines for `env -i`
-    if len(sys.argv) == 3 and sys.argv[1] == "env":
-        for k, v in suite_env(Path(sys.argv[2])).items():
-            print(f"{k}={v}")
-        sys.exit(0)
-    die("usage: review_common.py env <worktree>")
+def exec_under_suite_env(tree: Path, cmd: list[str]) -> int:
+    """Run `cmd` with cwd=tree under `suite_env(tree)`; forward its exit code.
+    argv list, never a shell — `env -i $(…)` word-split a HOME with a space into
+    a different command (security review, PR #35, cap commit)."""
+    code, out = run(cmd, tree, env=suite_env(tree))
+    sys.stdout.write(out)
+    return code
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 4 and sys.argv[1] == "exec" and sys.argv[3] == "--":
+        sys.exit(exec_under_suite_env(Path(sys.argv[2]), sys.argv[4:]))
+    die("usage: review_common.py exec <worktree> -- <command…>")

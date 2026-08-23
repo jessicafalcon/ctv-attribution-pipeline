@@ -365,7 +365,7 @@ review-gate:
 # The mutation sweep (scripts/mutate.py): each line of the spec's ```mutations
 # block is applied to HEAD in a temporary git worktree (never this tree), the
 # offline suite runs there under a reduced env, the worktree is removed
-# (try/finally, which also asserts `git worktree list` unchanged). One verdict per
+# (try/finally, which also compares `git worktree list` before/after). One verdict per
 # mutation, KILLED / SURVIVED / ERROR, summing to the count; a registry change is a
 # separate latched REGISTRY line; exit 1 on any of them. SPEC validated in-process.
 mutate:

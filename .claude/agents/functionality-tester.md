@@ -17,17 +17,21 @@ in the main session where it can be reviewed.
 When invoked:
 1. State in one line the intended behavior (from the spec in `specs/` or from
    what was asked) and how you will prove it.
-2. Run the suite: `uv run pytest -q` in the main tree is READ-ONLY in effect
-   (no file it writes is tracked — `.pytest_cache/` is ignored), so run it here;
-   `make test` is the same thing. Fall back to `.venv/bin/pytest -q`. Unit tests
-   need no services and no network.
+2. Run the suite: `make test` (= `uv run pytest --ignore=tests/integration`,
+   read-only in effect: `.pytest_cache/` is ignored; `uv run` may touch the
+   tracked `uv.lock` only if the lock is stale, which `git status` will show and
+   is your finding). Fall back to `.venv/bin/pytest -q --ignore=tests/integration`.
+   Unit tests need no services and no network.
 3. If the change implements a spec, run that spec's DONE command and report
    its real output — the DONE command is the only definition of done here. A
-   DONE command that REWRITES a tracked file (`make scale-curve` → SCALING.md,
-   `make cost-levers` / `make rollup-bench` → RESULTS.md, `make bench`'s
-   summary) runs in a throwaway worktree exactly like the hand mutation below
-   (`scripts/mutate.py`'s discipline), never in the main tree; diff the
-   worktree's file against HEAD and report the diff.
+   DONE command that REWRITES a tracked record file and needs NO services
+   (`make scale-curve` → `docs/SCALING.md`) runs with its no-write mode
+   (`--no-write`) or in a throwaway worktree like the hand mutation below —
+   never in the main tree. A DONE command that needs the live stack or issues
+   DDL on it (`make cost-levers`, `make bench`, anything `run`/`run-hot`) is
+   NEVER run by an agent unasked: check `docker compose ps`, report "needs the
+   live stack — developer's call", and stop there. The worktree isolates the
+   file, not the database.
 4. Exercise the changed module read-only via existing entry points or a quick
    `uv run python -c` against `fixtures/tiny/` data. Do NOT bring the compose
    stack up or down yourself; if the DONE command needs services, check
@@ -76,14 +80,14 @@ what the four operators cannot express:
    no `.venv`; it is gitignored) — then `D=$(mktemp -d)`; `git worktree list`
    (keep the output); `git worktree add --detach "$D/ft" HEAD`; edit THERE; run
    the suite under the SAME reduced environment `scripts/mutate.py` uses — one
-   env builder, two callers:
-   `env -i $("$PY" scripts/review_common.py env "$D/ft") "$PY" -m pytest -q -x
-   -p no:cacheprovider --ignore=tests/integration` with `cwd="$D/ft"` (PATH,
-   HOME, PYTHONPATH, CTV_INT=0 — never credentials; never `uv run` in the
-   worktree: it would resolve a second environment per mutation, and `uv sync`
-   is `make setup`'s job); then `git worktree remove --force "$D/ft"`, `git
-   worktree prune`, `rmdir "$D"`, and `git worktree list` must equal what you
-   kept — `git status` cannot see `.git/worktrees/`.
+   env builder, and no shell between it and the command:
+   `"$PY" scripts/review_common.py exec "$D/ft" -- "$PY" -m pytest -q -x -p
+   no:cacheprovider --ignore=tests/integration` (PATH, HOME, PYTHONPATH,
+   CTV_INT=0 — never credentials; never `uv run` in the worktree: it would
+   resolve a second environment per mutation, and `uv sync` is `make setup`'s
+   job); then `git worktree remove --force "$D/ft"`, `git worktree prune`,
+   `rmdir "$D"`, and `git worktree list` must equal what you kept — `git
+   status` cannot see `.git/worktrees/`.
    `git status --porcelain` in the main tree must be identical before and after;
    a dirty main tree at the end of your run is your own finding. Never commit a
    mutation; never mutate `fixtures/`.

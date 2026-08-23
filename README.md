@@ -294,7 +294,7 @@ observability/   prometheus.yml, alert rules, grafana dashboard (JSON)
 agent/           collectors, hypothesis catalog, probe registry, loop, webhook, eval/
 accuracy/        household-grain precision/recall vs the truth side file
 common/          kafka.py — the shared start→end topic drain (engine + graph loader)
-scripts/         the offline guards — check_docs.py (make check-docs), review_gate.py (make review-gate), mutate.py (make mutate), review_common.py
+scripts/         the offline guards — check_docs.py (make check-docs), review_gate.py (make review-gate), mutate.py (make mutate), round_tag.py (the review-round-N boundary tag), review_common.py
 tests/           pytest unit (no services); tests/integration/ against the stack; pins.py
 fixtures/tiny/   golden producer output + expected resolved/attributed rows (read-only)
 docs/            ARCHITECTURE.md (spec) · PHASES.md · SCALING.md · RESULTS.md · RUNBOOK.md

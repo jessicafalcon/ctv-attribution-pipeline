@@ -26,12 +26,11 @@ Each mutation: `git worktree add --detach <tmp>/mutate-*/mut-N HEAD` (the system
 temp dir; the working tree is never touched; the mutation is applied to HEAD), the
 offline suite runs there with THIS interpreter and a REDUCED environment
 (`review_common.suite_env`: PATH, HOME, PYTHONPATH, CTV_INT — never credentials),
-the worktree is removed in a `finally` that also asserts `git worktree list` is
-unchanged (stale ones pruned at start). Verdicts: KILLED / SURVIVED / ERROR, one
-per mutation, summing to the mutation count; a registry change is a separate
-latched REGISTRY line, reported once, failing the run. One line per
-mutation — KILLED (suite red) or SURVIVED (suite green) — plus file:line; exit 1
-if any SURVIVED or ERROR. Uses ast/subprocess/pathlib only. Not a pytest file."""
+the worktree is removed in a `finally` that also compares `git worktree list`
+before/after (stale ones pruned at start). Verdicts: KILLED / SURVIVED / ERROR, one
+per mutation + file:line, summing to the mutation count; a registry change is a
+separate latched REGISTRY line, reported once. Exit 1 on any survivor, error or
+registry change. Uses ast/subprocess/pathlib only. Not a pytest file."""
 
 from __future__ import annotations
 
