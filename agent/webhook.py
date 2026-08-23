@@ -7,11 +7,12 @@ feed alert labels/annotations into the LLM prompt — alert labels are attacker-
 influenceable, and re-observing from the DB is also the cleanest determinism story.
 The alertname is echoed in the HTTP response only, never passed into the sweep.
 
-The live scrape → Alertmanager → webhook push chain is deferred (BACKLOG): the batch
-stages exit before a scrape, so this endpoint is built and tested (with the LLM
-mocked, zero tokens) but not wired to a running Alertmanager. "One sweep per firing
-alert" is a token-amplification vector once the push lands — BACKLOG carries the
-trigger to dedupe/bound sweeps by alertname/fingerprint before wiring it."""
+Since Phase 18b the live scrape → Alertmanager → webhook push chain is wired (the
+Pushgateway path, Done-when 4). To keep the LLM cost bounded under a real Alertmanager
+(which posts one webhook per alert GROUP, each carrying many possibly-flapping
+alerts), the handler dedupes by `groupKey`: ONE sweep per firing group, not per alert
+(Invariant 7). The sweep re-observes the whole DB, so a second sweep for the same
+group would only burn tokens (closed BACKLOG 'webhook sweep amplification')."""
 
 from collections.abc import Callable
 from typing import Annotated
@@ -31,9 +32,11 @@ class Alert(BaseModel):
 
 
 class AlertmanagerWebhook(BaseModel):
-    """The subset of the Alertmanager webhook payload we read."""
+    """The subset of the Alertmanager webhook payload we read. `groupKey` is
+    Alertmanager's per-group identifier — one webhook per group (Phase 18b)."""
 
     status: str | None = None
+    groupKey: str | None = None  # noqa: N815 — matches the Alertmanager wire field
     alerts: list[Alert] = []
 
 
@@ -59,21 +62,49 @@ def get_sweep() -> Callable[[], AttributionFinding]:
     return run_sweep
 
 
+def _firing(alert: Alert, payload: AlertmanagerWebhook) -> bool:
+    return (alert.status or payload.status) == "firing"
+
+
+def _dedupe_by_group_key(payload: AlertmanagerWebhook) -> list[str]:
+    """The distinct alert GROUPS in this webhook with ≥1 FIRING alert — one sweep
+    each (Invariant 7). Alertmanager posts one webhook per group, so this is normally
+    a single-element list; deduping bounds the sweep at one-per-group even when a
+    group carries many duplicate or flapping alerts. A missing `groupKey` (hand-posted
+    payloads, tests) collapses to a single 'default' group so one firing webhook still
+    triggers exactly one sweep."""
+    groups: list[str] = []
+    for alert in payload.alerts:
+        if not _firing(alert, payload):
+            continue
+        key = payload.groupKey or "default"
+        if key not in groups:
+            groups.append(key)
+    return groups
+
+
 @app.post("/alerts")
 def alerts(
     payload: AlertmanagerWebhook,
     sweep: Annotated[Callable[[], AttributionFinding], Depends(get_sweep)],
 ) -> dict:
-    """Trigger one sweep per FIRING alert. The alertname is read only to echo it back;
-    it is never passed into `sweep()` (trigger-only boundary)."""
+    """Trigger ONE sweep per firing alert GROUP, not per alert (Phase 18b, Invariant
+    7). Firing alertnames are read only to echo them back; they are never passed into
+    `sweep()` (trigger-only boundary, Invariant 8)."""
     handled = []
-    for alert in payload.alerts:
-        if (alert.status or payload.status) != "firing":
-            continue
+    for group_key in _dedupe_by_group_key(payload):
         finding = sweep()
+        alertnames = sorted(
+            {
+                a.labels.get("alertname", "unknown")
+                for a in payload.alerts
+                if _firing(a, payload)
+            }
+        )
         handled.append(
             {
-                "alertname": alert.labels.get("alertname", "unknown"),
+                "group_key": group_key,
+                "alertnames": alertnames,
                 "verdict": finding.verdict,
                 "top_hypothesis": finding.top_hypothesis,
             }
