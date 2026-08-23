@@ -98,14 +98,17 @@ def evidence_ids(text: str) -> tuple[list[str], list[str]]:
     return sorted(set(tests)), sorted(targets)
 
 
-def collected_ids(root: Path) -> set[str]:
-    # `-o addopts=` clears the repo's `addopts = "-q"` (pyproject) so exactly ONE
-    # `-q` reaches pytest. Two `-q` (pyproject's + ours) is quiet level 2, and under
-    # pytest 9 `--collect-only -qq` prints a terse `path: count` summary with no
-    # `::` node ids — so the parser below collected NOTHING and every Evidence id
-    # looked missing (fix/review-gate-pytest9). One `-q` prints node ids on 8 and 9.
-    # Safe to clear: repo addopts carries only `-q`; testpaths / pythonpath are
-    # separate ini keys, and this call already passes `-p no:cacheprovider` itself.
+def _collect(root: Path) -> tuple[int, str, set[str]]:
+    """Collect test node ids: (pytest exit code, merged output, id set).
+    `-o addopts=` clears the repo's `addopts = "-q"` (pyproject) so exactly ONE
+    `-q` reaches pytest. Two `-q` (pyproject's + ours) is quiet level 2, and under
+    pytest 9 `--collect-only -qq` prints a terse `path: count` summary with no
+    `::` node ids — so the parser below collected NOTHING and every Evidence id
+    looked missing (fix/review-gate-pytest9). One `-q` prints node ids on 8 and 9.
+    Safe to clear: repo addopts carries only `-q`; testpaths / pythonpath are
+    separate ini keys, and this call already passes `-p no:cacheprovider` itself
+    (that clearing addopts changes only verbosity is pinned by count parity in
+    tests/test_review_tools.py)."""
     code, out = run(
         [
             sys.executable,
@@ -127,7 +130,12 @@ def collected_ids(root: Path) -> set[str]:
             path, _, rest = ln.partition("::")
             ids.add(f"{path}::{rest.split('[', 1)[0].split('::')[-1]}")
             ids.add(f"{path}::{rest.split('[', 1)[0]}")
-    return ids
+    return code, out, ids
+
+
+def collected_ids(root: Path) -> set[str]:
+    """Just the id set — the direct-use / test entry point."""
+    return _collect(root)[2]
 
 
 def make_targets(root: Path) -> set[str]:
@@ -156,19 +164,26 @@ def check_evidence(spec_text: str, root: Path) -> bool:
             "FAIL evidence: the spec's Evidence section names no test id or make target"
         )
         return False
-    ids = collected_ids(root)
+    code, out, ids = _collect(root)
     known = make_targets(root)
     ok = True
     if tests and not ids:
-        # Collection produced no ids at all while the spec names test ids. That is a
-        # GATE defect (e.g. a pytest --collect-only format drift), not an evidence
-        # defect — reporting every named id as "missing" here would be the mirror of
-        # the vacuous-green pattern this repo keeps finding: vacuous-RED that hides
-        # the real cause. Fail loud on the cause instead (fix/review-gate-pytest9).
-        print(
-            "FAIL evidence: collection produced no ids — gate defect, not evidence "
-            "defect (check `pytest --collect-only` output format)"
-        )
+        # Collection produced no ids at all while the spec names test ids — a GATE
+        # defect, not an evidence defect. Reporting every named id as "missing" here
+        # would be the mirror of the vacuous-green pattern this repo keeps finding:
+        # vacuous-RED that hides the real cause. Name the cause, and distinguish its
+        # two shapes so the message is confident-and-right, not confident-and-wrong
+        # (review-round r1): a nonzero pytest exit means collection ERRORED (a broken
+        # test module), zero means the `--collect-only` output carried no node ids
+        # (the pytest-9 format drift this PR fixed).
+        if code != 0:
+            tail = "\n".join(out.strip().splitlines()[-15:])
+            print(f"FAIL evidence: collection errored (pytest exit {code}):\n{tail}")
+        else:
+            print(
+                "FAIL evidence: collection produced no ids — gate defect, not "
+                "evidence defect (check `pytest --collect-only` output format)"
+            )
         return False
     for t in tests:
         if t not in ids:

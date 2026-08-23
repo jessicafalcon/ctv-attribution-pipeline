@@ -308,10 +308,17 @@ below, never deleted.
   `-o addopts=` clears the inherited `-q` so exactly one reaches pytest and node ids
   print (safe — repo addopts carries only `-q`); the fixture repo now mirrors that
   config; and the check FAILs loud on zero ids (a GATE defect) instead of blaming
-  the evidence. Lesson, recorded because this repo keeps re-finding it: a guard that
-  can only report the negative is a guard that can pass on nothing — pin the
-  positive AND the "collected > 0" precondition. First surfaced by 18a, the first
-  phase to run the Evidence check under pytest 9. (BACKLOG: the CI gap.)
+  the evidence. The zero-ids message names its cause: a nonzero pytest exit → the
+  collection ERRORED (a broken test module), zero → the format drift — a guard whose
+  message asserts the wrong cause is the same confident-and-wrong class the gate
+  exists to catch (review-round r1). That `-o addopts=` changes only verbosity, not
+  WHAT collects, is pinned as count parity (node-id count == the summed `path: count`
+  of a plain run), so a future addopts smuggling in `-m`/`--ignore`/`-p` fails loud —
+  not as a string-match on "addopts is only -q". Lesson, recorded because this repo
+  keeps re-finding it: a guard that can only report the negative is a guard that can
+  pass on nothing — pin the positive AND the "collected > 0" precondition. First
+  surfaced by 18a, the first phase to run the Evidence check under pytest 9.
+  (BACKLOG: the CI gap.)
 
 - **Model-written text never reaches an oracle; the tag carries a round number
   and nothing else (2026-08-23; PR #35 review cap, security track).** Rounds 2
