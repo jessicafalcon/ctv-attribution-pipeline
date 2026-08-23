@@ -116,9 +116,13 @@ resolve:
 # (recovers long-window misses AND the deferred shared-IP conversions → lake →
 # reload → rollup refresh + pre/post report snapshots). Run after `make up &&
 # make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
+# LAKE_ASYNC_INSERT=1 (Phase 18b): the loader batches server-side into fewer,
+# larger parts (async_insert=1, wait_for_async_insert=1). ON only here, off in the
+# golden/oracle/capture paths so their pins never move for a batching reason. Both
+# load-bearing lines opt in (dataflow's load and the reconcile reload).
 run:
-	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
-	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
+	LAKE_ASYNC_INSERT=1 uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
+	LAKE_ASYNC_INSERT=1 uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
 	uv run python -m observability.ch_scrape
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
