@@ -376,7 +376,7 @@ the docs name); BACKLOG 37 closed (partial-rename failure pinned by
 the `check-runbook` target gone (Makefile, CI lint job, CLAUDE.md). No pin, golden or
 pipeline file changed.
 
-## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, part-count and merge-lag (PROPOSED)
+## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, storage metrics (RECONCILED)
 
 **Goal.** Incremental rollups from a loader-owned dirty set with its own gate,
 storage metrics + an alert rule, and the `report_snapshots` version column. Split

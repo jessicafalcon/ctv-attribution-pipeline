@@ -216,46 +216,76 @@ order by s.campaign_id
 """
 
 
-# Phase 18a. The keys to recompute: those the loader marked with a version ABOVE the
-# watermark the last refresh covered. A key whose rows did not move keeps its old
-# version (the loader stamps max(processed_at) / max(ingest_time) over the key's
-# CURRENT rows), so re-recording it is a no-op and it drops out here — the filter is
-# "what changed", not "what was loaded". An empty marker table reads as the epoch, so
-# a first refresh is a full one.
-MARKER = "campaign_hourly"
-
+# Phase 18a, per-key watermark. `rollup_dirty` says when each key's data last moved
+# (a data-derived stamp the loader writes); `rollup_refreshed` says which version of a
+# key the rollup was last computed against. A key needs recomputing when those differ.
+#
+# The comparison is PER KEY and never against a global maximum. The first cut compared
+# every key's version to one scalar watermark (the max over the whole dirty table), so
+# any key whose own timestamps lagged the highest key's sat permanently below it and
+# was never refreshed again — measured at 321 of 340 keys on long_delay, and
+# reproduced as a stale served rollup (review gate, Phase 18a).
+#
+# `!=`, not `>`: a key's version can move DOWN as well as up (re-seed a profile after
+# `make lake-reset` and the same key's max ingest_time may land earlier), and "the
+# rollup was computed against a different version of this key" is the honest
+# condition. A LEFT JOIN with no match yields the epoch, so a key never refreshed is
+# always dirty.
 _DIRTY_KEYS = """
 select
-    campaign_id,
-    hour
-from rollup_dirty final
-where version >
+    d.campaign_id,
+    toUnixTimestamp(d.hour) as hour_s,
+    toUnixTimestamp64Milli(d.version) as version_ms
+from rollup_dirty as d final
+left join rollup_refreshed as r final
+    on d.campaign_id = r.campaign_id and d.hour = r.hour
+where d.version != r.version
+order by
+    d.campaign_id,
+    hour_s
+"""
+
+# Keys cross the process boundary as (String, UInt32 epoch seconds, Int64 epoch
+# millis) — never as Python datetimes. Reading a DateTime back into Python renders it
+# in the caller's local timezone and rebinding it would compare a shifted instant
+# (the determinism break `_max_ingest` documents); an integer carries no timezone.
+_DIRTY_FILTER = (
+    "where (campaign_id, toUnixTimestamp(toStartOfHour(event_time))) "
+    "in {keys:Array(Tuple(String, UInt32))}"
+)
+
+# Stamp exactly the versions the refresh computed against — never `now()`, never a max
+# over other keys. Written AFTER the refresh insert: a crash in between leaves the old
+# stamps, so the next pass recomputes the same keys (idempotent) rather than skipping
+# them, which is the one failure the full-refresh oracle cannot see. Never a delete or
+# a mutation.
+_STAMP_REFRESHED = """
+insert into rollup_refreshed
+select
+    t.1 as campaign_id,
+    toDateTime(t.2, 'UTC') as hour,
+    fromUnixTimestamp64Milli(t.3, 'UTC') as version
+from
 (
-    select max(watermark)
-    from rollup_refresh_marker final
-    where marker = {marker:String}
+    select arrayJoin({keys:Array(Tuple(String, UInt32, Int64))}) as t
 )
 """
 
-# Applied to BOTH exposures_landed reads inside the refresh (the spend/exposure side
-# and the credit join's exposure side): the leading sort-key column is campaign_id, so
-# a key predicate prunes granules — the read the incremental refresh saves. The
-# conversion side is keyed on conversion_id and cannot prune; it is bounded by the
-# join instead.
-_DIRTY_FILTER = f"where (campaign_id, toStartOfHour(event_time)) in ({_DIRTY_KEYS})"
-
-# The watermark the refresh just covered: the highest version in the dirty set at
-# selection time. Written AFTER the insert — a crash in between leaves the old
-# watermark, so the next pass recomputes the same keys (idempotent) instead of
-# skipping them. Never a delete or a mutation on rollup_dirty (CLAUDE.md: a
-# correction that silently skips a key is invisible to the full-refresh oracle).
-_WRITE_MARKER = """
-insert into rollup_refresh_marker
+# A full rebuild covered every key the loader has recorded, so it stamps all of them.
+_STAMP_ALL_REFRESHED = """
+insert into rollup_refreshed
 select
-    {marker:String} as marker,
-    max(version) as watermark
+    campaign_id,
+    hour,
+    version
 from rollup_dirty final
 """
+
+
+def dirty_keys(client: Client) -> list[tuple[str, int, int]]:
+    """(campaign_id, hour epoch-seconds, version epoch-millis) for every key whose data
+    has moved since the rollup was last computed against it."""
+    return [tuple(row) for row in client.query(_DIRTY_KEYS).result_rows]
 
 
 def campaign_hourly_rows(client: Client, *, hot_only: bool = False) -> list[tuple]:
@@ -275,25 +305,33 @@ def campaign_hourly_rows(client: Client, *, hot_only: bool = False) -> list[tupl
 
 
 def refresh_campaign_hourly(
-    client: Client, offset_ms: int, *, full: bool = False, marker: str = MARKER
-) -> None:
-    """Recompute the rollup from FINAL (current state, both paths) and insert it as
-    a new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the highest
-    reported_at per key, so each key's latest row is the current one.
+    client: Client, offset_ms: int, *, full: bool = False
+) -> int:
+    """Recompute the rollup from FINAL (current state, both paths) and insert it as a
+    new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the highest
+    reported_at per key, so each key's latest row is the current one. Returns the
+    number of keys recomputed.
 
-    Incremental by default (Phase 18a): only the keys the loader marked dirty above
-    the refresh watermark are recomputed, and every other key keeps the row it
-    already has. `full=True` recomputes every key — the equality ORACLE the
-    incremental path is measured against (`make rollup-bench`), and the escape hatch
-    if a dirty set is ever suspect. Both write the watermark: a full refresh covered
-    everything by definition. `marker` names the watermark row — the pipeline uses the
-    default; `make rollup-bench` passes its OWN row so measuring never moves the
-    pipeline's watermark (the marker is versioned by its own value, so it can rise but
-    never be rewound)."""
+    Incremental by default (Phase 18a): only the keys whose `rollup_dirty` version
+    differs from their `rollup_refreshed` one are recomputed, and every other key keeps
+    the row it already has. `full=True` recomputes every key — the equality ORACLE the
+    incremental path is measured against (`make rollup-bench`), and the escape hatch if
+    a dirty set is ever suspect. Both then stamp `rollup_refreshed`, so a run converges
+    to "nothing dirty"."""
+    if full:
+        client.command(refresh_sql(full=True), parameters={"offset_ms": offset_ms})
+        client.command(_STAMP_ALL_REFRESHED)
+        return len(dirty_keys(client))
+
+    keys = dirty_keys(client)
+    if not keys:
+        return 0
     client.command(
-        refresh_sql(full=full), parameters={"offset_ms": offset_ms, "marker": marker}
+        refresh_sql(full=False),
+        parameters={"offset_ms": offset_ms, "keys": [(c, h) for c, h, _ in keys]},
     )
-    client.command(_WRITE_MARKER, parameters={"marker": marker})
+    client.command(_STAMP_REFRESHED, parameters={"keys": keys})
+    return len(keys)
 
 
 def refresh_sql(*, full: bool) -> str:

@@ -35,7 +35,7 @@ from orchestration.assets import (
     reconciled_conversions,
     reconciled_report,
 )
-from reconcile.reconcile import candidate_days
+from reconcile.reconcile import RECONCILE_DELTA_MS, candidate_days
 
 
 class UnknownPartitionError(ValueError):
@@ -68,11 +68,23 @@ def _rows(result: ExecuteInProcessResult, key: str) -> int:
     return int(event.materialization.metadata[key].value)
 
 
-def materialize_load(days: set[str]) -> dict[str, int]:
+def materialize_load(days: set[str], offset_ms: int = 0) -> dict[str, int]:
     """Load exactly `days` (YYYY-MM-DD event_time days — the days a landing
     TOUCHED, spec D6) from the lake into ClickHouse; return rows inserted per
     table. Idempotent per day (the ReplacingMergeTree collapses re-inserts).
-    Called in-process by the engine and the reconcile job after they land."""
+    Called in-process by the engine and the reconcile job after they land.
+
+    Then REFRESHES the rollup keys this load touched (Phase 18a): the loader is the
+    one writer of the serving tables, so the rollup is brought current where the load
+    moved it and nowhere else. `offset_ms` stamps `reported_at` — 0 for the hot load,
+    `RECONCILE_DELTA_MS` for the reconcile pass's reload, so the two passes' rollup
+    rows are distinct versions of their keys rather than same-version twins. Still a
+    batch step that recomputes from source, never an insert-triggered summing MV (the
+    determinism policy's line is about corrections double-counting).
+
+    A first load finds every key dirty, so it is a full-equivalent refresh; the
+    reconcile pass's reload is then a genuinely incremental second pass — which is the
+    path `make rollup-bench` measures."""
     totals = {"exposures": 0, "attributed": 0}
     if not days:
         return totals
@@ -88,6 +100,11 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     for day in sorted(days):
         for key, asset_def in _LOAD_ASSETS:
             totals[key] += _rows(_materialize([asset_def], instance, day), "rows")
+    # Local import: `reconcile.rollup` pulls the reconcile package, and this module is
+    # imported by the offline suites (same reason as the other lazy imports here).
+    from reconcile import rollup
+
+    totals["rollup_keys"] = rollup.refresh_campaign_hourly(connect(), offset_ms)
     return totals
 
 
@@ -106,7 +123,7 @@ def run_reconcile(partition: str | None) -> None:
         (event,) = result.get_asset_materialization_events()
         touched |= set(event.materialization.metadata["touched_days"].value)
         print(f"reconciled_conversions[{day}] materialized")
-    loaded = materialize_load(touched)
+    loaded = materialize_load(touched, RECONCILE_DELTA_MS)
     _materialize([reconciled_report], instance)
     print(
         f"reconcile-dagster: {len(days)} day-partition(s) recovered, "

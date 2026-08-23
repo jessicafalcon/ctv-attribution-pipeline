@@ -29,13 +29,18 @@ Run after `make run PROFILE=<p>` on a profile whose reconcile pass changed somet
 Reconstructing "before" and "after" without a time machine: the hot-attributed set is
 invariant under reconciliation (it only rewrites hot-UNattributed rows), so the
 pre-reconciliation rollup is the same expression restricted to `path = 'hot'` — the
-seam the PRE report snapshot already uses. The dirty side is reconstructed the same
-way: the keys whose `rollup_dirty` version rose above the watermark the HOT load would
-have left (`max(ingest_time)` over exposures, `max(processed_at)` over hot rows).
+seam the PRE report snapshot already uses. The keys that differ between those two
+rebuilds are the keys the reconcile pass changed, and they are the key set the
+pipeline's own second-pass refresh runs over (`orchestration.run.materialize_load`
+refreshes the keys each load touched — Phase 18a).
 
-Nothing here changes a served number. The measured refreshes run at the pipeline's own
-offset, so the rows they insert are byte-identical twins of the ones already there, and
-the watermark they advance is this tool's own marker row, never the pipeline's.
+The cost half therefore measures `reconcile.rollup.refresh_sql` — the pipeline's own
+statement — twice: once full, once with exactly those keys bound. No marker is faked
+and no watermark is moved; earlier revisions of this tool seeded their own marker row
+to construct a scenario the pipeline did not run, which made the saving look like a
+pipeline result when it was not (review gate, Phase 18a). Nothing here changes a served
+number: both refreshes run at the pipeline's own offset, so the rows they insert are
+byte-identical twins of the ones already there.
 """
 
 import argparse
@@ -51,28 +56,26 @@ from queries.bench_common import ROUND, canonicalize, round_row
 from reconcile import rollup
 from reconcile.reconcile import RECONCILE_DELTA_MS
 
-# This tool's own watermark row: measuring must never advance the pipeline's.
-BENCH_MARKER = "rollup_bench"
-
 RESULTS_PATH = Path(__file__).parent.parent / "docs" / "RESULTS.md"
 _START = "<!-- ROLLUP_BENCH_START -->"
 _END = "<!-- ROLLUP_BENCH_END -->"
 
-_HOT_WATERMARK = """
-select max(t) from
-(
-    select max(ingest_time) as t from exposures_landed final
-    union all
-    select max(processed_at) as t from attributed_conversions final where path = 'hot'
-)
-"""
-
-_DIRTY_ABOVE = """
+# The keys the reconcile pass's reload refreshed: rollup_refreshed rows stamped at a
+# version that only a reconciled row carries (path='reconciled' processed_at). Read
+# from the pipeline's own bookkeeping — this tool never writes it.
+_RECONCILE_TOUCHED = """
 select
     campaign_id,
+    hour,
+    toUnixTimestamp(hour) as hour_s
+from rollup_refreshed final
+where version >=
+(
+    select min(processed_at) from attributed_conversions final where path = 'reconciled'
+)
+order by
+    campaign_id,
     hour
-from rollup_dirty final
-where version > {watermark:DateTime64(3)}
 """
 
 
@@ -113,20 +116,18 @@ def run(client: Client | None = None) -> dict:
     before = _keyed(rollup.campaign_hourly_rows(client, hot_only=True))
     after = _keyed(rollup.campaign_hourly_rows(client))
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
-
-    watermark = client.query(_HOT_WATERMARK).result_rows[0][0]
-    dirty = {
-        (r[0], r[1])
-        for r in client.query(
-            _DIRTY_ABOVE, parameters={"watermark": watermark}
-        ).result_rows
-    }
     if not changed:
         raise AssertionError(
             "rollup-bench: the reconcile pass changed no rollup key, so the dirty-set "
             "gate would pass vacuously — run it on a profile whose reconciliation "
             "restates something (long_delay)"
         )
+
+    # The dirty set the pipeline's own second-pass refresh ran over: the keys the
+    # reconcile load stamped in rollup_refreshed at the reconciled version. Read from
+    # the tables, never reconstructed from a fake watermark.
+    touched = client.query(_RECONCILE_TOUCHED).result_rows
+    dirty = {(r[0], r[1]) for r in touched}
     missed = changed - dirty
     if missed:
         raise AssertionError(
@@ -140,16 +141,21 @@ def run(client: Client | None = None) -> dict:
         )
 
     # --- equality + cost --------------------------------------------------------
-    # Our own watermark row, seeded where the hot load would have left it, so the
-    # incremental refresh below recomputes exactly the reconcile-affected keys.
-    client.command(
-        "insert into rollup_refresh_marker values ({m:String}, {w:DateTime64(3)})",
-        parameters={"m": BENCH_MARKER, "w": watermark},
+    # The pipeline's OWN statement, both ways, over the key set its second pass used.
+    # The hour crosses as the epoch SECONDS ClickHouse computed (`toUnixTimestamp`),
+    # never as a Python datetime: the driver renders a DateTime in the caller's local
+    # timezone, and re-binding that shifted instant matched 5 keys of 19 on a MDT
+    # laptop (found here, the same trap `_max_ingest` documents).
+    keys = sorted((r[0], int(r[2])) for r in touched)
+    full = _measure_refresh(
+        client, rollup.refresh_sql(full=True), {"offset_ms": RECONCILE_DELTA_MS}
     )
-    params = {"offset_ms": RECONCILE_DELTA_MS, "marker": BENCH_MARKER}
-    full = _measure_refresh(client, rollup.refresh_sql(full=True), params)
     full_rows = _keyed(_final_rows(client))
-    incremental = _measure_refresh(client, rollup.refresh_sql(full=False), params)
+    incremental = _measure_refresh(
+        client,
+        rollup.refresh_sql(full=False),
+        {"offset_ms": RECONCILE_DELTA_MS, "keys": keys},
+    )
     incremental_rows = _keyed(_final_rows(client))
 
     if full_rows != incremental_rows:
@@ -165,7 +171,7 @@ def run(client: Client | None = None) -> dict:
             "incremental refresh wrote no fewer rows than the full rebuild "
             f"(incremental={incremental['written_rows']} >= "
             f"full={full['written_rows']}) — is the dirty-key filter still on both "
-            "exposures_landed reads, and is the marker still being written after it?"
+            "exposures_landed reads?"
         )
 
     return {
@@ -237,9 +243,9 @@ def format_report(m: dict) -> str:
             f"{t}: {rows} rows in {marks} marks" for t, rows, marks in m["granules"]
         ),
         "  a granule is 8192 rows — inside one, a dirty-key predicate has nothing to",
-        "  prune and the dirty-key lookup itself reads, so the incremental refresh",
-        "  reads MORE here. The read side needs a multi-granule table (bench_large,",
-        "  BACKLOG); the write saving above is the structural one.",
+        "  prune, so the incremental refresh reads what the full rebuild reads. A read",
+        "  saving needs a multi-granule table (bench_large, BACKLOG); the write saving",
+        "  above is the structural one.",
     ]
     return "\n".join(lines)
 
@@ -274,7 +280,8 @@ def render(m: dict) -> str:
             f"{m['incremental']['written_rows']:,} | "
             f"{write_ratio:.1f}× fewer — **asserted** (direction only) |",
             f"| rows read | {m['full']['read_rows']:,} | "
-            f"{m['incremental']['read_rows']:,} | MORE — printed, **not** asserted |",
+            f"{m['incremental']['read_rows']:,} | unchanged — printed, "
+            "**not** asserted |",
             "",
             f"**The write saving is the structural one.** Rewriting only the "
             f"{m['incremental']['written_rows']} changed keys instead of all "
@@ -282,22 +289,13 @@ def render(m: dict) -> str:
             "stops `campaign_hourly` gaining a full copy per refresh — the un-merged "
             "part growth RUNBOOK incident #1 is about.",
             "",
-            f"**The read side gets worse here, and the reason is size:** {granules}. A "
-            "granule is 8,192 rows, so both tables sit inside ONE — a dirty-key "
-            "predicate has nothing to skip, while the predicate's own subquery reads "
-            "`rollup_dirty` once per `exposures_landed` branch. A read-side win needs "
-            "a multi-granule table (`bench_large`, ≈7 granules of exposures); that "
-            "measurement is a BACKLOG row for 18b, which already runs that profile. "
-            "Asserting a read win from this profile would be claiming scale we do not "
-            "run.",
-            "",
-            "_Unlike every other measured block in this file, the incremental **rows "
-            "read** cell is NOT re-run stable (2,004 and 2,685 observed on the same "
-            "data): it counts the dirty-key lookup, and `rollup_dirty` grows a row "
-            "per key per refresh, so each run of this command makes the next one read "
-            "a little more. The write, key and gate numbers above ARE stable across "
-            "runs. Stated rather than smoothed — the cell is printed, never asserted, "
-            "for this reason as well as the granule one._",
+            f"**Rows read do not move: {granules}.** A granule is 8,192 rows, so "
+            "both source tables sit inside ONE — a dirty-key predicate has nothing "
+            "to skip, and the incremental refresh reads exactly what the full "
+            "rebuild reads. The saving here is entirely in what is WRITTEN. "
+            "Whether a dirty-key filter can also prune READS is answerable only on "
+            "a multi-granule table (`bench_large`, ≈7 granules of exposures) and is "
+            "a BACKLOG row for 18b, which already runs that profile.",
             "",
             f"**Dirty-set gate:** changed vs dirty above the refresh watermark — "
             f"{sets}, over-refresh {m['over_refresh']} keys. The contract is "

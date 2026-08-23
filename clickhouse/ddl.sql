@@ -107,18 +107,22 @@ create table if not exists rollup_dirty
 engine = ReplacingMergeTree(version)
 order by (campaign_id, hour);
 
--- The refresh watermark, one row. `refresh_campaign_hourly` recomputes the keys whose
--- rollup_dirty version is ABOVE this, then writes the new watermark — no deletes and
--- no mutations, so a crash between the two re-refreshes the same keys next pass
--- (idempotent) instead of dropping them on the floor, which is the one failure the
--- full-refresh oracle cannot see. An empty table reads as the epoch: everything dirty.
-create table if not exists rollup_refresh_marker
+-- The refresh watermark, PER KEY: which version of each key the rollup was last
+-- computed against. A key needs recomputing when its rollup_dirty version differs from
+-- its row here — never a comparison against a global maximum, which left any key whose
+-- own timestamps lagged the highest key's permanently unrefreshed (321 of 340 keys on
+-- long_delay; review gate, Phase 18a). Written AFTER the refresh insert, so a crash
+-- between the two re-refreshes the same keys next pass (idempotent) instead of
+-- dropping them on the floor — the one failure the full-refresh oracle cannot see. No
+-- deletes, no mutations. A key with no row here has never been refreshed and is dirty.
+create table if not exists rollup_refreshed
 (
-    marker    String,
-    watermark DateTime64(3, 'UTC')
+    campaign_id String,
+    hour        DateTime('UTC'),
+    version     DateTime64(3, 'UTC')
 )
-engine = ReplacingMergeTree(watermark)
-order by marker;
+engine = ReplacingMergeTree(version)
+order by (campaign_id, hour);
 
 -- Phase-6 restatement history. One row per (reported_at, campaign_id, period)
 -- holding the four advertiser metrics (DECISIONS Phase 4) and the raw counts

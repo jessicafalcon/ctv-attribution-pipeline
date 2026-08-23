@@ -114,7 +114,7 @@ def test_engine_driver_stamps_eval_meta_only_after_a_successful_load(
     monkeypatch.setattr(df, "run_engine", lambda broker: run_)
     monkeypatch.setattr(df, "write_marker", lambda p: events.append(f"marker:{p}"))
 
-    def boom(days):
+    def boom(days, offset_ms=0):
         raise RuntimeError("load failed")
 
     monkeypatch.setattr(run, "materialize_load", boom)
@@ -122,7 +122,9 @@ def test_engine_driver_stamps_eval_meta_only_after_a_successful_load(
         df.main(["--profile", "tiny"])
     assert events == []
     monkeypatch.setattr(
-        run, "materialize_load", lambda days: {"exposures": 1, "attributed": 0}
+        run,
+        "materialize_load",
+        lambda days, offset_ms=0: {"exposures": 1, "attributed": 0},
     )
     df.main(["--profile", "tiny"])
     assert events == ["marker:tiny"]
@@ -135,16 +137,21 @@ def test_engine_driver_loads_exactly_the_touched_days(monkeypatch, capsys) -> No
         resolved=1,
         suppressed=0,
     )
-    seen: list[set[str]] = []
+    seen: list[tuple[set[str], int]] = []
     monkeypatch.setattr(df, "run_engine", lambda broker: run)
     monkeypatch.setattr(df, "write_marker", lambda p: None)
     monkeypatch.setattr(
         orchestration.run,
         "materialize_load",
-        lambda days: seen.append(set(days)) or {"exposures": 0, "attributed": 0},
+        lambda days, offset_ms=0: (
+            seen.append((set(days), offset_ms)) or {"exposures": 0, "attributed": 0}
+        ),
     )
     df.main(["--profile", "tiny"])
-    assert seen == [{"2026-08-10", "2026-08-11", "2026-08-13"}]
+    # The HOT load refreshes the rollup at offset 0 (Phase 18a): the reconcile pass's
+    # reload uses RECONCILE_DELTA_MS, so the two passes' rollup rows are distinct
+    # versions of their keys rather than same-version twins.
+    assert seen == [({"2026-08-10", "2026-08-11", "2026-08-13"}, 0)]
     assert "3 day(s)" in capsys.readouterr().out
 
 
@@ -156,7 +163,7 @@ def test_reconcile_driver_loads_exactly_the_days_its_corrections_touched(
     # gets reloaded. No ClickHouse: the version base and finalize are stubbed.
     land([_exp("e-1", datetime(2026, 8, 1, tzinfo=UTC))])
     land_attributed([_row("c-1", T)])
-    seen: list[set[str]] = []
+    seen: list[tuple[set[str], int]] = []
     monkeypatch.setattr(rc, "apply_ddl", lambda: None)
     monkeypatch.setattr(rc, "connect", lambda: object())
     monkeypatch.setattr(rc, "_max_ingest", lambda client: T + timedelta(days=1))
@@ -166,8 +173,12 @@ def test_reconcile_driver_loads_exactly_the_days_its_corrections_touched(
     monkeypatch.setattr(
         orchestration.run,
         "materialize_load",
-        lambda days: seen.append(set(days)) or {"exposures": 0, "attributed": 0},
+        lambda days, offset_ms=0: (
+            seen.append((set(days), offset_ms)) or {"exposures": 0, "attributed": 0}
+        ),
     )
     counts = rc.run()
     assert counts == {"candidates": 1, "recovered": 1, "still_missing": 0}
-    assert seen == [{"2026-08-10"}]
+    # …and the reload stamps the POST offset, so its rollup rows supersede the hot
+    # pass's for exactly the keys it touched (Phase 18a).
+    assert seen == [({"2026-08-10"}, rc.RECONCILE_DELTA_MS)]

@@ -246,6 +246,7 @@ test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
 		--ignore=tests/integration/test_reconcile.py \
+		--ignore=tests/integration/test_rollup_dirty.py \
 		--ignore=tests/integration/test_context.py \
 		--ignore=tests/integration/test_lakehouse.py
 
@@ -269,7 +270,11 @@ test-int-medium:
 # Phase-6 live reconciliation proof on a CLEAN long_delay-only stack, isolated by
 # the sanctioned `make down` (tiny/medium/long_delay share conversion_id space;
 # DECISIONS Phase 5). Recovers the long-delay misses, then asserts the recovery
-# delta + restatement against ClickHouse FINAL.
+# delta + restatement against ClickHouse FINAL — and, since Phase 18a, the
+# dirty-set gate (test_rollup_dirty.py): every key whose rollup row the reconcile
+# pass changed was refreshed, and the served rollup equals a full rebuild. The gate
+# lives HERE, not in `make rollup-bench`: a contract proven only by a target CI
+# never runs is proven nowhere it matters (review gate).
 test-int-long-delay: PROFILE = long_delay
 test-int-long-delay: export CTV_INT = 1
 test-int-long-delay:
@@ -278,7 +283,7 @@ test-int-long-delay:
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
-	uv run pytest tests/integration/test_reconcile.py
+	uv run pytest tests/integration/test_reconcile.py tests/integration/test_rollup_dirty.py
 
 # Phase-8/16 live fault-harness proof on a CLEAN shared_ip_spike-only stack,
 # isolated by the sanctioned `make down` (profiles share conversion_id space;
