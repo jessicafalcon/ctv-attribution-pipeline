@@ -599,7 +599,7 @@ never auto-fixed, ignored, or committed around.
 In review: `fix/make-quote-profile` (PR #36, 2026-08-23 — closes the Phase-17
 `"$(PROFILE)"`-expansion residual). Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **36** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+DECISIONS "Process"). Open BACKLOG rows: **37** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
