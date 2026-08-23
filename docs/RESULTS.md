@@ -142,11 +142,13 @@ _Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on a rollu
 | measure | full rebuild | dirty-set refresh | |
 |---|---|---|---|
 | rows written | 340 | 19 | 17.9× fewer — **asserted** (direction only) |
-| rows read | 1,310 | 2,004 | MORE — printed, **not** asserted |
+| rows read | 1,310 | 2,686 | MORE — printed, **not** asserted |
 
 **The write saving is the structural one.** Rewriting only the 19 changed keys instead of all 340 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
 
 **The read side gets worse here, and the reason is size:** `attributed_conversions` 115 rows in 2 marks; `exposures_landed` 360 rows in 2 marks. A granule is 8,192 rows, so both tables sit inside ONE — a dirty-key predicate has nothing to skip, while the predicate's own subquery reads `rollup_dirty` once per `exposures_landed` branch. A read-side win needs a multi-granule table (`bench_large`, ≈7 granules of exposures); that measurement is a BACKLOG row for 18b, which already runs that profile. Asserting a read win from this profile would be claiming scale we do not run.
+
+_Unlike every other measured block in this file, the incremental **rows read** cell is NOT re-run stable (2,004 and 2,685 observed on the same data): it counts the dirty-key lookup, and `rollup_dirty` grows a row per key per refresh, so each run of this command makes the next one read a little more. The write, key and gate numbers above ARE stable across runs. Stated rather than smoothed — the cell is printed, never asserted, for this reason as well as the granule one._
 
 **Dirty-set gate:** changed vs dirty above the refresh watermark — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
 

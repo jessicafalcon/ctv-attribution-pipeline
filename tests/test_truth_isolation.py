@@ -22,6 +22,10 @@ PIPELINE_DIRS = [
     "lake",
     "orchestration",
     "common",
+    # Phase 18a: not a data path — the scrape reads system.parts as a principal that
+    # cannot read a pipeline row — but it RUNS inside `make run`, so it is held to the
+    # same rule rather than left as the one unguarded thing the pipeline executes.
+    "observability",
 ]
 
 

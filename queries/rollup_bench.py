@@ -291,6 +291,14 @@ def render(m: dict) -> str:
             "Asserting a read win from this profile would be claiming scale we do not "
             "run.",
             "",
+            "_Unlike every other measured block in this file, the incremental **rows "
+            "read** cell is NOT re-run stable (2,004 and 2,685 observed on the same "
+            "data): it counts the dirty-key lookup, and `rollup_dirty` grows a row "
+            "per key per refresh, so each run of this command makes the next one read "
+            "a little more. The write, key and gate numbers above ARE stable across "
+            "runs. Stated rather than smoothed — the cell is printed, never asserted, "
+            "for this reason as well as the granule one._",
+            "",
             f"**Dirty-set gate:** changed vs dirty above the refresh watermark — "
             f"{sets}, over-refresh {m['over_refresh']} keys. The contract is "
             "`changed ⊆ dirty` (a missed key serves a stale rollup while the "

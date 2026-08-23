@@ -94,7 +94,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   `replay.py` / `maintenance.py` are library code for `lake/destructive.py`.
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
-- `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
+- `observability/` — prometheus.yml, alert rules (five; `PartCountHigh` is the
+  Phase-18a storage one), grafana dashboards (JSON), `gen_alert_fixtures.py` (bakes
+  the promtool fixtures from captured .prom dumps), `ch_scrape.py` (the one-shot
+  `clickhouse_` storage scrape, run at the end of `make run` / `run-hot` /
+  `metrics-capture` as the SELECT-only `metrics_ro`).
 - `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
   `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
 - `common/` — `kafka.py`, the shared start→end topic drain (engine + graph loader).
