@@ -91,6 +91,39 @@ create table if not exists campaign_hourly
 engine = ReplacingMergeTree(reported_at)
 order by (campaign_id, hour);
 
+-- Phase-18a incremental-rollup bookkeeping. The Dagster loader (lake/load_serving.py
+-- — the ONE writer of the serving tables) records every (campaign_id, hour) rollup key
+-- the day it loaded touches, stamped with a DATA-DERIVED version: max(processed_at)
+-- over the credited conversions of that key, max(ingest_time) over its exposures (an
+-- exposure has no processed_at; ingest_time is the same lineage `reported_at` is built
+-- from). ReplacingMergeTree(version) keeps the HIGHEST stamp per key, so the two
+-- contributions combine to "when did this key's data last move".
+create table if not exists rollup_dirty
+(
+    campaign_id String,
+    hour        DateTime('UTC'),
+    version     DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(version)
+order by (campaign_id, hour);
+
+-- The refresh watermark, PER KEY: which version of each key the rollup was last
+-- computed against. A key needs recomputing when its rollup_dirty version differs from
+-- its row here — never a comparison against a global maximum, which left any key whose
+-- own timestamps lagged the highest key's permanently unrefreshed (321 of 340 keys on
+-- long_delay; review gate, Phase 18a). Written AFTER the refresh insert, so a crash
+-- between the two re-refreshes the same keys next pass (idempotent) instead of
+-- dropping them on the floor — the one failure the full-refresh oracle cannot see. No
+-- deletes, no mutations. A key with no row here has never been refreshed and is dirty.
+create table if not exists rollup_refreshed
+(
+    campaign_id String,
+    hour        DateTime('UTC'),
+    version     DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(version)
+order by (campaign_id, hour);
+
 -- Phase-6 restatement history. One row per (reported_at, campaign_id, period)
 -- holding the four advertiser metrics (DECISIONS Phase 4) and the raw counts
 -- behind them, so a period's reported number is queryable *as of* each pass.
@@ -99,22 +132,33 @@ order by (campaign_id, hour);
 -- a present-but-fixed sentinel this phase (campaign-total grain); day-grain slots
 -- in later without a schema change. ReplacingMergeTree so re-running a pass
 -- (byte-identical rows) converges.
+--
+-- Phase 18a: `snapshot_version` is the ReplacingMergeTree VERSION — max(processed_at)
+-- over the rows the snapshot summarized (data-derived, no wall clock, no counter),
+-- monotone across the two passes because reconciliation stamps processed_at =
+-- reconciled_at, strictly greater than the hot max. Without it, which twin a merge
+-- kept was undefined by construction (BACKLOG). The SORT KEY is unchanged and keeps
+-- `reported_at`: `make restate` needs BOTH the pre- and post-reconciliation rows to
+-- survive FINAL, so the version disambiguates twins WITHIN a key and never collapses
+-- the pair. Existing volumes are migrated by clickhouse/apply.py (ClickHouse has no
+-- `alter table ... modify engine`).
 create table if not exists report_snapshots
 (
-    reported_at     DateTime64(3, 'UTC'),
-    campaign_id     String,
-    period          String,
-    spend           Float64,
-    revenue         Float64,
-    conversions     UInt64,
-    purchases       UInt64,
-    exposures       UInt64,
-    roas            Nullable(Float64),
-    cpa             Nullable(Float64),
-    cvr             Nullable(Float64),
-    site_visit_rate Nullable(Float64)
+    reported_at      DateTime64(3, 'UTC'),
+    campaign_id      String,
+    period           String,
+    spend            Float64,
+    revenue          Float64,
+    conversions      UInt64,
+    purchases        UInt64,
+    exposures        UInt64,
+    roas             Nullable(Float64),
+    cpa              Nullable(Float64),
+    cvr              Nullable(Float64),
+    site_visit_rate  Nullable(Float64),
+    snapshot_version DateTime64(3, 'UTC')
 )
-engine = ReplacingMergeTree
+engine = ReplacingMergeTree(snapshot_version)
 order by (reported_at, campaign_id, period);
 
 -- Eval guard marker (BACKLOG 43). A single-row table naming which profile

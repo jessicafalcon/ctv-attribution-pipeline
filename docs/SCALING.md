@@ -198,7 +198,7 @@ driver (`streaming/dataflow.py`) and its Flink equivalent.
 | table engine | ReplacingMergeTree | ReplacingMergeTree | ReplicatedReplacingMergeTree |
 | topology | single node | single node | sharded + Distributed table |
 | inserts | synchronous | async inserts, larger buffers | buffer/Distributed fan-in |
-| rollup | scheduled refresh | scheduled, tuned interval | per-shard refreshable MVs |
+| rollup | incremental refresh (dirty keys) | incremental, tuned interval | per-shard refreshable MVs |
 | `FINAL` read cost | negligible | watch part-merge lag | read replica for reports/agent |
 
 The rollup is the read-side scaling lever, and the build already shows why (below).
@@ -218,7 +218,8 @@ with the number of distinct `(campaign, hour)` buckets** — bounded by campaign
 hours in the reporting window, independent of event volume. At 50k/500k a per-read
 full-history scan is the thing that breaks; the scheduled-refresh rollup keeps read
 cost flat. The refresh itself is the cost that grows, but it is paid once on a
-schedule, off the read path (ARCHITECTURE §3.3: scheduled refresh, never
+schedule, off the read path (ARCHITECTURE §3.3: the loader refreshes the keys its
+load touched, never
 insert-triggered summing MVs).
 
 ### Engine dedup: full seen-set now, TTL'd under continuous follow (Phase 5)

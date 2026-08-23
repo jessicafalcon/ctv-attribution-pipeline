@@ -96,7 +96,8 @@ ICEBERG LAKE (system of record)   raw.exposures · raw.attributed_conversions
 CLICKHOUSE (derived serving projection, loaded from the lake; replayable with no Kafka)
                    attributed_conversions  (ReplacingMergeTree, key conversion_id, version processed_at)
                    exposures_landed        (raw exposures, for the naive benchmark + reconcile parity)
-                   campaign_hourly         (rollups, refreshed on schedule; not insert-triggered)
+                   campaign_hourly         (rollups, incremental refresh of the keys a load
+                                            touched; not insert-triggered)
                    report_snapshots        (reported_at × period → metrics; enables restatements)
                                        ^
 RECONCILIATION JOB (periodic, reads the LAKE, no broker)
@@ -267,14 +268,42 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
   source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
   MV), never an insert-triggered summing MV, so corrections cannot double-count.
+  Since Phase 18a the refresh is **incremental and loader-driven**: the Dagster
+  loader — the one writer of the serving tables — records the `(campaign_id, hour)`
+  keys each day it loads touches in `rollup_dirty` (ReplacingMergeTree, version = a
+  data-derived stamp), then refreshes exactly those keys. The refreshed rollup row's
+  version (`reported_at`) is `max(stamp)` over the rows that key summarizes — an
+  exposure's `ingest_time`, a credited conversion's `processed_at` — a function of the
+  data, never a caller offset or the clock (the `offset 0` / `RECONCILE_DELTA_MS`
+  offset survives only on `report_snapshots`). A key is recomputed
+  when its recorded version DIFFERS from the version it was last computed against
+  (`rollup_refreshed`, one row per key), and the refresh stamps those versions
+  afterwards. Per key, never against a global maximum: a single scalar watermark
+  left every key whose own timestamps lagged the highest key's permanently
+  unrefreshed (Phase-18a review gate — 321 of 340 keys, serving a stale rollup). No
+  deletes and no mutations, so a crash between the refresh and the stamp re-refreshes
+  the same keys rather than skipping them. `refresh_sql(full=True)` keeps the
+  whole-table rebuild as the equality ORACLE (`make rollup-bench`).
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
-  `reported_at`, which makes restatements queryable.
+  `reported_at`, which makes restatements queryable. Versioned since Phase 18a by
+  `snapshot_version` = `max(processed_at)` over the rows a snapshot summarized; the
+  sort key still leads with `reported_at`, so `make restate` keeps both the pre- and
+  post-reconciliation rows through `FINAL` and the version only decides twins WITHIN
+  a key.
 - `eval_meta`: a single-row marker (the profile string) the populate path stamps
   so `make eval` refuses to score a profile whose truth file does not match the
   populated DB (BACKLOG 43). OFF the golden-compared path — not attribution data,
   no version/timestamp, so it is deterministic and gate-0 stays byte-identical.
 - Sort keys chosen for the query pattern (`campaign_id`, `hour`).
-- A SELECT-only user exists for the agent.
+- A SELECT-only user exists for the agent (`agent_ro`), and a second, narrower one
+  for the storage scrape (`metrics_ro`: `system.parts` / `system.merges` plus SHOW
+  TABLES on the five tables the scraper counts — enough to see those tables' parts,
+  not enough to read a row of data — Phase 18a).
+- How ClickHouse is STORING the data is measured at the end of every run by a
+  one-shot scrape (`observability/ch_scrape.py`, prefix `clickhouse_`): active parts
+  and level-0 (never-merged) parts per table, plus the elapsed of any merge in
+  flight. Un-merged parts are the operating cost of `FINAL` (§8, RUNBOOK incident
+  #1); `PartCountHigh` alerts at ClickHouse's own `parts_to_delay_insert` default.
 
 #### Reconciliation job (periodic, reads the lake)
 
@@ -557,7 +586,8 @@ handled.*
   merge had fired — in CI, running right after a test that refreshed twice more, the
   rollup measured 1020 physical rows and *lost* to the naive scan (0.8×), while
   locally after one refresh it read 340 and won 2.5×. Fix (`queries/bench.py`
-  `_canonicalize`): `OPTIMIZE TABLE ... FINAL` every read table before measuring, so
+  `queries/bench_common.py` `canonicalize`): `OPTIMIZE TABLE ... FINAL` every read
+  table before measuring, so
   `read_rows` reflects merged steady state — deterministic, re-run-identical, and the
   honest apples-to-apples comparison (a scheduled rollup serves its merged form in
   production). `OPTIMIZE ... FINAL` is synchronous on single-node (`alter_sync=1`)
@@ -627,6 +657,40 @@ handled.*
   `event_time >= … and household_id = …` predicate reported `Total Files Read: 1`
   of 24 — it prunes on BOTH the day and the bucket transform, which is what makes
   the 90-day reconcile join partition-local instead of a scan.
+- **ClickHouse has no `alter table … modify engine`, so adding a ReplacingMergeTree
+  VERSION to a live table is a rebuild** (Phase 18a, verified on the pinned 24.8
+  image: `alter table … add column` is accepted, `alter table … modify engine` fails
+  with code 62 — the parser expects STATISTICS / COLUMN / ORDER BY / SAMPLE BY / TTL /
+  SETTING / QUERY / SQL SECURITY / DEFINER / REFRESH / COMMENT). The pattern used for
+  `report_snapshots` (`clickhouse/apply.py`): add the column → `create <t>_v2 as <t>
+  engine = ReplacingMergeTree(version)` → `insert … select * replace (…)` → compare
+  row counts → `exchange tables` (atomic on the default `Atomic` database engine) →
+  drop the scratch. Nothing is dropped before it has been copied; a crash before the
+  exchange leaves the original intact, and one after it leaves a scratch table the
+  next apply drops. This matters more than it looks: `report_snapshots` is the one
+  serving table `make replay-serving` does NOT rebuild from the lake
+  (`orchestration/replay.py` `SERVING_TABLES`), so a drop-and-recreate migration
+  would be unrecoverable data loss (BACKLOG).
+- **`system.parts` and `system.merges` rows are FILTERED by what the user may see, so
+  a SELECT grant on the system table alone reports an empty stack** (Phase 18a, found
+  live). `metrics_ro` was granted `SELECT ON system.parts` + `SELECT ON system.merges`
+  and nothing else; the scrape returned zero rows and printed "0 active parts" —
+  green, wrong, and silent. ClickHouse restricts those rows to tables the user has
+  some privilege on. `GRANT SHOW TABLES` lifts it, and is granted PER TABLE on the five
+  the scraper counts (a database-wide grant would make every future table visible
+  too): it exposes those tables' names — and, through `system.tables`, their engine
+  and sort key — and no data row (every SELECT / INSERT / ALTER / DROP /
+  CREATE against a pipeline table is still `ACCESS_DENIED` —
+  `tests/integration/test_metrics_ro.py`). Generalization: a read-only principal that
+  reports ZERO is indistinguishable from a healthy empty system — assert a
+  non-zero somewhere in the test, which is what caught this.
+- **Part counts right after a load are in flux, so a capture must wait for the state
+  to settle** (Phase 18a). A clean `tiny` run ended with 13 active parts; a few
+  seconds later the background merger had it at 9. The promtool fixtures are baked
+  from captures, so `observability/ch_scrape.py` samples until no merge is running and
+  the counts are unchanged across two reads (bounded, and it RAISES on the cap rather
+  than capturing a moving number). With that wait, two full clean-stack cycles produce
+  byte-identical `clickhouse.prom`.
 - **`make` expands a command-line variable at STARTUP to export it to recipe
   environments, so `make -n` is not a dry run of a variable's value.** A recipe
   argument built from `"$(PROFILE)"` runs `$(shell …)` at recipe-expansion time —

@@ -203,38 +203,39 @@ def test_second_pass_is_idempotent() -> None:
 
 
 def test_second_pass_twins_are_byte_identical() -> None:
-    # Direct twin identity, both versioned tables: the raw (un-FINAL) rows of the
-    # two passes must be byte-identical per key. Twins are observable in both —
-    # campaign_hourly (versioned) and report_snapshots (no version column) both
-    # keep the passes' parts unmerged for a while (merges are background and
-    # asynchronous; a version column does not defer them). If a merge happened
-    # to collapse a table's twins before the read there is nothing to compare
-    # and that table is skipped — the money pin above is the always-on guard.
+    # Direct twin identity for `report_snapshots`: the raw (un-FINAL) rows of the two
+    # passes must be byte-identical per key. If a merge happened to collapse them
+    # before the read there is nothing to compare and the test skips — the money pin
+    # above is the always-on guard.
+    #
+    # `campaign_hourly` was RETIRED from this proof at the Phase-18a review gate. It
+    # can no longer produce a twin: the loader refreshes only the keys a load touched,
+    # so a second reconcile pass with nothing to recover writes ZERO rollup rows, and
+    # the assert was passing vacuously (rows == keys by construction). Its content is
+    # pinned properly now — `tests/integration/test_rollup_dirty.py` compares the
+    # served rollup to a full rebuild, and `make rollup-bench` runs both into scratch
+    # tables.
     client = connect()
     reconcile.run(connect())  # a further pass → one more twin per key
-    compared: list[str] = []
-    for table, key in (
-        ("campaign_hourly", "reported_at, campaign_id, hour"),
-        ("report_snapshots", "reported_at, campaign_id, period"),
-    ):
-        cols = ", ".join(
-            r[0]
-            for r in client.query(
-                "select name from system.columns where database = currentDatabase() "
-                f"and table = '{table}' order by position"
-            ).result_rows
+    table, key = "report_snapshots", "reported_at, campaign_id, period"
+    cols = ", ".join(
+        r[0]
+        for r in client.query(
+            "select name from system.columns where database = currentDatabase() "
+            f"and table = '{table}' order by position"
+        ).result_rows
+    )
+    # toString(tuple(...)): NULL-safe (a NULL cpa would make cityHash64 of
+    # bare columns NULL and uniqExact skip the row)
+    rows, distinct_keys, distinct_rows = client.query(
+        f"select count(), uniqExact({key}), "
+        f"uniqExact(cityHash64(toString(tuple({cols})))) from {table}"
+    ).result_rows[0]
+    assert distinct_rows == distinct_keys, f"{table}: a re-written row differs"
+    if rows == distinct_keys:
+        pytest.skip(
+            "report_snapshots twins merged before the read; the money pin holds"
         )
-        # toString(tuple(...)): NULL-safe (a NULL cpa would make cityHash64 of
-        # bare columns NULL and uniqExact skip the row)
-        rows, distinct_keys, distinct_rows = client.query(
-            f"select count(), uniqExact({key}), "
-            f"uniqExact(cityHash64(toString(tuple({cols})))) from {table}"
-        ).result_rows[0]
-        assert distinct_rows == distinct_keys, f"{table}: a re-written row differs"
-        if rows > distinct_keys:
-            compared.append(table)
-    if not compared:
-        pytest.skip("both tables' twins merged before the read; the money pin holds")
 
 
 def test_versioned_money_equals_the_source_sums_exactly() -> None:

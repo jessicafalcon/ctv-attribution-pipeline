@@ -164,7 +164,8 @@ so is the reverse.
       (deferred findings with a trigger)
 - [ ] Spec amendments — every LATER spec this phase invalidates gets a
       "Pre-branch reconciliation required" banner naming the clauses (Phase-17
-      precedent: BACKLOG row 56 → `specs/phase-18*.md`)
+      precedent: the BACKLOG row "Phase 18 spec needs a Phase-17 follow-up edit"
+      → `specs/phase-18*.md`. Cite BACKLOG rows by TITLE — line numbers shift)
 - [ ] `docs/RESULTS.md` / `docs/SCALING.md` / `docs/RUNBOOK.md` — <only the
       blocks this phase regenerates or the incidents it adds; "none" is a valid entry>
 - [ ] `README.md` — <demos / commands / Next steps touched, or "none">

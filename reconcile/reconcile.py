@@ -273,14 +273,19 @@ def _restatement_abs_delta(client: Client) -> float:
 
 def finalize(client: Client) -> None:
     """Global finalize, run once per reconciliation (not per day): snapshot the
-    pre/post reports and refresh the rollup. reported_at is computed server-side
+    pre/post reports. The rollup is NOT refreshed here — since Phase 18a the loader
+    refreshes the keys each load touched. reported_at is computed server-side
     as max(ingest_time) + offset, so both snapshots are order-independent and
     identical no matter which process writes them — the PRE report as of the hot
     pass (offset 0; path='hot' only, invariant under reconciliation) and the POST
     report (offset RECONCILE_DELTA_MS, both paths)."""
     rollup.write_report_snapshot(client, 0, hot_only=True)
     rollup.write_report_snapshot(client, RECONCILE_DELTA_MS, hot_only=False)
-    rollup.refresh_campaign_hourly(client, RECONCILE_DELTA_MS)
+    # The rollup is NOT refreshed here: since Phase 18a the loader refreshes the keys
+    # each load touched (orchestration.run.materialize_load), so by the time finalize
+    # runs the reconcile pass's reload has already brought exactly its keys current.
+    # Neither snapshot reads campaign_hourly (both recompute from the landed tables),
+    # so the order of the two is immaterial.
 
 
 def run(client: Client | None = None) -> dict[str, int]:

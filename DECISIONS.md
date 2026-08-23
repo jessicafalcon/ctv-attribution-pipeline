@@ -64,7 +64,8 @@ below, never deleted.
 **Serving (ClickHouse, derived)**
 
 - **ReplacingMergeTree on both landed tables, `FINAL`/`argMax` at read; the rollup is
-  a versioned-replace refreshed on schedule, never an insert-triggered summing MV;
+  a versioned-replace refreshed by the loader over the keys each load touched (Phase
+  18a; a full rebuild is kept as the oracle), never an insert-triggered summing MV;
   `report_snapshots` carries a server-side `reported_at`.** Replays and corrections
   are safe by construction; a correction cannot double-count; restatements are
   queryable. ([Phase 3](#phase-3), [Phase 6](#phase-6))
@@ -869,7 +870,7 @@ below, never deleted.
   which stamped `report_snapshots.reported_at` 6h apart between the `make run`
   subprocess and an in-process caller — four snapshots instead of two,
   restatement delta collapsed. So `reported_at` is computed **server-side** in the
-  rollup/snapshot INSERT (`max(ingest_time) + toIntervalMillisecond(offset_ms)`;
+  `report_snapshots` INSERT (`max(ingest_time) + toIntervalMillisecond(offset_ms)`;
   offset 0 for the pre/hot pass, `RECONCILE_DELTA_MS` for the post pass), and
   `_max_ingest` reads a timezone-free **epoch-millis integer**
   (`toUnixTimestamp64Milli`) rebuilt as UTC for the `reconciled_at` version.
@@ -2211,3 +2212,218 @@ below, never deleted.
   `streaming/` rename and a BACKLOG triage the spec never carried; replaced with the
   spec's Done-when and a Delivered paragraph. The intro status paragraph (still "17
   built, in review") updated.
+
+### Phase 18a
+
+- **`report_snapshots` gains a ReplacingMergeTree VERSION, `snapshot_version` =
+  `max(processed_at)` over the rows the snapshot summarized.** Data-derived like
+  `reported_at` and computed entirely server-side (a Python datetime round-trip
+  renders in the caller's local timezone — Phase 6), monotone across the two passes
+  because reconciliation stamps `processed_at = reconciled_at`, strictly greater
+  than the hot max. The table had no version at all, so which twin a merge kept was
+  undefined by construction; it had worked only because Decimal-summed money makes
+  the twins identical (RUNBOOK incident 3). Rejected: a pass sequence number (the
+  BACKLOG row's phrasing) — invented state with no deterministic source that a
+  replay restarts at 1, which is wrong in exactly the case the column exists for.
+- **The SORT KEY is unchanged (`reported_at, campaign_id, period`).** `make restate`
+  reads BOTH the pre- and post-reconciliation rows through `FINAL`, so the version
+  disambiguates twins WITHIN one key and never collapses the pair. A consequence
+  worth stating: twins on a fully-equal sort key can only come from a re-run, which
+  the determinism pin makes byte-identical — equal versions over equal content is a
+  defined choice. The column declares the rule for the case the pin exists to
+  exclude, and `tests/integration/test_snapshot_version.py` shapes that case (with a
+  docstring saying it is not reachable through the pipeline). Rejected: keying on
+  `(campaign_id, period)` with `reported_at` as the version — it collapses the pair
+  the restatement view is built on.
+- **The migration is create → backfill → `exchange tables` → drop, inside
+  `clickhouse/apply.py`, guarded by `engine_full`.** ClickHouse has no `alter table
+  … modify engine` (verified live on the pinned 24.8 image, ARCHITECTURE §8). Not
+  destructive by this repo's definition: rows are copied first, the exchange is
+  atomic on the `Atomic` database engine, and nothing is dropped that is not already
+  in the new table. Two guards: the scratch table is dropped at the START of every
+  apply (a post-exchange crash leaves the OLD table there, already copied), and a
+  row-count comparison refuses to exchange a short copy — loud and retryable beats
+  silent loss, which matters because `report_snapshots` is the one serving table
+  `make replay-serving` does NOT rebuild from the lake (new BACKLOG row). Rejected:
+  a `make migrate-snapshots` target — a fourth destructive-shaped entry point for a
+  change that preserves every row.
+- **Legacy rows are backfilled `snapshot_version = reported_at`.** Almost inert:
+  `reported_at` is in the sort key, so a legacy row only ever competes with a twin of
+  its own pass. Rejected: `toDateTime64(0, 3)` — it flattens legacy twins back to
+  "undefined", the bug being fixed. Stated residual: between the migration and the
+  next pass, legacy rows carry `reported_at` as their version and new rows carry
+  `max(processed_at)`; the two quantities never meet under one sort key.
+- **The no-credit fallback is `max(processed_at)` over ALL current rows, decided by
+  measurement, not by reading.** A pass that credits nothing has no credited
+  `processed_at`; the first cut fell back to `reported_at`, which is WRONG in a way
+  only the numbers show: `reported_at` is `max(ingest_time) + offset` while a
+  reconciled row's `processed_at` is `max(ingest_time) + RECONCILE_DELTA_MS`, so on
+  the live stack the pre pass's fallback (2026-08-31 15:40:49.413) sat a second
+  BELOW a prior post pass's version (…50.413) — the version going backwards. The
+  all-rows max is a superset of every credited set, so it can never be lower than a
+  version already written; it can be EQUAL when the global max has not moved, which
+  only ever happens across different sort keys and so never decides a twin. Pinned
+  by `tests/test_snapshot_version.py::test_the_no_credit_fallback_is_the_all_rows_max_not_reported_at`
+  and the live no-credit pass in `tests/integration/test_snapshot_version.py`.
+- **The incremental rollup's win is on WRITES and part growth; the read win is
+  unproven at this scale and is not asserted.** Measured on `long_delay` after a
+  reconcile pass: the dirty-set refresh writes 19 rows where the full rebuild writes
+  340 (17.9×), and reads exactly what the full rebuild reads — `exposures_landed` holds
+  360 rows in 2 marks (a single 8192-row granule), so a dirty-key predicate has nothing
+  to prune. (An earlier revision read MORE, because the key filter was a sub-query
+  against `rollup_dirty`; binding the keys as a parameter array removed those reads —
+  review-gate round 2.)
+  `make rollup-bench` therefore asserts the direction on rows written and PRINTS rows
+  read beside the mark counts that explain them. Writing only the changed keys is also
+  what stops `campaign_hourly` gaining a full copy per refresh — the part-bloat RUNBOOK
+  incident #1 is about. Rejected: asserting the read direction anyway (it would hold
+  only on a profile the DONE command does not run — precisely the "do not claim scale
+  we don't run" rule); inlining the dirty keys as SQL literals to cancel the lookup's
+  reads (the measured statement would stop being the pipeline's own statement, and on
+  one granule it is a wash — a flaky assert); running the bench on `bench_large` (its
+  reconcile pass may restate nothing, which makes the gate vacuous, and it adds a
+  second seed + run to the DONE chain). The read side is a BACKLOG row for 18b, which
+  already runs `bench_large`.
+- **The storage scrape is a one-shot function reading a SETTLED state, not a daemon
+  and not a snapshot.** `observability/ch_scrape.py` runs at the end of `make run` /
+  `run-hot` / `metrics-capture`, like the terminal registry dumps beside it (every
+  stage here is a finite drain, so a pull-scrape has nothing to reach after exit; the
+  live path is 18b's Pushgateway). It samples until no merge is running AND the part
+  counts are unchanged across two reads, because a capture taken mid-decay does not
+  reproduce: a clean tiny run ended at 13 active parts and was at 9 a few seconds
+  later. The wait is bounded and RAISES on the cap — a moving number must never reach
+  a committed fixture — and how long it waited is printed, never exported. Evidence:
+  two full clean-stack cycles produced BYTE-IDENTICAL `clickhouse.prom` — verified on
+  tiny before the fix round and again on long_delay after it (18 active / 15 unmerged
+  both times). The committed captures are tiny 11/9 and long_delay 18/15. Rejected: a compose exporter (a new always-on surface for a
+  number that only matters at the end of a pass); returning the last sample on
+  timeout (that is how an invented number gets into a fixture).
+- **`metrics_ro` needs a SHOW grant on top of its two system-table grants, and that
+  is not a widening.** *(Superseded in scope by the round-1 review entry below: the
+  grant is per table, on the five the scraper counts, not `default.*`.)* ClickHouse filters `system.parts` /
+  `system.merges` rows to tables the user may see, so the first cut — SELECT on those
+  two tables and nothing else — reported "0 active parts": green, wrong, silent
+  (ARCHITECTURE §8). SHOW makes table NAMES visible and no row of data readable;
+  every SELECT / INSERT / ALTER / DROP / CREATE against a pipeline table is still
+  ACCESS_DENIED, pinned by `tests/integration/test_metrics_ro.py` (the mirror of
+  agent_ro's SN2 proof). `agent_ro`'s grants are untouched — a second principal, not
+  a wider first one. Rejected: granting `SELECT ON default.*` (the scraper would gain
+  read access to every attribution row to count parts).
+- **ONE alert rule ships, `PartCountHigh > 150`, and its threshold is the SERVER's
+  number — the documented exception to "fixtures come from real captures".** No
+  threshold between our profiles exists: the clean captures peak at 4 active parts on
+  tiny and 5 on long_delay, because part count follows insert batching and merge
+  timing rather than event volume — the two profiles' peaks sit one part apart, two
+  orders of magnitude below the threshold. 150 is ClickHouse's own `parts_to_delay_insert` default — the point
+  where the server throttles writers — cited in the rule's annotation. Its silence is
+  proven by both real captures; its firing by a synthetic promtool input in a file
+  whose name and header say synthetic (`alerts_synthetic_test.yml`, 151 parts).
+  The fixture generator names the distinction the whole item turned on — `WORKLOAD_ALERTS`
+  (knob-driven, both sides from real captures) vs the threshold-driven rule (silence real,
+  firing synthetic) — so a future rule has to declare which kind it is.
+  Rejected: capturing `bench_large` to find a "real" high-part number (what it would
+  pin is merge SCHEDULING, which this repo explicitly carves out of its determinism
+  guarantee — an expensive invented number); lowering the threshold until a capture
+  fires it (inventing the number outright, the Phase-11 false-claim class).
+- **No merge-lag rule ships.** Every settled capture reads
+  `clickhouse_merge_backlog_seconds = 0` (merges over 300-row tables finish in
+  microseconds), so the rule could only be proven by an invented input. The METRIC
+  ships, with the caveat in its HELP text and a test pinning that caveat: measuring
+  without alerting is true; alerting without a fireable measurement is not. BACKLOG
+  row carries the trigger. `clickhouse_unmerged_parts` (level-0 parts) is the
+  deterministic view of pending collapse work and ships beside it.
+- **RUNBOOK incident #1's alert cell says what the new rule would NOT have caught.**
+  The un-merged-part condition is now measured and alerted at the throttle threshold,
+  but this incident's counts were single-digit, so `PartCountHigh` would have stayed
+  silent through it; the guard remains the benchmark's `canonicalize` OPTIMIZE plus
+  the direction assert. Rejected: the reassuring version ("now covered by an alert"),
+  which is the kind of sentence the runbook exists to prevent.
+- **The Phase-19 docs guard paid for itself here.** `make check-docs` failed the
+  moment `docs/RESULTS.md` gained a `make rollup-bench` mention, because the Makefile
+  target did not exist yet — a docs-vs-source drift caught at edit time instead of at
+  a review round, which is exactly what Phase 19 was for.
+
+**Phase 18a — review-gate round 1 (four agents, 2 blockers each side).**
+
+- **The refresh watermark is PER KEY, not one scalar.** The first cut wrote
+  `max(version)` over the whole dirty table and selected `version > watermark`; the
+  versions are per-key data timestamps, so any key whose own stamps lagged the highest
+  key's sat permanently below it — 321 of 340 keys on long_delay, reproduced as a
+  served rollup one full rebuild out of date while `attributed_conversions` held the
+  new data. Replaced by `rollup_refreshed (campaign_id, hour, version)`: a key is dirty
+  when its recorded version DIFFERS from the version it was last computed against, and
+  the refresh stamps exactly those versions afterwards. `!=` rather than `>` (a
+  deviation from the ruling's wording, taken with the reason stated): "the rollup was
+  computed against a DIFFERENT version of this key" is the condition that matters, and
+  it does not depend on the two stamps being ordered. (An earlier justification here —
+  "a version can move DOWN on a re-seed" — was WRONG and is corrected in
+  `reconcile/rollup.py`: `rollup_dirty` is a ReplacingMergeTree keyed on the version,
+  so a lower stamp is discarded on read and `d.version` never moves down; the re-seed
+  hazard is real but closed elsewhere — `make replay-serving` truncates this
+  bookkeeping alongside the serving tables, a fresh stack is `make down`.) Rejected: a
+  global marker plus a per-key stamp (the stamp is this table by another name, with a
+  second source of truth to drift).
+- **The loader refreshes the keys it loaded, so the pipeline actually runs the
+  incremental path.** Before, `refresh_campaign_hourly` was called once per `make run`
+  (in `finalize`), on a stack whose marker was empty — so it was always a FULL refresh
+  and the 19-vs-340 saving existed only inside `make rollup-bench`, which seeded its
+  own marker to construct a scenario the pipeline never ran. Now
+  `orchestration.run.materialize_load` refreshes after every load (no version argument —
+  the rollup row's version is `max(stamp)` over the summarized rows, data-derived; the
+  `offset 0` / `RECONCILE_DELTA_MS` offset that round-3 removed from the rollup path
+  survives only on `report_snapshots`), the reconcile pass's reload IS the
+  incremental second pass, and the bench measures the pipeline's own statement over the
+  pipeline's own key set. Still a batch step recomputing from source, never an
+  insert-triggered summing MV. Pinned live: served `campaign_hourly FINAL` == the
+  single-full-refresh oracle on all 340 keys. Rejected: keeping one refresh and
+  re-wording the records (true wording on a claim no pipeline run exercises is the
+  Phase-14 class again).
+- **The dirty recording is order-independent.** A conversion's rollup key is the hour
+  of the exposure it credits, so loading a conversion day BEFORE its exposure day found
+  no exposure to join and recorded nothing; the final dirty set depended on the order
+  Dagster materialized partitions in. The exposure day's load now records credits in
+  the reverse direction too, and `tests/integration/test_rollup_dirty.py::test_load_order_does_not_change_the_dirty_set`
+  pins forward == reverse in a throwaway database.
+- **The gate moved out of the bench into `make test-int-long-delay`.** A contract
+  proven only by a `make` target that neither CI nor `make test` runs is proven nowhere
+  it matters — the phase shipped with the dirty set untested, and mutation testing
+  confirmed `!=`→`>`, a dropped key filter and a skipped stamp were all silent. The
+  offline pins fail on each of those, and on two more the round-2 review found still
+  surviving (deleting the loader's dirty-key recording, and deleting the loader's
+  refresh entirely); the live gate covers what only a real stack can show.
+- **The scrape keeps a non-zero exit inside `make run` / `run-hot`.** Loud over
+  silently green: the rows are landed before it runs, so a failed scrape loses no data
+  and hides no result. The residual is stated rather than smoothed — a settle-cap
+  timeout on a busy CI runner turns an observability step into a red build (BACKLOG,
+  trigger "first CI red on UnsettledError").
+- **The migration's scratch table is still dropped in the happy path.** It holds the
+  OLD table, whose rows the live one already has, so keeping it would trade disk for a
+  copy nothing reads. What changed: the DROP now runs only when the migration actually
+  runs, so an already-versioned stack (every ordinary `make run`) issues no destructive
+  statement at all.
+- **`metrics_ro`'s SHOW grant is per table.** Five explicit grants matching the
+  scraper's own list, not `default.*`: `eval_meta`, `rollup_refreshed` and every table
+  a later phase adds stay invisible to it. What SHOW does confer is stated in the file
+  — names, and through `system.tables` the engine and sort key, plus `CHECK TABLE`'s
+  read amplification — because "table NAMES, never a row of data" was an over-claim.
+  `agent_ro`'s grant text is now asserted directly (`show grants for agent_ro`), where
+  the old test checked the DEFAULT user's liveness under a docstring making the
+  agent_ro claim.
+- **The money tripwire is fail-closed by derivation.** `tests/test_rollup_decimal.py`
+  derives the expected set from `clickhouse/ddl.sql` (tables with a money column) ∩ the
+  tables this module inserts into, and asserts it equals `rollup.MONEY_TABLES` — so a
+  money-bearing table added to THIS module cannot slip past the Decimal-path scan by
+  being forgotten, where the first cut's hand-maintained tuple would have let it.
+  Scope, stated rather than overclaimed: the derivation covers `reconcile/rollup.py`'s
+  INSERTs and the `spend` / `revenue` columns, so 18b's `query_cost_daily` — written by
+  `queries/cost_report.py`, with cost columns — is NOT covered and needs its own guard.
+- **A writer gets its own principal: 18b creates `cost_rw`, it does not widen
+  `metrics_ro`.** The earlier ruling ("one user, 18b reuses it") was right while both
+  consumers were readers; 18b's Done-when 4 needs `SELECT ON system.query_log` and
+  `INSERT INTO query_cost_daily`, so reusing `metrics_ro` would widen the principal
+  this phase pinned as read-only metadata-only. `metrics_ro` stays as it is;
+  `cost_rw` gets exactly those two grants, following the per-table precedent
+  established here. Recorded because 18a's spec carried the superseded instruction as
+  a "do not re-litigate" decision, which 18b's commit 1 would have read against its
+  own banner (review gate, round 2).
+

@@ -12,7 +12,7 @@ Four checks (1-3 over README.md and every docs/*.md; 4 over CLAUDE.md/BACKLOG.md
      and every README first-screen number sourced from a block equals the block.
   3. Traces — every guard / alert / make target / source phrase the docs name by
      identity exists in source, matched as an exact token (a partial rename such
-     as `_canonicalize` → `_canonicalize_tables` FAILS; BACKLOG 37).
+     as `canonicalize` → `canonicalize_tables` FAILS; BACKLOG 37).
   4. BACKLOG count — CLAUDE.md's "Open BACKLOG rows: **N**" equals the un-struck
      rows in BACKLOG.md (the sentence two branches rewrite; PR #35 audit r1-D8).
 Accuracy TABLE cells are guarded separately by tests/test_docs_accuracy_pins.py.
@@ -147,6 +147,12 @@ def _markers() -> list[tuple[str, Path, str, str]]:
             _const("queries/measure_levers.py", "_START"),
             _const("queries/measure_levers.py", "_END"),
         ),
+        (
+            "rollup-bench",
+            RESULTS,
+            _const("queries/rollup_bench.py", "_START"),
+            _const("queries/rollup_bench.py", "_END"),
+        ),
     ]
 
 
@@ -180,6 +186,13 @@ _DERIVED: list[tuple[str, str, str, str]] = [
         "scale-curve",
         r"~([\d.]+) TB at the measured",
         r"~([\d.]+) TB",
+    ),
+    (
+        "rollup write ratio",
+        "rollup-bench",
+        r"\| rows written \|[^|\n]*\|[^|\n]*\| ([\d.]+)× fewer",
+        r"incremental rollup refresh[^|\n]*\|[^|\n]*\|[^|\n]*?"
+        r"([\d.]+)× fewer rows written",
     ),
     (
         "lever 1 rows ratio",
@@ -263,7 +276,7 @@ def check_generated(errors: list[str]) -> int:
 
 def token_present(needle: str, haystack: str) -> bool:
     """Exact-token match: `needle` must not continue into an identifier on either
-    side, so `_canonicalize` does NOT match `_canonicalize_tables`."""
+    side, so `canonicalize` does NOT match `canonicalize_tables`."""
     pattern = r"(?<![\w])" + re.escape(needle) + r"(?![\w])"
     return re.search(pattern, haystack) is not None
 
@@ -275,7 +288,10 @@ TRACES: list[tuple[str, str]] = [
     ("observability/rules/alerts.yml", "WatermarkStall"),
     ("observability/rules/alerts.yml", "MatchRateOutOfBand"),
     ("observability/rules/alerts.yml", "RestatementMagnitude"),
-    ("queries/bench.py", "_canonicalize"),
+    ("observability/rules/alerts.yml", "PartCountHigh"),
+    ("observability/ch_scrape.py", "clickhouse_active_parts"),
+    ("observability/ch_scrape.py", "clickhouse_unmerged_parts"),
+    ("queries/bench_common.py", "canonicalize"),
     ("reconcile/rollup.py", "reported_at"),
     ("reconcile/rollup.py", "toDecimal64"),
     ("tests/test_rollup_decimal.py", "toDecimal64"),

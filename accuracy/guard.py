@@ -16,6 +16,19 @@ own failure.
 """
 
 
+def db_profile_marker(client) -> str | None:
+    """The profile string in `eval_meta` (None if the table is empty OR not yet
+    created — a bare `make up` before any populate target applies the DDL, so the
+    guard gives its friendly "no marker" message instead of a raw UNKNOWN_TABLE).
+    The populate path stamps it so the DB self-describes which profile populated the
+    serving tables (BACKLOG 43). Lives here, beside the assert, so every reader of
+    the marker (`make eval`, `make rollup-bench`) reads it the same way."""
+    if int(client.command("exists table eval_meta")) == 0:
+        return None
+    rows = client.query("select profile from eval_meta final").result_rows
+    return rows[0][0] if rows else None
+
+
 class ProfileMismatchError(SystemExit):
     """Loud exit (a SystemExit subclass) when the DB's marker profile does not
     match the profile being scored, or no marker is present. SystemExit so

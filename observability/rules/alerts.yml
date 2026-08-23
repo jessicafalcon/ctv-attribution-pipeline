@@ -1,8 +1,9 @@
-# Attribution-integrity alert rules (Phase 7). Four deterministic conditions
-# over the pipeline's own metrics; each is triggerable by a producer knob and
-# proven by promtool against REAL captured values (observability/rules/tests/
-# alerts_test.yml, baked by observability/gen_alert_fixtures.py from the
-# make metrics-capture .prom dumps — see specs/phase-7.md).
+# Attribution-integrity alert rules (Phase 7, + one storage rule Phase 18a). Five
+# deterministic conditions over the pipeline's own metrics; each of the first four is
+# triggerable by a producer knob and proven by promtool against REAL captured values
+# (observability/rules/tests/alerts_test.yml, baked by
+# observability/gen_alert_fixtures.py from the make metrics-capture .prom dumps — see
+# specs/phase-7.md). PartCountHigh is the documented exception, below.
 #
 # Thresholds sit between the clean profile (tiny) and the knobbed one
 # (long_delay), both real captured runs (recaptured Phase 16):
@@ -16,7 +17,22 @@
 # the MatchRate floor now clears by 0.054 — kept, revisit at the Phase-18
 # recapture).
 #
-# No annotations yet: they only surface in an Alertmanager notification, and live
+# PartCountHigh (Phase 18a) does NOT follow the between-two-profiles pattern, and the
+# reason is recorded rather than hidden. Its threshold is ClickHouse's OWN
+# parts_to_delay_insert default (150) — the point where the server starts throttling
+# inserts — not a number chosen between two of our captures, because none exists: the
+# real captures peak at 4 active parts on tiny and 5 on long_delay, two orders of
+# magnitude below the threshold (part count here follows insert batching and merge
+# timing, not event volume). So its SILENCE is
+# proven by both real captures and its FIRING by a synthetic promtool input
+# (observability/rules/tests/alerts_synthetic_test.yml, active_parts=151) — the file
+# name says synthetic. A merge-lag rule is deliberately NOT shipped: every settled
+# capture reads clickhouse_merge_backlog_seconds = 0, so there is nothing real to fire
+# it. The metric ships anyway — measuring without alerting is true, alerting without a
+# fireable measurement is not (BACKLOG; DECISIONS Phase 18a).
+#
+# No annotations yet on the Phase-7 four: they only surface in an Alertmanager
+# notification, and live
 # firing (a real scrape → notification) is the deferred push path (BACKLOG). Here
 # the rules are proven and the live-scrape hop is simulated; annotations (with
 # {{ $value }} rendering) land with that live path. Each rule's meaning is in the
@@ -59,3 +75,20 @@ groups:
         for: 5m
         labels:
           severity: warning
+
+      # A table is approaching the point where ClickHouse throttles its inserts.
+      # Un-merged parts are the operating cost of FINAL (RUNBOOK incident #1): a
+      # FINAL scan physically reads every version-part before collapsing it, and
+      # past parts_to_delay_insert the server slows writers down on purpose.
+      - alert: PartCountHigh
+        expr: clickhouse_active_parts > 150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            {{ $labels.table }} has {{ $value }} active parts — ClickHouse delays
+            inserts from 150 (parts_to_delay_insert) and rejects them at 300
+            (parts_to_throw_insert). Threshold is the SERVER's default, not a
+            number measured between our profiles: real captures peak at 5 parts
+            (see alerts_test.yml). Check background merges before writing more.

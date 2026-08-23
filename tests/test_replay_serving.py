@@ -69,11 +69,19 @@ def test_replay_truncates_both_tables_then_reloads_every_lake_day(monkeypatch) -
         "truncate table exposures_landed",
         "truncate table attributed_conversions",
         "truncate table eval_meta",  # a stale marker over a half-loaded DB, never
+        # Phase 18a: the rollup and its dirty-set bookkeeping go too. They describe a
+        # state of the tables above that no longer exists once those are truncated —
+        # keeping them was the re-seed hazard (bookkeeping from the PREVIOUS data
+        # marked keys clean, so the refresh skipped them and the old rollup was served
+        # over new rows; invisible to every gate, because the rows themselves were
+        # right). The loader rebuilds campaign_hourly as it reloads.
+        "truncate table campaign_hourly",
+        "truncate table rollup_dirty",
+        "truncate table rollup_refreshed",
     ]
-    # derived state is NOT touched by a replay (the next reconcile pass refreshes
-    # it) — the documented boundary, pinned
-    derived = ("campaign_hourly", "report_snapshots")
-    assert not any(d in c for c in client.commands for d in derived)
+    # report_snapshots is NOT truncated: the restatement history is the one derived
+    # table a reload cannot reconstruct (BACKLOG) — the documented boundary, pinned
+    assert not any("report_snapshots" in c for c in client.commands)
     assert loaded == [{"2026-08-01", "2026-08-05"}]
 
 

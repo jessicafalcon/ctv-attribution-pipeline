@@ -140,8 +140,10 @@ make test && make lint && make test-alerts \
 This spec was written before Phase 17 merged (PR #31) and its body has NOT been
 rewritten — that rewrite is this branch's commit 1 (CLAUDE.md Workflow rules:
 spec-reconciliation amendment first, stop for approval, no implementation before
-it is approved). The amendment must resolve the items of BACKLOG row 56 (Phase-17
-coherence audit D2 + Q3/Q4) that fall in this half:
+it is approved). The amendment must resolve the items of the BACKLOG row "Phase 18
+spec needs a Phase-17 follow-up edit BEFORE its branch opens (Phase-17 coherence
+audit D2)" (cited by TITLE — BACKLOG line numbers shift, Phase-19 audit D-b) that
+fall in this half:
 
 - **`streaming/sink.py` → the lake landing step.** Done-when 1 and 3 name the
   hot-path ClickHouse sink, deleted in Phase 17. The engine lands to the lake
@@ -151,6 +153,26 @@ coherence audit D2 + Q3/Q4) that fall in this half:
   down && make up && make seed PROFILE=long_delay && make run`) it no longer runs:
   it needs `make lake-reset PROFILE=long_delay CONFIRM=yes` after `make down` and
   `PROFILE=long_delay` on `make run` (the engine binds its lake from `--profile`).
+- **"the four existing rules plus the two new ones" → plus the ONE new one.** Phase
+  18a ships `PartCountHigh` only; the merge-lag rule was not shippable from a real
+  capture (every settled capture reads `clickhouse_merge_backlog_seconds = 0`) and is
+  a BACKLOG row. Done-when 6 and the `make test-alerts` bullet must say five rules,
+  and 18a's synthetic fixture (`alerts_synthetic_test.yml`) is a second file the live
+  firing path has to account for (Phase-18a amendment, 2026-08-22).
+- **"cost writer user" → a NEW `cost_rw`, not `metrics_ro` (superseding the earlier
+  "reuse it" instruction).** Phase 18a's `metrics_ro` is granted SELECT on
+  `system.parts` / `system.merges` plus SHOW TABLES on five named tables — it is a
+  read-only metadata principal, and Done-when 4 needs `SELECT ON system.query_log` AND
+  `INSERT INTO query_cost_daily`. Reusing it would widen a principal this phase pinned
+  as "a second principal, not a wider first one". 18b creates `cost_rw` with exactly
+  those two grants; `metrics_ro` stays read-only and unchanged. The earlier ruling was
+  right while both consumers were readers; a writer gets its own (Phase-18a review
+  gate, 2026-08-22).
+- **The header's dependency sentence is stale too.** Line 10-12 says 18a's "**two
+  alert rules** are part of what Done-when 6 fires live" — 18a ships ONE
+  (`PartCountHigh`); no merge-lag rule exists. Done-when 6 must say five rules, and it
+  must account for a SECOND fixture file (`alerts_synthetic_test.yml`) and for 18a's
+  new terminal registry (`observability/ch_scrape.py`) as a Pushgateway push source.
 
 
 The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:

@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -119,6 +119,7 @@ resolve:
 run:
 	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
 	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
+	uv run python -m observability.ch_scrape
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -127,6 +128,7 @@ run:
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
 	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
+	uv run python -m observability.ch_scrape
 
 # Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
 # reconciled_conversions asset (exposures sourced from Iceberg via DuckDB,
@@ -186,8 +188,8 @@ bench:
 # Query cost levers (Phase 13): three before/after measurements on the report
 # query over the bench_large serving tables — a projection ordered by event_time
 # (WINS), a FINAL-avoidance / bloom-skip-index candidate (documented NEGATIVE
-# result — the schema doesn't reward one), and PREWHERE (WINS). Reuses bench.py's
-# canonicalization + summary reader; asserts direction (winners read fewer bytes;
+# result — the schema doesn't reward one), and PREWHERE (WINS). Reuses
+# bench_common.py's canonicalization + summary reader; asserts direction (winners read fewer bytes;
 # the negatives are asserted NOT to help) and identical result rows; rewrites the
 # "Query cost levers" block in docs/RESULTS.md. Live-stack: run after
 # `make lake-reset PROFILE=bench_large CONFIRM=yes && make up && make seed
@@ -195,6 +197,22 @@ bench:
 # PROFILE on every step — the engine binds its lake from --profile).
 cost-levers:
 	uv run python -m queries.measure_levers
+
+# Rollup refresh: full rebuild vs dirty-set refresh (Phase 18a), on a populated
+# stack. Asserts the two leave campaign_hourly FINAL identical (6dp), that the
+# incremental refresh WRITES fewer rows (direction only — rows read are printed with
+# the granule counts that explain why they do NOT fall at this size), and the
+# dirty-set gate: every key whose rollup row changed is in the dirty set above the
+# rollup recomputed. Rewrites the "Rollup refresh" block in docs/RESULTS.md. ONE
+# python process: it validates PROFILE ([a-z0-9_]+) and refuses a DB populated from
+# another profile (the eval_meta marker) BEFORE it touches anything. PROFILE is never
+# a path. It is not read-only: it applies the DDL (including the report_snapshots
+# migration on an unmigrated stack) and creates + drops two scratch tables of its own
+# — the live rollup is never its write target, which is what makes its equality check
+# an oracle rather than a self-comparison. Run after `make run PROFILE=<p>` on a profile
+# whose reconcile pass restates something (long_delay).
+rollup-bench:
+	uv run python -m queries.rollup_bench --profile $(call _Q,$(value PROFILE))
 
 # Dump each stage's terminal Prometheus registry from a REAL run (the provenance
 # of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make
@@ -206,6 +224,7 @@ metrics-capture:
 	mkdir -p data/out/$(call _Q,$(value PROFILE))/metrics
 	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE)) --metrics-out data/out/$(call _Q,$(value PROFILE))/metrics/engine.prom
 	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE)) --metrics-out data/out/$(call _Q,$(value PROFILE))/metrics/reconcile.prom
+	uv run python -m observability.ch_scrape --metrics-out data/out/$(call _Q,$(value PROFILE))/metrics/clickhouse.prom
 
 # Attribution accuracy (household grain) vs the truth side file, for the given
 # PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;
@@ -267,6 +286,7 @@ test-int:
 	uv run pytest tests/integration \
 		--ignore=tests/integration/test_engine_hardening.py \
 		--ignore=tests/integration/test_reconcile.py \
+		--ignore=tests/integration/test_rollup_dirty.py \
 		--ignore=tests/integration/test_context.py \
 		--ignore=tests/integration/test_lakehouse.py
 
@@ -290,7 +310,11 @@ test-int-medium:
 # Phase-6 live reconciliation proof on a CLEAN long_delay-only stack, isolated by
 # the sanctioned `make down` (tiny/medium/long_delay share conversion_id space;
 # DECISIONS Phase 5). Recovers the long-delay misses, then asserts the recovery
-# delta + restatement against ClickHouse FINAL.
+# delta + restatement against ClickHouse FINAL — and, since Phase 18a, the
+# dirty-set gate (test_rollup_dirty.py): every key whose rollup row the reconcile
+# pass changed was refreshed, and the served rollup equals a full rebuild. The gate
+# lives HERE, not in `make rollup-bench`: a contract proven only by a target CI
+# never runs is proven nowhere it matters (review gate).
 test-int-long-delay: PROFILE = long_delay
 test-int-long-delay: export CTV_INT = 1
 test-int-long-delay:
@@ -299,7 +323,7 @@ test-int-long-delay:
 	$(MAKE) up
 	$(MAKE) seed PROFILE=long_delay
 	$(MAKE) run PROFILE=long_delay
-	uv run pytest tests/integration/test_reconcile.py
+	uv run pytest tests/integration/test_reconcile.py tests/integration/test_rollup_dirty.py
 
 # Phase-8/16 live fault-harness proof on a CLEAN shared_ip_spike-only stack,
 # isolated by the sanctioned `make down` (profiles share conversion_id space;
@@ -356,7 +380,8 @@ test-int-lakehouse:
 	$(MAKE) run-hot PROFILE=long_delay
 	uv run pytest tests/integration/test_lakehouse.py
 
-# Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
+# Prove the five alert rules behave on REAL captured metric values (plus the one
+# labelled-synthetic input that fires PartCountHigh — see alerts.yml) (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
 # validates syntax; `test rules` asserts each alert fires on long_delay's captured
 # numbers and that on tiny's only RestatementMagnitude fires (the Phase-16 deferral
@@ -366,6 +391,7 @@ test-int-lakehouse:
 test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_synthetic_test.yml
 
 # The one docs guard (Phase 19; was check-runbook, Phase 15): every link/anchor in
 # README.md + docs/ resolves, every `make`-generated block is present under its

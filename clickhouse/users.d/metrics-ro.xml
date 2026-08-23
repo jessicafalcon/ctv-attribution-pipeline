@@ -1,0 +1,63 @@
+<clickhouse>
+  <!--
+    The metrics scraper's principal (Phase 18a). Identity lives in users.d, like
+    agent-ro.xml and allow-network.xml, and is reconstructed from this file at every
+    container start — it cannot drift the way a SQL-created user in the mutable
+    access/ store can.
+
+    `metrics_ro` is granted SELECT on exactly TWO system tables (`system.parts`,
+    `system.merges`) plus SHOW TABLES on the five tables the scraper counts. It cannot read a single row of pipeline data — not
+    attributed_conversions, not exposures_landed, nothing in `default` — which is the
+    point: the scraper reports how ClickHouse is storing the data, never what the data
+    says. Pinned by tests/integration/test_metrics_ro.py (the mirror of the agent_ro
+    write-denied test, SN2).
+
+    Grant form, NOT <readonly>1</readonly>: readonly=1 can reject the benign session
+    settings clickhouse-connect sends on connect (400), whereas a SELECT grant is
+    enforced at the access-control layer and leaves the session alone. Inline <grants>
+    is supported since ClickHouse 22.4 (image is 24.8).
+
+    `agent_ro`'s grants are UNCHANGED by this phase — a second principal, not a wider
+    first one.
+
+    Passwordless, ::/0, same local-dev posture as agent-ro.xml: the host publishes 8123
+    on 127.0.0.1 only (compose), so the service stays off the LAN. Not for
+    shared/multi-user hosts (BACKLOG). No secret is committed; a hardened deploy points
+    CLICKHOUSE_METRICS_USER / _PASSWORD at its own credential, which lives in .env and
+    never in CI.
+  -->
+  <users>
+    <metrics_ro>
+      <password></password>
+      <networks replace="replace">
+        <ip>::/0</ip>
+      </networks>
+      <grants>
+        <query>GRANT SELECT ON system.parts</query>
+        <query>GRANT SELECT ON system.merges</query>
+        <!--
+          ClickHouse FILTERS the rows of system.parts / system.merges to the tables the
+          user may see: without a grant on `default`, the scrape returns zero rows and
+          silently reports "0 active parts" (found live, Phase 18a — ARCHITECTURE §8).
+          SHOW TABLES lifts that filter. It is granted PER TABLE, on exactly the five
+          the scraper enumerates (observability/ch_scrape.py TABLES) — not on
+          `default.*`, so `eval_meta`, `rollup_refreshed` and every table a later phase
+          adds (including the migration's `report_snapshots_v2` scratch) stay invisible
+          here rather than becoming visible by default.
+
+          What SHOW confers and what it does not: table names, and — through
+          system.tables — engine and sort key; NOT a row of data. Every SELECT, INSERT,
+          ALTER, DROP and CREATE against a pipeline table is ACCESS_DENIED, pinned by
+          tests/integration/test_metrics_ro.py. It also confers CHECK TABLE, which
+          checksums a table's parts: read amplification available to a metadata reader,
+          stated rather than hidden (security review, Phase 18a).
+        -->
+        <query>GRANT SHOW TABLES ON default.attributed_conversions</query>
+        <query>GRANT SHOW TABLES ON default.exposures_landed</query>
+        <query>GRANT SHOW TABLES ON default.campaign_hourly</query>
+        <query>GRANT SHOW TABLES ON default.report_snapshots</query>
+        <query>GRANT SHOW TABLES ON default.rollup_dirty</query>
+      </grants>
+    </metrics_ro>
+  </users>
+</clickhouse>

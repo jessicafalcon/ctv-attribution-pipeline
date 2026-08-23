@@ -40,7 +40,7 @@ ICEBERG LAKE (system of record, Phase 17)  raw.exposures · raw.attributed_conve
             day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
                                        ▼ Dagster load (touched days)
 CLICKHOUSE  (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
-            exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
+            exposures_landed · campaign_hourly (incremental refresh, dirty keys) · report_snapshots
                                        ▲
 RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
                                state-miss → bucket-local join vs raw.exposures [day−90d, day];
@@ -94,7 +94,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   `replay.py` / `maintenance.py` are library code for `lake/destructive.py`.
 - `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
-- `observability/` — prometheus.yml, alert rules, grafana dashboards (JSON).
+- `observability/` — prometheus.yml, alert rules (five; `PartCountHigh` is the
+  Phase-18a storage one), grafana dashboards (JSON), `gen_alert_fixtures.py` (bakes
+  the promtool fixtures from captured .prom dumps), `ch_scrape.py` (the one-shot
+  `clickhouse_` storage scrape, run at the end of `make run` / `run-hot` /
+  `metrics-capture` as the SELECT-only `metrics_ro`).
 - `agent/` — collectors (deterministic, no LLM), hypothesis catalog (enum),
   `probes.py` registry, loop, webhook endpoint, `eval/` fault → diagnosis.
 - `common/` — `kafka.py`, the shared start→end topic drain (engine + graph loader).
@@ -131,13 +135,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/;
   the unit proof of the resolve step the engine runs in-process
-- `make run` — engine (resolve in-process → hot join) → lake → Dagster load →
-  ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
+- `make run` — engine (resolve in-process → hot join) → lake → Dagster load (which
+  also refreshes the rollup keys it touched) → ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
   reloads touched days → rollup + snapshots; a single pass, not a daemon); the full
   pipeline over the seeded stream. Every row in ClickHouse arrived through the lake
   (Phase 17). One lake per PROFILE, `data/lake/<profile>`, bound by each entry
   point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override)
-- `make run-hot` — engine → lake → load only, no reconciliation; backs the hot-path
+- `make run-hot` — engine → lake → load only (the load refreshes its rollup keys), no
+  reconciliation; both `run` and `run-hot` end with the one-shot `clickhouse_` storage
+  scrape, which exits non-zero if ClickHouse's part counts have not settled (BACKLOG); backs the hot-path
   oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
   reconciliation pass would over-credit long-tail organics and shift the pins. Hot
   numbers exclude the deferred shared-IP conversions by design (Phase 16)
@@ -167,6 +173,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
+- `make rollup-bench PROFILE=<p>` — full rollup rebuild vs the Phase-18a dirty-set
+  refresh on a populated stack, each run into its OWN scratch table (the live rollup is
+  never the oracle's medium; the tool also applies the DDL, so it is not read-only):
+  asserts the two agree (6dp) and that the incremental refresh WRITES fewer rows (direction only; rows read
+  are printed with the granule counts explaining why they do not fall at profile size),
+  and gates the loader↔rollup contract — every key whose rollup row changed is in the
+  set the refresh recomputed (`changed ⊆ dirty`; equality is evidence, not the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
+  `make run PROFILE=<p>` on a profile whose reconcile pass restates something
+  (`long_delay`)
 - `make eval` — attribution precision/recall vs truth for the given `PROFILE`
   (default `tiny`)
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
@@ -184,7 +199,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   projection ordered by `event_time` on `attributed_conversions` (WINS — date-range
   prune), a FINAL-avoidance / bloom-skip-index candidate (documented NEGATIVE result —
   the schema doesn't reward one: leading key already prunes campaign, non-key columns
-  scattered), and PREWHERE (WINS). Reuses `bench.py`'s canonicalization + summary
+  scattered), and PREWHERE (WINS). Reuses `bench_common.py`'s canonicalization + summary
   reader; magnitude-free direction asserts + 6dp row-equality; rewrites the "Query cost
   levers" block in `docs/RESULTS.md`. Run after `make lake-reset PROFILE=bench_large
   CONFIRM=yes && make up && make seed PROFILE=bench_large
@@ -203,9 +218,14 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   populated lake the reconcile candidates are the lake's current rows and a second
   capture differs; recaptured in Phase 18a)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
-  prometheus image: the four alert rules fire on long_delay's captured values;
-  on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
-  ROAS) and the other three stay silent (offline; needs the image, not the stack)
+  prometheus image, over TWO fixtures: `alerts_test.yml` (REAL captured values — the
+  four workload rules fire on long_delay; on tiny only RestatementMagnitude fires, the
+  Phase-16 deferral landing restates ROAS, and `PartCountHigh` is silent on both) and
+  `alerts_synthetic_test.yml` (the one synthetic input in the repo, and the file name
+  says so: `clickhouse_active_parts=151` crosses ClickHouse's own
+  `parts_to_delay_insert` default, proving PartCountHigh's firing side — no profile
+  here leaves a table near that threshold, so no capture can). Offline; needs the
+  image, not the stack
 - `make check-docs` — the one docs guard (`scripts/check_docs.py`, Phase 19; was
   `check-runbook`), four checks: every link/anchor in README.md + docs/ resolves;
   each `make`-generated block (`scale-curve`, `cost-levers`) is present under its
@@ -342,8 +362,12 @@ AI sits at the edge; the pipeline is deterministic.
   the wall clock.
 - The pipeline NEVER reads truth links.
 - Every write to attributed_conversions is idempotent (ReplacingMergeTree
-  keyed conversion_id, version processed_at). Rollups are refreshed on
-  schedule, never insert-triggered summing MVs (corrections would double-count).
+  keyed conversion_id, version processed_at). Rollups are refreshed as a BATCH step
+  that recomputes from source — since Phase 18a, by the loader over the keys each load
+  touched — never insert-triggered summing MVs (corrections would double-count). Every
+  rollup row's version is data-derived (`max(stamp)` over the rows it summarizes), so
+  identical content always carries an identical version and a re-computation can never
+  lose to an older one.
 - Test question for any design choice: "could this step give a different
   answer on a re-run?" If yes, justify in DECISIONS.md or fix it.
 
@@ -386,7 +410,11 @@ AI sits at the edge; the pipeline is deterministic.
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
-  reconcile_, agent_.
+  reconcile_, agent_, clickhouse_ (the storage scrape, `observability/ch_scrape.py` —
+  how ClickHouse stores the data, never what the data says: `clickhouse_active_parts`,
+  `clickhouse_unmerged_parts` (level-0 parts, the deterministic view of pending
+  collapse work), `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its
+  HELP text)).
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
 - Engine features (dedup, lateness, eviction) are added one at a time, each
@@ -593,13 +621,15 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
-(spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
-`tooling/review-round` (PR #35, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
-In review: `fix/make-quote-profile` (PR #36, 2026-08-23 — closes the Phase-17
-`"$(PROFILE)"`-expansion residual). Next in order: 18b (its spec carries a
-"Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **37** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+**Current phase: 18a (cost and ops levers) — in review (PR #38)** on
+`phase-18a-cost-and-ops` (spec `specs/phase-18a-cost-and-ops.md`, reconciled
+2026-08-22 — the branch's commit 1; `main` merged in 2026-08-23 to bring it current;
+`## Invariants` added review-round 1; round-1 + coherence fixes applied, gate 5/5,
+mutate 7/7, coherence-auditor clear). **Last merged: `fix/review-gate-pytest9`
+(PR #37, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
+Next in order: 18b (its spec carries a "Pre-branch reconciliation required" banner;
+its branch's commit 1 is that amendment — DECISIONS "Process").
+Open BACKLOG rows: **42** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

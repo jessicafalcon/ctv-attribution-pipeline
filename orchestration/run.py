@@ -72,7 +72,22 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     """Load exactly `days` (YYYY-MM-DD event_time days — the days a landing
     TOUCHED, spec D6) from the lake into ClickHouse; return rows inserted per
     table. Idempotent per day (the ReplacingMergeTree collapses re-inserts).
-    Called in-process by the engine and the reconcile job after they land."""
+    Called in-process by the engine and the reconcile job after they land.
+
+    Then REFRESHES the rollup keys this load touched (Phase 18a): the loader is the
+    one writer of the serving tables, so the rollup is brought current where the load
+    moved it and nowhere else. Still a batch step that recomputes from source, never
+    an insert-triggered summing MV (the determinism policy's line is about corrections
+    double-counting).
+
+    No version argument: each rollup row carries `max(stamp)` over the rows it
+    summarizes, so what a load stamps depends only on the data it loaded — the hot
+    load, the reconcile reload and a replay all agree, and none can write a row the
+    ReplacingMergeTree discards as older than a correct one (review-gate round 3).
+
+    A first load finds every key dirty, so it is a full-equivalent refresh; the
+    reconcile pass's reload is then a genuinely incremental second pass — which is the
+    path `make rollup-bench` measures."""
     totals = {"exposures": 0, "attributed": 0}
     if not days:
         return totals
@@ -88,6 +103,11 @@ def materialize_load(days: set[str]) -> dict[str, int]:
     for day in sorted(days):
         for key, asset_def in _LOAD_ASSETS:
             totals[key] += _rows(_materialize([asset_def], instance, day), "rows")
+    # Local import: `reconcile.rollup` pulls the reconcile package, and this module is
+    # imported by the offline suites (same reason as the other lazy imports here).
+    from reconcile import rollup
+
+    totals["rollup_keys"] = rollup.refresh_campaign_hourly(connect())
     return totals
 
 

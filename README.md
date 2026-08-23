@@ -33,6 +33,7 @@ into [`docs/RESULTS.md`](docs/RESULTS.md); the direction is the claim, not the m
 | projection ordered by `event_time` | WIN | 1.54× fewer rows on a date-scoped slice |
 | FINAL-avoidance (`argMax` GROUP BY) / bloom skip index | DOCUMENTED NEGATIVE | `FINAL` reads 0.26× the bytes of the manual collapse; the skip index prunes 0 granules |
 | PREWHERE the window predicate | WIN | 1.21× fewer bytes, same rows |
+| incremental rollup refresh (dirty set, `make rollup-bench`) | WIN on writes | 17.9× fewer rows written; reads do not fall at this size — one granule |
 
 **Agent eval:** 30/30 correct diagnoses, false-positive rate 0/10 = 0% (Phase 10, live,
 30 invocations; the near-miss pair — genuine lift vs shared-IP inflation — held both ways).
@@ -67,7 +68,7 @@ ICEBERG LAKE (system of record)  raw.exposures · raw.attributed_conversions
             day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
                                        ▼ Dagster load (touched days)
 CLICKHOUSE (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
-            exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
+            exposures_landed · campaign_hourly (incremental refresh, dirty keys) · report_snapshots
                                        ▲
 RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
                                state-miss → bucket-local join vs raw.exposures [day−90d, day];
@@ -149,10 +150,14 @@ touched day and can be rebuilt from it with no Kafka (`make replay-serving`).
 **ReplacingMergeTree** keyed on `conversion_id` with `processed_at` as the version: when
 a reconciliation correction or a replay writes the same key with a newer version, reads
 with `FINAL` (or `argMax`) return only the latest — so replays and corrections are safe
-by construction. `campaign_hourly` is a rollup **refreshed on a schedule**, never an
+by construction. `campaign_hourly` is a rollup the loader **refreshes over the keys
+each load touched** (a full rebuild stays as the oracle), never an
 insert-triggered summing view (a correction would otherwise double-count).
-`report_snapshots` stamps each refresh with `reported_at`, which is what makes
-restatements ("ROAS for day D as reported on D+1 vs now") queryable.
+`report_snapshots` stamps each refresh with `reported_at` — which is what makes
+restatements ("ROAS for day D as reported on D+1 vs now") queryable — and carries
+`snapshot_version` (`max(processed_at)` over the rows it summarized) as its
+ReplacingMergeTree version, so which of two rows on one key survives a merge is decided
+by the data rather than by merge timing.
 
 **Reconciliation job (periodic, reads the lake).** Per event-time day, selects the
 current hot-unattributed rows still inside the 90-day long window — state-misses join
@@ -219,7 +224,7 @@ reproduced by the command it states.
   `make bench` if the rollup ever stops being the smaller read. The structural point: the
   naive scan grows with every event, the rollup read is bounded by `(campaign, hour)`.
 - **Alert rules** are proven by `promtool test rules` against REAL captured stage
-  registries (`make test-alerts`): all four fire on `long_delay`; on `tiny` only
+  registries (`make test-alerts`): the four workload rules fire on `long_delay`; on `tiny` only
   `RestatementMagnitude` fires (its own deferral landing restates ROAS). They detect
   *operational* faults, not inflation — a green alert board does not mean the numbers
   are right, which is the agent's job.
@@ -287,10 +292,10 @@ resolve/         conversion → household resolution (in-process map step; devic
 streaming/       attribution engine: pure core + batch-drain driver (window, dedup, lateness, eviction)
 lake/            Iceberg lake of record: catalog, schemas, landing, DuckDB reads, ClickHouse loader
 orchestration/   Dagster assets (lake → ClickHouse load, day-partitioned reconcile) + headless CLI
-reconcile/       periodic long-window matcher over the lake, rollup refresh, snapshots
-clickhouse/      DDL, users (agent_ro is SELECT-only), migrations
+reconcile/       periodic long-window matcher over the lake, rollup, snapshots
+clickhouse/      DDL, users (agent_ro SELECT-only; metrics_ro metadata-only), migrations
 queries/         reporting SQL, restatement view, naive-vs-optimized benchmark, cost levers
-observability/   prometheus.yml, alert rules, grafana dashboard (JSON)
+observability/   prometheus.yml, 5 alert rules, the clickhouse_ scrape, grafana (JSON)
 agent/           collectors, hypothesis catalog, probe registry, loop, webhook, eval/
 accuracy/        household-grain precision/recall vs the truth side file
 common/          kafka.py — the shared start→end topic drain (engine + graph loader)
@@ -330,13 +335,13 @@ cited. Rationale per phase: [`DECISIONS.md`](DECISIONS.md).
 | 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
 | 17 | 08-21 | #31 | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (one of the three destructive paths, `lake/destructive.py`), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | PASSED (3 review rounds — see DECISIONS "Process") | `phase-17-lake-of-record` |
 | 19 | 08-22 | #33 | *post-plan* — docs reshape (runs BEFORE 18a/18b, DECISIONS "Process"): README first screen = constraint → two paths → pinned tables; DECISIONS split into "still in force" + per-phase appendix, superseded entries annotated in place; ARCHITECTURE §3 as the post-17 end state; CLAUDE.md status table moved here; `make check-docs` = links/anchors + generated-block + exact-token guard (was `check-runbook`; closes BACKLOG 37) | merged 08-22 | `phase-19-docs-reshape` |
+| 18a | 08-22 | #38 | *post-plan* — cost and ops levers, first half: the Dagster loader records the `(campaign_id, hour)` keys each load touches (`rollup_dirty`) and refreshes them after every load — the rollup row's version is `max(stamp)` over the summarized rows (data-derived, no caller offset), so the reconcile pass's reload is a genuinely incremental second pass (19 of 340 keys rewritten, 17.9× fewer rows written; reads unchanged at one granule). Per-key watermark (`rollup_refreshed`), never a global max: the first cut left 321 of 340 keys permanently unrefreshed. `report_snapshots` gains `snapshot_version` as its RMT version (migrated by create → backfill → `exchange tables` → drop; ClickHouse has no `alter … modify engine`). Storage measured by a one-shot `clickhouse_` scrape as a SELECT-only `metrics_ro`; ONE new alert rule, `PartCountHigh > 150` (the server's `parts_to_delay_insert`) — silence from real captures, firing from a labelled synthetic input; no merge-lag rule, because no capture can fire one. `queries/bench_common.py` graduated | in review | `phase-18a-cost-and-ops` |
 
-Next in order: **18a** (incremental rollup, dirty-set gate, part-count / merge-lag
-metrics) → **18b** (async inserts, `query_cost_daily`, BACKWARD compat, live alert
+Next in order: **18b** (async inserts, `query_cost_daily`, BACKWARD compat, live alert
 firing) — specs under `specs/`, reconciled against main before each branch opens.
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
-- `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29).
+- `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29; the helper is `queries/bench_common.py` `canonicalize` since Phase 18a).
 - `fix/agent-env-load` (PR #15) — `agent-run`/`agent-eval` auto-load `.env` via `uv run --env-file`, guarded + scoped (BACKLOG 34; security-review PASS).
 - `fix/eval-demo-profile` (PR #23) — `make eval` PROFILE prose + long_delay demo fixed; the durable profile/DB-mismatch guard and the `Makefile:128-129` comment twin shipped in `fix/eval-profile-guard` (BACKLOG 43).
 - `fix/eval-profile-guard` (PR #25) — fail-loud eval profile/DB-mismatch guard: `eval_meta` marker stamped by every populate target (run/run-hot/metrics-capture; since Phase 17 also replay-serving), asserted `== --profile` in `accuracy/run.py`; closes BACKLOG 43 incl. the Makefile:128-129 comment twin. Marker off the golden path, no timestamp → gate-0 byte-identical.

@@ -123,6 +123,43 @@ the difference between a full-history scan and a bounded rollup read — see
 `SCALING.md`. The numbers here are reported as measured; the profile was not tuned
 to inflate the optimized win.
 
+## Rollup refresh: full rebuild vs dirty set
+
+The Phase-6 rollup recomputed every `(campaign_id, hour)` key on every refresh. Since
+Phase 18a the Dagster loader — the one writer of the serving tables — records the keys
+each day it loads touches (`rollup_dirty`, versioned by a data-derived stamp), and the
+refresh recomputes only the keys whose recorded version differs from the one the rollup
+was last computed against, stamping them afterwards. The full
+rebuild stays as the equality ORACLE: `make rollup-bench` runs both and refuses to
+believe an incremental refresh that changed an answer.
+
+The block below is regenerated verbatim by that command and is the ONLY place its
+numbers live (the Phase-14 rule — a hand-authored figure inside a regenerated block goes
+stale the next time the block is written). Two caveats belong with it and are kept out
+here, because they are prose rather than measurements. The rows-read comparison is
+bounded by table SIZE: below one 8,192-row granule a key predicate has nothing to prune,
+so no read saving can appear at this profile whatever the dirty set does. And the write
+saving is the pipeline's OWN second pass, not a constructed scenario — `make run`
+refreshes every key on the hot load and only the reconcile-touched keys on the reload,
+which is the pair measured below.
+
+<!-- ROLLUP_BENCH_START -->
+
+_Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on a rollup of 340 `(campaign_id, hour)` keys of which the reconcile pass changed 19. Rows read/written are ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to merged steady state first._
+
+| measure | full rebuild | dirty-set refresh | |
+|---|---|---|---|
+| rows written | 340 | 19 | 17.9× fewer — **asserted** (direction only) |
+| rows read | 835 | 835 | unchanged — printed, **not** asserted |
+
+**The write saving is the structural one.** Rewriting only the 19 changed keys instead of all 340 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
+
+**Rows read do not move: `attributed_conversions` 115 rows in 2 marks; `exposures_landed` 360 rows in 2 marks.** A granule is 8,192 rows, so both source tables sit inside ONE — a dirty-key predicate has nothing to skip, and the incremental refresh reads exactly what the full rebuild reads. The saving here is entirely in what is WRITTEN. Whether a dirty-key filter can also prune READS is answerable only on a multi-granule table (`bench_large`, ≈7 granules of exposures) and is a BACKLOG row for 18b, which already runs that profile.
+
+**Dirty-set gate:** the keys reconciliation changed vs the keys the pipeline's own second-pass refresh recomputed — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
+
+<!-- ROLLUP_BENCH_END -->
+
 ## Query cost levers
 
 Three ClickHouse-native cost levers, each a before/after on a scoped report query
@@ -130,7 +167,7 @@ over the `bench_large` serving tables (a multi-granule profile — `attributed_c
 ~25k rows, `exposures_landed` 55k — so pruning has something to skip; below one 8192-row
 granule every lever is a no-op). The pre-aggregation rollup (`make bench`, above) is the
 *least* specific lever; these are the specific, explainable ones a data platform rewards.
-Measured by `make cost-levers`, reusing `bench.py`'s canonicalization and summary reader.
+Measured by `make cost-levers`, reusing `bench_common.py`'s canonicalization and summary reader.
 The block below is regenerated verbatim by that command. Caveat (Phase 17, kept
 OUTSIDE the block so a regeneration cannot erase it): the figures were measured on
 the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16)
@@ -159,7 +196,7 @@ _2a — `SELECT ... FINAL` vs explicit `argMax(...) GROUP BY conversion_id`:_
 | rows read | 25,168 | 25,168 | 1.00x |
 | bytes read | 226,512 | 855,712 | 0.26x |
 
-`argMax` reads MORE, not less: on merged single-version data `FINAL` reads only the columns it needs, while the manual collapse must scan `conversion_id`, `revenue`, `attributed`, and `processed_at` for every row and build a hash table. `FINAL` is already optimal — the version-part cost RUNBOOK incident #1 describes exists only *before* the merge, which `_canonicalize` (correctly) removes.
+`argMax` reads MORE, not less: on merged single-version data `FINAL` reads only the columns it needs, while the manual collapse must scan `conversion_id`, `revenue`, `attributed`, and `processed_at` for every row and build a hash table. `FINAL` is already optimal — the version-part cost RUNBOOK incident #1 describes exists only *before* the merge, which `canonicalize` (correctly) removes.
 
 _2b — bloom skip index on a non-leading column (`program_genre`, and the far-more-selective `ip` — 157 of 55,000 rows):_
 
@@ -185,12 +222,25 @@ _Honesty boundary: these are `bench_large` numbers; the mechanisms are the claim
 
 ## Observability — alert rules
 
-Four Alertmanager rules cover the deterministic conditions, each proven by
+Five Alertmanager rules cover the deterministic conditions, each proven by
 `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
-Prometheus image against **real captured registries** (`make metrics-capture` dumps
-each stage's terminal Prometheus registry from a knobbed run;
+Prometheus image. Four are WORKLOAD rules: a producer knob moves them, so both sides
+are proven against **real captured registries** (`make metrics-capture` dumps each
+stage's terminal Prometheus registry from a knobbed run;
 `observability/gen_alert_fixtures.py` bakes those numbers into the test fixture, so
-the threshold-crossing values come from a real stage run, never hand-authored):
+their threshold-crossing values come from a real stage run, never hand-authored).
+
+`PartCountHigh` (Phase 18a) is the one exception, and it is labelled as such rather
+than smoothed over: its threshold is ClickHouse's OWN `parts_to_delay_insert` default
+(150), because no threshold between our profiles exists — the real captures peak at 4
+active parts on tiny and 5 on long_delay, part count following insert batching and
+merge timing rather than event volume. Its SILENCE is proven by both real captures;
+its FIRING by a synthetic input in a file whose name says so
+(`observability/rules/tests/alerts_synthetic_test.yml`, `active_parts=151`). A
+merge-lag rule is deliberately absent: every settled capture reads
+`clickhouse_merge_backlog_seconds = 0`, so it could only be proven by an invented
+number. The metric ships anyway (BACKLOG) — measuring without alerting is true,
+alerting without a fireable measurement is not.
 
 | alert | expr | fires when |
 |---|---|---|
@@ -198,18 +248,19 @@ the threshold-crossing values come from a real stage run, never hand-authored):
 | `WatermarkStall` | `engine_watermark_lag_seconds > 14400` | peak arrival lateness > 4h |
 | `MatchRateOutOfBand` | match rate outside band | share of conversions attributed jumps/drops |
 | `RestatementMagnitude` | `reconcile_restatement_roas_abs_delta > 1.0` | reconciliation moves a period's ROAS materially |
+| `PartCountHigh` | `clickhouse_active_parts > 150` | a table nears ClickHouse's own insert-throttle point (`parts_to_delay_insert`); un-merged parts are the operating cost of `FINAL` |
 
 Two honesty boundaries on what this proves:
 
-- **These four detect *operational* faults** (lag, watermark stall, match-rate move,
-  restatement magnitude), **not attribution inflation.** Catching a
+- **These rules detect *operational* faults** (lag, watermark stall, match-rate move,
+  restatement magnitude, part growth), **not attribution inflation.** Catching a
   plausible-but-wrong number — a ROAS that looks fine but is inflated by a
   device-graph mismatch — is the **agent's** job (ARCHITECTURE §4), which is the
   exact reason the agent earns its place. A green alert board does not mean the
   numbers are right.
 - **The rules discriminate; they do not isolate.** The fixtures prove each rule
-  **fires on the anomalous profile (`long_delay`)**, and three of the four **stay
-  silent on the clean one (`tiny`)** — a discrimination between a knobbed profile
+  **fires on the anomalous profile (`long_delay`)**, and three of the four workload
+  rules **stay silent on the clean one (`tiny`)** — a discrimination between a knobbed profile
   and a baseline. The exception since Phase 16 is `RestatementMagnitude`: tiny's 5
   shared-IP conversions are deferred hot and credited by the reconcile pass, which
   restates one campaign's ROAS by 12.9 (threshold 1.0) — a real restatement, so the

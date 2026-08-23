@@ -122,7 +122,9 @@ def test_engine_driver_stamps_eval_meta_only_after_a_successful_load(
         df.main(["--profile", "tiny"])
     assert events == []
     monkeypatch.setattr(
-        run, "materialize_load", lambda days: {"exposures": 1, "attributed": 0}
+        run,
+        "materialize_load",
+        lambda days: {"exposures": 1, "attributed": 0},
     )
     df.main(["--profile", "tiny"])
     assert events == ["marker:tiny"]

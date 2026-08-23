@@ -13,6 +13,14 @@ re-inserts the same rows, which ReplacingMergeTree collapses on its sort key —
 attributed_conversions on (conversion_id, version processed_at),
 exposures_landed on (campaign_id, event_time, exposure_id). Synchronous chunked
 inserts; async inserts are a SCALING lever, not built.
+
+The loader also owns the ROLLUP DIRTY SET (Phase 18a). It is the only writer of
+the serving tables and it knows exactly which day it just loaded, so it is the
+only place that cannot disagree with what ClickHouse holds: after each day's
+insert it records that day's (campaign_id, hour) rollup keys in `rollup_dirty`,
+stamped with a data-derived version. `reconcile.rollup.refresh_campaign_hourly`
+then recomputes only the keys whose recorded version differs from the version the
+rollup was last computed against (`rollup_refreshed`, one row per key).
 """
 
 from collections.abc import Sequence
@@ -102,15 +110,107 @@ def insert_exposures(client: Client, rows: Sequence[Exposure]) -> None:
     metrics.ROWS_LOADED.labels(table="exposures_landed").inc(len(rows))
 
 
+# The rollup buckets by the CREDITED EXPOSURE's event-time hour (reconcile/rollup.py),
+# so a day's dirty keys come from two sides: the exposures landed for that day, and
+# the exposures that the day's current attributed rows are credited to — which can sit
+# up to the long window earlier than the conversion's own day. Both are computed FROM
+# the rows now in ClickHouse (not from what this process happened to insert), so a
+# re-load of the same day records the same keys and the same versions: idempotent, no
+# wall clock. `final` on both reads for the same reason every other rollup read takes
+# it (DECISIONS Phase 4).
+_DIRTY_FROM_EXPOSURES = """
+insert into rollup_dirty
+select
+    campaign_id,
+    toStartOfHour(event_time) as hour,
+    max(ingest_time) as version
+from exposures_landed final
+where toDate(event_time) = {day:Date}
+group by
+    campaign_id,
+    hour
+"""
+
+_DIRTY_FROM_ATTRIBUTED = """
+insert into rollup_dirty
+select
+    e.campaign_id as campaign_id,
+    toStartOfHour(e.event_time) as hour,
+    max(a.processed_at) as version
+from attributed_conversions as a final
+inner join
+(
+    select
+        exposure_id,
+        campaign_id,
+        event_time
+    from exposures_landed final
+) as e
+    on a.exposure_id = e.exposure_id
+where a.attributed = 1
+    and toDate(a.event_time) = {day:Date}
+group by
+    campaign_id,
+    hour
+"""
+
+
+_DIRTY_FROM_EXPOSURE_CREDITS = """
+insert into rollup_dirty
+select
+    e.campaign_id as campaign_id,
+    toStartOfHour(e.event_time) as hour,
+    max(a.processed_at) as version
+from attributed_conversions as a final
+inner join
+(
+    select
+        exposure_id,
+        campaign_id,
+        event_time
+    from exposures_landed final
+    where toDate(event_time) = {day:Date}
+) as e
+    on a.exposure_id = e.exposure_id
+where a.attributed = 1
+group by
+    campaign_id,
+    hour
+"""
+
+
+def record_dirty_exposure_keys(client: Client, day: str) -> None:
+    """Mark the rollup keys this day's exposures land in (spend/exposure counts), at
+    the max of BOTH sides' stamps — the day's exposures and any conversions already
+    credited to them. The second half is what makes the recording independent of LOAD
+    ORDER: if a conversion's day was loaded first, its exposures were not there yet and
+    the conversion side recorded nothing, so this pass picks it up. Either order leaves
+    the same `rollup_dirty` FINAL (review gate; the scenario is pinned live by
+    `tests/integration/test_rollup_dirty.py::test_reverse_order_day_loads_leave_the_same_rollup_dirty`)."""
+    client.command(_DIRTY_FROM_EXPOSURES, parameters={"day": day})
+    client.command(_DIRTY_FROM_EXPOSURE_CREDITS, parameters={"day": day})
+
+
+def record_dirty_attributed_keys(client: Client, day: str) -> None:
+    """Mark the rollup keys this day's credited conversions land in — the hours of
+    the EXPOSURES they are credited to, not the conversion's own hour."""
+    client.command(_DIRTY_FROM_ATTRIBUTED, parameters={"day": day})
+
+
 def load_exposures_day(client: Client, day: str) -> int:
-    """Insert the lake's distinct exposures for `day` (YYYY-MM-DD); return count."""
+    """Insert the lake's distinct exposures for `day` (YYYY-MM-DD); return count.
+    Records this day's rollup keys (Phase 18a) after the insert, never before —
+    the recording reads the loaded rows back."""
     rows = read_exposures_for_days([day])
     insert_exposures(client, rows)
+    record_dirty_exposure_keys(client, day)
     return len(rows)
 
 
 def load_attributed_day(client: Client, day: str) -> int:
-    """Insert the lake's current attributed row per conversion_id for `day`."""
+    """Insert the lake's current attributed row per conversion_id for `day`.
+    Records the rollup keys those rows credit (Phase 18a) after the insert."""
     rows = read_current(days=[day])
     insert_attributed(client, rows)
+    record_dirty_attributed_keys(client, day)
     return len(rows)

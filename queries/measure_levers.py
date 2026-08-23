@@ -2,9 +2,9 @@
 
 Measures ClickHouse-native cost levers on the bench_large serving tables and
 writes the result to docs/RESULTS.md. Reuses the Phase-7 honest harness from
-queries/bench.py unchanged: `_canonicalize` (OPTIMIZE ... FINAL every read table,
+queries/bench_common.py unchanged: `canonicalize` (OPTIMIZE ... FINAL every read table,
 so read_rows reflects merged steady state, not un-merged version-parts — the
-RUNBOOK incident-#1 determinism fix) and `_measure` (median of _RUNS with the
+RUNBOOK incident-#1 determinism fix) and `measure` (median of RUNS with the
 query cache off, returning the server's X-ClickHouse-Summary read_rows/read_bytes,
 which are cache-independent and deterministic).
 
@@ -40,7 +40,11 @@ from pathlib import Path
 from clickhouse_connect.driver.client import Client
 
 from clickhouse.client import connect
-from queries.bench import _canonicalize, _measure, _round_row
+
+# `measure` is aliased: this module has its own top-level `measure()` (the
+# lever runner), and the shared one measures a single query.
+from queries.bench_common import canonicalize, round_row
+from queries.bench_common import measure as measure_query
 
 SQL_PATH = Path(__file__).parent / "cost_levers.sql"
 RESULTS_PATH = Path(__file__).parent.parent / "docs" / "RESULTS.md"
@@ -63,8 +67,8 @@ def _parse_blocks(text: str) -> dict[str, str]:
 
 
 def _rows_equal(a: dict, b: dict) -> bool:
-    ar = [_round_row(r) for r in a["rows"]]
-    br = [_round_row(r) for r in b["rows"]]
+    ar = [round_row(r) for r in a["rows"]]
+    br = [round_row(r) for r in b["rows"]]
     return ar == br
 
 
@@ -104,7 +108,7 @@ def measure(client: Client | None = None) -> dict:
     client = client or connect()
     sql = _parse_blocks(SQL_PATH.read_text())
     _setup(client, sql)
-    _canonicalize(client)  # merged steady state before ANY measurement
+    canonicalize(client)  # merged steady state before ANY measurement
 
     out: dict = {}
 
@@ -124,8 +128,8 @@ def measure(client: Client | None = None) -> dict:
     ).result_rows[0][0]
 
     # ---- Lever 1: projection (non-FINAL), toggled by optimize_use_projections ----
-    before = _measure(client, sql["lever1_query"], {"optimize_use_projections": 0})
-    after = _measure(client, sql["lever1_query"], {"optimize_use_projections": 1})
+    before = measure_query(client, sql["lever1_query"], {"optimize_use_projections": 0})
+    after = measure_query(client, sql["lever1_query"], {"optimize_use_projections": 1})
     if not _rows_equal(before, after):
         raise AssertionError(f"lever1 rows differ: {before['rows']} vs {after['rows']}")
     if not _reduces_bytes(before, after):
@@ -137,8 +141,10 @@ def measure(client: Client | None = None) -> dict:
     out["lever1"] = {"before": before, "after": after}
 
     # ---- Lever 2a: FINAL vs argMax (negative — FINAL already optimal) ----
-    final = _measure(client, sql["lever2a_final"], {"optimize_use_projections": 0})
-    argmax = _measure(client, sql["lever2a_argmax"], {"optimize_use_projections": 0})
+    final = measure_query(client, sql["lever2a_final"], {"optimize_use_projections": 0})
+    argmax = measure_query(
+        client, sql["lever2a_argmax"], {"optimize_use_projections": 0}
+    )
     if not _rows_equal(final, argmax):
         raise AssertionError(
             f"lever2a rows differ: {final['rows']} vs {argmax['rows']}"
@@ -157,8 +163,8 @@ def measure(client: Client | None = None) -> dict:
         q = sql[f"lever2b_{col}"]
         if col == "ip":
             q = q.format(ip=out["ip_value"])
-        no_idx = _measure(client, q, {"use_skip_indexes": 0})
-        with_idx = _measure(client, q, {"use_skip_indexes": 1})
+        no_idx = measure_query(client, q, {"use_skip_indexes": 0})
+        with_idx = measure_query(client, q, {"use_skip_indexes": 1})
         if not _rows_equal(no_idx, with_idx):
             raise AssertionError(f"lever2b_{col} rows differ")
         if _pruned_rows(no_idx, with_idx):
@@ -171,8 +177,8 @@ def measure(client: Client | None = None) -> dict:
 
     # ---- Lever 3: PREWHERE (auto-move off both sides; explicit PREWHERE after) ----
     off = {"optimize_move_to_prewhere": 0, "optimize_use_projections": 0}
-    where = _measure(client, sql["lever3_where"], off)
-    prewhere = _measure(client, sql["lever3_prewhere"], off)
+    where = measure_query(client, sql["lever3_where"], off)
+    prewhere = measure_query(client, sql["lever3_prewhere"], off)
     if not _rows_equal(where, prewhere):
         raise AssertionError(
             f"lever3 rows differ: {where['rows']} vs {prewhere['rows']}"
@@ -253,7 +259,7 @@ def render(out: dict) -> str:
         "`conversion_id`, `revenue`, `attributed`, and `processed_at` for every row "
         "and build a hash table. `FINAL` is already optimal — the version-part cost "
         "RUNBOOK incident #1 describes exists only *before* the merge, which "
-        "`_canonicalize` (correctly) removes.",
+        "`canonicalize` (correctly) removes.",
         "",
         "_2b — bloom skip index on a non-leading column (`program_genre`, and the "
         f"far-more-selective `ip` — {ip['no_idx']['rows'][0][0]} of {el_n:,} rows):_",
