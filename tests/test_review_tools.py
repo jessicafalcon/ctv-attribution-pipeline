@@ -70,7 +70,13 @@ def _git(root: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, monkeypatch) -> Path:
+    # round_tag.write makes an annotated tag = a tag OBJECT, which needs a
+    # committer identity; CI runners have none (lint-test went red on it).
+    for k in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(k, "t")
+    for k in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(k, "t@t")
     root = tmp_path / "repo"
     (root / "pkg").mkdir(parents=True)
     (root / "pkg" / "__init__.py").write_text("")
