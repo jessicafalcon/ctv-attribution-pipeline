@@ -267,14 +267,33 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
   source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
   MV), never an insert-triggered summing MV, so corrections cannot double-count.
+  Since Phase 18a the refresh is **incremental**: the Dagster loader — the one
+  writer of the serving tables — records the `(campaign_id, hour)` keys each day it
+  loads touches in `rollup_dirty` (ReplacingMergeTree, version = a data-derived
+  stamp), and the refresh recomputes only the keys above the watermark in the
+  one-row `rollup_refresh_marker`, writing the new watermark afterwards. No deletes
+  and no mutations: a crash between the two re-refreshes the same keys rather than
+  skipping them. `refresh_campaign_hourly(full=True)` keeps the whole-table rebuild
+  as the equality ORACLE (`make rollup-bench`).
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
-  `reported_at`, which makes restatements queryable.
+  `reported_at`, which makes restatements queryable. Versioned since Phase 18a by
+  `snapshot_version` = `max(processed_at)` over the rows a snapshot summarized; the
+  sort key still leads with `reported_at`, so `make restate` keeps both the pre- and
+  post-reconciliation rows through `FINAL` and the version only decides twins WITHIN
+  a key.
 - `eval_meta`: a single-row marker (the profile string) the populate path stamps
   so `make eval` refuses to score a profile whose truth file does not match the
   populated DB (BACKLOG 43). OFF the golden-compared path — not attribution data,
   no version/timestamp, so it is deterministic and gate-0 stays byte-identical.
 - Sort keys chosen for the query pattern (`campaign_id`, `hour`).
-- A SELECT-only user exists for the agent.
+- A SELECT-only user exists for the agent (`agent_ro`), and a second, narrower one
+  for the storage scrape (`metrics_ro`: `system.parts` / `system.merges` plus SHOW
+  on the database, so it can count parts and read no row of data — Phase 18a).
+- How ClickHouse is STORING the data is measured at the end of every run by a
+  one-shot scrape (`observability/ch_scrape.py`, prefix `clickhouse_`): active parts
+  and level-0 (never-merged) parts per table, plus the elapsed of any merge in
+  flight. Un-merged parts are the operating cost of `FINAL` (§8, RUNBOOK incident
+  #1); `PartCountHigh` alerts at ClickHouse's own `parts_to_delay_insert` default.
 
 #### Reconciliation job (periodic, reads the lake)
 

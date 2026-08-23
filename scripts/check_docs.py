@@ -186,6 +186,13 @@ _DERIVED: list[tuple[str, str, str, str]] = [
         r"~([\d.]+) TB",
     ),
     (
+        "rollup write ratio",
+        "rollup-bench",
+        r"\| rows written \|[^|\n]*\|[^|\n]*\| ([\d.]+)× fewer",
+        r"incremental rollup refresh[^|\n]*\|[^|\n]*\|[^|\n]*?"
+        r"([\d.]+)× fewer rows written",
+    ),
+    (
         "lever 1 rows ratio",
         "cost-levers",
         r"\*\*Lever 1 [\s\S]*?\| rows read \|[^|\n]*\|[^|\n]*\| ([\d.]+)x \|",

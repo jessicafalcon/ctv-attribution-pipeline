@@ -378,14 +378,39 @@ pipeline file changed.
 
 ## Phase 18a — Cost and ops levers: incremental rollup, dirty-set gate, part-count and merge-lag (PROPOSED)
 
-**Goal.** Incremental rollups from a dirty set (the Phase-16
-`engine_conversions_ambiguous_deferred_total` / `reason` column are its
-precursors) with the loader-owned dirty-set gate (BACKLOG, the loader-owned dirty-set row), part-count and
-merge-lag metrics + alert rules; the alert rules get recaptured here (revisit the
-`MatchRateOutOfBand` headroom then). Split 2026-08-22 from Phase 18 under the
-phase-size rule (≤ ~6 pinned decisions / Done-when items per spec; CLAUDE.md
-Workflow rules). Spec: `specs/phase-18a-cost-and-ops.md` — carries a "Pre-branch
-reconciliation required" banner; the branch's commit 1 is that amendment.
+**Goal.** Incremental rollups from a loader-owned dirty set with its own gate,
+storage metrics + an alert rule, and the `report_snapshots` version column. Split
+2026-08-22 from Phase 18 under the phase-size rule (≤ ~6 pinned decisions / Done-when
+items per spec; CLAUDE.md Workflow rules). Spec: `specs/phase-18a-cost-and-ops.md` —
+carried a "Pre-branch reconciliation required" banner; the branch's commit 1 was that
+amendment (RECONCILED 2026-08-22).
+
+**Done when (as landed).** (1) The Dagster loader records the `(campaign_id, hour)`
+keys each day it loads touches in `rollup_dirty`; `refresh_campaign_hourly` recomputes
+only the keys above the `rollup_refresh_marker` watermark and writes the new watermark
+after, with `full=True` kept as the equality oracle. (2) The dirty set is gated:
+`changed ⊆ dirty` after a reconcile pass, `len(dirty) < total keys`, over-refresh
+reported. (3) Storage is measured (`clickhouse_active_parts`,
+`clickhouse_unmerged_parts`, `clickhouse_merge_backlog_seconds`) by a one-shot scrape
+as a SELECT-only `metrics_ro`; ONE rule ships, `PartCountHigh > 150`. (4)
+`report_snapshots` gains `snapshot_version` as its ReplacingMergeTree version, sort
+key unchanged.
+
+**Delivered.** `make rollup-bench PROFILE=long_delay` measures full vs incremental on
+a populated stack: identical `campaign_hourly` FINAL rows (6 dp, 340 keys), 19 rows
+written vs 340 (17.9×, the asserted direction), and the gate — 19 changed keys, 19
+dirty, 0 over-refresh. Rows read do NOT fall (2,004 vs 1,310) and are printed, never
+asserted: both source tables sit inside one 8,192-row granule, so a dirty-key
+predicate has nothing to prune while its own lookup reads (BACKLOG: measure the read
+side on `bench_large`). `PartCountHigh`'s threshold is ClickHouse's own
+`parts_to_delay_insert` default because no threshold between the profiles exists (5
+active parts max on both) — silence proven by the two real captures, firing by a
+labelled synthetic fixture. No merge-lag rule ships (every settled capture reads 0);
+the metric does. The migration for `snapshot_version` is create → backfill →
+`exchange tables` → drop, because ClickHouse has no `alter table … modify engine`
+(§8). Rejected along the way and recorded in DECISIONS: a pass sequence number, a separate
+confirmed `migrate-snapshots` target (never added — the rebuild preserves every row), a read-side assert that only holds on a profile the
+DONE command never runs.
 
 ## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (PROPOSED)
 

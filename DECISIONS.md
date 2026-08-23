@@ -2099,6 +2099,9 @@ below, never deleted.
   where the server throttles writers — cited in the rule's annotation. Its silence is
   proven by both real captures; its firing by a synthetic promtool input in a file
   whose name and header say synthetic (`alerts_synthetic_test.yml`, 151 parts).
+  The fixture generator names the distinction the whole item turned on — `WORKLOAD_ALERTS`
+  (knob-driven, both sides from real captures) vs the threshold-driven rule (silence real,
+  firing synthetic) — so a future rule has to declare which kind it is.
   Rejected: capturing `bench_large` to find a "real" high-part number (what it would
   pin is merge SCHEDULING, which this repo explicitly carves out of its determinism
   guarantee — an expensive invented number); lowering the threshold until a capture
@@ -2120,4 +2123,3 @@ below, never deleted.
   moment `docs/RESULTS.md` gained a `make rollup-bench` mention, because the Makefile
   target did not exist yet — a docs-vs-source drift caught at edit time instead of at
   a review round, which is exactly what Phase 19 was for.
-

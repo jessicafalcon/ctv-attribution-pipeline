@@ -33,6 +33,7 @@ into [`docs/RESULTS.md`](docs/RESULTS.md); the direction is the claim, not the m
 | projection ordered by `event_time` | WIN | 1.54× fewer rows on a date-scoped slice |
 | FINAL-avoidance (`argMax` GROUP BY) / bloom skip index | DOCUMENTED NEGATIVE | `FINAL` reads 0.26× the bytes of the manual collapse; the skip index prunes 0 granules |
 | PREWHERE the window predicate | WIN | 1.21× fewer bytes, same rows |
+| incremental rollup refresh (dirty set, `make rollup-bench`) | WIN on writes | 17.9× fewer rows written; reads do not fall at this size — one granule |
 
 **Agent eval:** 30/30 correct diagnoses, false-positive rate 0/10 = 0% (Phase 10, live,
 30 invocations; the near-miss pair — genuine lift vs shared-IP inflation — held both ways).

@@ -358,7 +358,10 @@ AI sits at the edge; the pipeline is deterministic.
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
   reconcile_, agent_, clickhouse_ (the storage scrape, `observability/ch_scrape.py` —
-  how ClickHouse stores the data, never what the data says).
+  how ClickHouse stores the data, never what the data says: `clickhouse_active_parts`,
+  `clickhouse_unmerged_parts` (level-0 parts, the deterministic view of pending
+  collapse work), `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its
+  HELP text)).
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
 - Engine features (dedup, lateness, eviction) are added one at a time, each
