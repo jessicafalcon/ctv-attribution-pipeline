@@ -689,6 +689,25 @@ handled.*
   the counts are unchanged across two reads (bounded, and it RAISES on the cap rather
   than capturing a moving number). With that wait, two full clean-stack cycles produce
   byte-identical `clickhouse.prom`.
+- **`make` expands a command-line variable at STARTUP to export it to recipe
+  environments, so `make -n` is not a dry run of a variable's value.** A recipe
+  argument built from `"$(PROFILE)"` runs `$(shell …)` at recipe-expansion time —
+  even under `-n` — and, separately, make expands a COMMAND-LINE-origin variable
+  once at startup to place it in every recipe's environment, so
+  `PROFILE='$(shell touch x)' make lake-reset` runs the shell before any recipe or
+  the Python guard, for ANY target. Neither is a real "dry run": `-n` shows the
+  recipe-time expansion but hides the startup one. Fix (fix/make-quote-profile):
+  every recipe interpolates `$(call _Q,$(value VAR))` — `$(value)` hands over the
+  UNEXPANDED text, `_Q` single-quotes it for sh — so the value reaches Python as one
+  literal, refused there; and the seven user variables (`PROFILE SOURCE PARTITION
+  SPEC BASE DELETED CONFIRM`) are `unexport`ed, so make has no reason to expand them
+  at startup (a command-line origin always, an environment origin too on GNU Make
+  ≥ 4 — `unexport` closes both). Behaviour-preserving because no recipe reads them as
+  a shell variable (`$$VAR`), only as a make value (`CONFIRM` via `$(value CONFIRM)`
+  in `_YES`). Residual, stated: `MAKEFLAGS`/`MAKEOVERRIDES` from the
+  environment — mistakes, not adversaries (DECISIONS Phase 17). Rule: never treat
+  `make -n` as proof a variable value is inert; quote user values through
+  `$(value)`+`_Q` and `unexport` them.
 
 ---
 

@@ -85,3 +85,9 @@ def test_first_screen_is_within_budget_today() -> None:
     text = check_docs.README.read_text()
     lines = check_docs._first_screen(text).count("\n")
     assert lines <= check_docs.FIRST_SCREEN_MAX_LINES
+
+
+def test_backlog_count_matches_today() -> None:
+    errors: list[str] = []
+    check_docs.check_backlog_count(errors)
+    assert errors == []

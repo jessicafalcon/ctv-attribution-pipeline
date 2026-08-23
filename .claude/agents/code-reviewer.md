@@ -59,6 +59,37 @@ When invoked:
 - **Unit tests make no network calls** and need no services; only
   `tests/integration/` may assume `make up`.
 
+## Invariants (the check a fixed checklist cannot make)
+
+Read the active spec's **Invariants** section (`specs/TEMPLATE.md`; every spec
+since 2026-08-22 carries one — a spec that implements a write path without one
+is itself a BLOCKER finding). For EACH invariant:
+
+1. Find the code that could violate it — every site that produces the value
+   the invariant quantifies over (a version, a key set, a row's content, an
+   ordering) — and cite it file:line.
+2. Find the test that pins it — the scenario test the spec names, or whatever
+   actually exercises the scenario (reverse-order load, replay, equal sort keys,
+   non-UTC machine, a no-op run). Cite it.
+3. **Report any invariant with no pinning test** (named-but-missing, or named
+   but asserting the mechanism's happy path rather than the scenario) as a
+   should-fix at minimum; BLOCKER if the invariant covers a write path.
+
+Then, independent of what the spec lists: report **any mechanism — a marker,
+offset, counter, flag, watermark, or default argument — whose value comes from
+the caller or the clock rather than from the data**. The Phase-18a shape: a
+refresh watermark advanced by the caller, a version defaulted to `now()`, a
+`processed_at` passed in as a parameter instead of derived from the rows. Each
+is a correctness finding whether or not today's caller passes the right value,
+because the next caller will not. State the invariant the mechanism should be
+derived from ("version = max(processed_at) over the rows it summarizes") in the
+finding, so the fix is designed against a property, not re-patched.
+
+When the prompt names a review round (`/review-round N`): the target is the
+range the prompt gives (round N−1's fixes) plus the invariant list; a finding on
+code NOT changed inside that range — code an earlier round already reviewed — is
+still reported, labelled **"missed in round N−1"**.
+
 ## Generic checks (second pass)
 
 Dead code, unclear names, duplicated logic, missing type hints, comments that
