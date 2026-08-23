@@ -42,7 +42,7 @@ direction.) See [`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-gotchas), gotcha "A
 `FINAL` scan's `read_rows` counts un-merged version-parts", and
 [`RESULTS.md` → "Why each change works"](RESULTS.md#benchmark--naive-full-scan-vs-optimized-rollup).
 
-**Fix.** [`queries/bench.py`](../queries/bench.py) `_canonicalize` runs
+**Fix.** [`queries/bench_common.py`](../queries/bench_common.py) `canonicalize` runs
 `OPTIMIZE TABLE ... FINAL` on every read table before measuring, so `read_rows`
 reflects merged steady state on both sides — deterministic and re-run-identical,
 and the honest apples-to-apples form a scheduled rollup serves in production. A
@@ -62,7 +62,7 @@ ReplacingMergeTree that hasn't been canonicalized is measuring merge timing, not
 data.
 
 **Would catch it next time.** The guard is code-level and deterministic: the
-`_canonicalize` OPTIMIZE plus the direction assert in `queries/bench.py`, enforced
+`canonicalize` OPTIMIZE plus the direction assert in `queries/bench.py`, enforced
 every time `make bench` runs (including in CI). **No alert covers this.** All four
 rules in `alerts.yml` watch live pipeline metrics (`resolve_input_backlog`,
 `engine_watermark_lag_seconds`, the hot match-rate, `reconcile_restatement_roas_abs_delta`);

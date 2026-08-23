@@ -130,7 +130,7 @@ over the `bench_large` serving tables (a multi-granule profile — `attributed_c
 ~25k rows, `exposures_landed` 55k — so pruning has something to skip; below one 8192-row
 granule every lever is a no-op). The pre-aggregation rollup (`make bench`, above) is the
 *least* specific lever; these are the specific, explainable ones a data platform rewards.
-Measured by `make cost-levers`, reusing `bench.py`'s canonicalization and summary reader.
+Measured by `make cost-levers`, reusing `bench_common.py`'s canonicalization and summary reader.
 The block below is regenerated verbatim by that command. Caveat (Phase 17, kept
 OUTSIDE the block so a regeneration cannot erase it): the figures were measured on
 the Phase-13 schema; `attributed_conversions` has since gained `reason` (Phase 16)
@@ -159,7 +159,7 @@ _2a — `SELECT ... FINAL` vs explicit `argMax(...) GROUP BY conversion_id`:_
 | rows read | 25,168 | 25,168 | 1.00x |
 | bytes read | 226,512 | 855,712 | 0.26x |
 
-`argMax` reads MORE, not less: on merged single-version data `FINAL` reads only the columns it needs, while the manual collapse must scan `conversion_id`, `revenue`, `attributed`, and `processed_at` for every row and build a hash table. `FINAL` is already optimal — the version-part cost RUNBOOK incident #1 describes exists only *before* the merge, which `_canonicalize` (correctly) removes.
+`argMax` reads MORE, not less: on merged single-version data `FINAL` reads only the columns it needs, while the manual collapse must scan `conversion_id`, `revenue`, `attributed`, and `processed_at` for every row and build a hash table. `FINAL` is already optimal — the version-part cost RUNBOOK incident #1 describes exists only *before* the merge, which `canonicalize` (correctly) removes.
 
 _2b — bloom skip index on a non-leading column (`program_genre`, and the far-more-selective `ip` — 157 of 55,000 rows):_
 

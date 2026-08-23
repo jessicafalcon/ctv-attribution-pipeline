@@ -12,7 +12,7 @@ Three checks over README.md and every docs/*.md:
      and every README first-screen number sourced from a block equals the block.
   3. Traces — every guard / alert / make target / source phrase the docs name by
      identity exists in source, matched as an exact token (a partial rename such
-     as `_canonicalize` → `_canonicalize_tables` FAILS; BACKLOG 37).
+     as `canonicalize` → `canonicalize_tables` FAILS; BACKLOG 37).
 Accuracy TABLE cells are guarded separately by tests/test_docs_accuracy_pins.py.
 """
 
@@ -261,7 +261,7 @@ def check_generated(errors: list[str]) -> int:
 
 def token_present(needle: str, haystack: str) -> bool:
     """Exact-token match: `needle` must not continue into an identifier on either
-    side, so `_canonicalize` does NOT match `_canonicalize_tables`."""
+    side, so `canonicalize` does NOT match `canonicalize_tables`."""
     pattern = r"(?<![\w])" + re.escape(needle) + r"(?![\w])"
     return re.search(pattern, haystack) is not None
 
@@ -273,7 +273,7 @@ TRACES: list[tuple[str, str]] = [
     ("observability/rules/alerts.yml", "WatermarkStall"),
     ("observability/rules/alerts.yml", "MatchRateOutOfBand"),
     ("observability/rules/alerts.yml", "RestatementMagnitude"),
-    ("queries/bench.py", "_canonicalize"),
+    ("queries/bench_common.py", "canonicalize"),
     ("reconcile/rollup.py", "reported_at"),
     ("reconcile/rollup.py", "toDecimal64"),
     ("tests/test_rollup_decimal.py", "toDecimal64"),

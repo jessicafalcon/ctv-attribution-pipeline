@@ -79,6 +79,7 @@ from
         0 as is_site_visit,
         0.0 as rev
     from exposures_landed final
+    /*dirty_exposures*/
     union all
     select
         e.campaign_id as campaign_id,
@@ -97,6 +98,7 @@ from
             campaign_id,
             event_time
         from exposures_landed final
+        /*dirty_exposures*/
     ) as e
         on a.exposure_id = e.exposure_id
     where a.attributed = 1
@@ -206,11 +208,66 @@ order by s.campaign_id
 """
 
 
-def refresh_campaign_hourly(client: Client, offset_ms: int) -> None:
-    """Recompute the rollup from FINAL (current state, both paths) and insert it
-    as a new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the
-    highest reported_at per key, so this is the latest complete rollup."""
-    client.command(_REFRESH_CAMPAIGN_HOURLY, parameters={"offset_ms": offset_ms})
+# Phase 18a. The keys to recompute: those the loader marked with a version ABOVE the
+# watermark the last refresh covered. A key whose rows did not move keeps its old
+# version (the loader stamps max(processed_at) / max(ingest_time) over the key's
+# CURRENT rows), so re-recording it is a no-op and it drops out here — the filter is
+# "what changed", not "what was loaded". An empty marker table reads as the epoch, so
+# a first refresh is a full one.
+MARKER = "campaign_hourly"
+
+_DIRTY_KEYS = """
+select
+    campaign_id,
+    hour
+from rollup_dirty final
+where version >
+(
+    select max(watermark)
+    from rollup_refresh_marker final
+    where marker = {marker:String}
+)
+"""
+
+# Applied to BOTH exposures_landed reads inside the refresh (the spend/exposure side
+# and the credit join's exposure side): the leading sort-key column is campaign_id, so
+# a key predicate prunes granules — the read the incremental refresh saves. The
+# conversion side is keyed on conversion_id and cannot prune; it is bounded by the
+# join instead.
+_DIRTY_FILTER = f"where (campaign_id, toStartOfHour(event_time)) in ({_DIRTY_KEYS})"
+
+# The watermark the refresh just covered: the highest version in the dirty set at
+# selection time. Written AFTER the insert — a crash in between leaves the old
+# watermark, so the next pass recomputes the same keys (idempotent) instead of
+# skipping them. Never a delete or a mutation on rollup_dirty (CLAUDE.md: a
+# correction that silently skips a key is invisible to the full-refresh oracle).
+_WRITE_MARKER = """
+insert into rollup_refresh_marker
+select
+    {marker:String} as marker,
+    max(version) as watermark
+from rollup_dirty final
+"""
+
+
+def refresh_campaign_hourly(
+    client: Client, offset_ms: int, *, full: bool = False
+) -> None:
+    """Recompute the rollup from FINAL (current state, both paths) and insert it as
+    a new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the highest
+    reported_at per key, so each key's latest row is the current one.
+
+    Incremental by default (Phase 18a): only the keys the loader marked dirty above
+    the refresh watermark are recomputed, and every other key keeps the row it
+    already has. `full=True` recomputes every key — the equality ORACLE the
+    incremental path is measured against (`make rollup-bench`), and the escape hatch
+    if a dirty set is ever suspect. Both write the watermark: a full refresh covered
+    everything by definition."""
+    sql = _REFRESH_CAMPAIGN_HOURLY.replace(
+        "/*dirty_exposures*/", "" if full else _DIRTY_FILTER
+    )
+    client.command(sql, parameters={"offset_ms": offset_ms, "marker": MARKER})
+    client.command(_WRITE_MARKER, parameters={"marker": MARKER})
 
 
 def write_report_snapshot(client: Client, offset_ms: int, *, hot_only: bool) -> None:

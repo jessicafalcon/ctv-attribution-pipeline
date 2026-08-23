@@ -557,7 +557,8 @@ handled.*
   merge had fired — in CI, running right after a test that refreshed twice more, the
   rollup measured 1020 physical rows and *lost* to the naive scan (0.8×), while
   locally after one refresh it read 340 and won 2.5×. Fix (`queries/bench.py`
-  `_canonicalize`): `OPTIMIZE TABLE ... FINAL` every read table before measuring, so
+  `queries/bench_common.py` `canonicalize`): `OPTIMIZE TABLE ... FINAL` every read
+  table before measuring, so
   `read_rows` reflects merged steady state — deterministic, re-run-identical, and the
   honest apples-to-apples comparison (a scheduled rollup serves its merged form in
   production). `OPTIMIZE ... FINAL` is synchronous on single-node (`alter_sync=1`)

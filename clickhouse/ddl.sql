@@ -91,6 +91,35 @@ create table if not exists campaign_hourly
 engine = ReplacingMergeTree(reported_at)
 order by (campaign_id, hour);
 
+-- Phase-18a incremental-rollup bookkeeping. The Dagster loader (lake/load_serving.py
+-- — the ONE writer of the serving tables) records every (campaign_id, hour) rollup key
+-- the day it loaded touches, stamped with a DATA-DERIVED version: max(processed_at)
+-- over the credited conversions of that key, max(ingest_time) over its exposures (an
+-- exposure has no processed_at; ingest_time is the same lineage `reported_at` is built
+-- from). ReplacingMergeTree(version) keeps the HIGHEST stamp per key, so the two
+-- contributions combine to "when did this key's data last move".
+create table if not exists rollup_dirty
+(
+    campaign_id String,
+    hour        DateTime('UTC'),
+    version     DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(version)
+order by (campaign_id, hour);
+
+-- The refresh watermark, one row. `refresh_campaign_hourly` recomputes the keys whose
+-- rollup_dirty version is ABOVE this, then writes the new watermark — no deletes and
+-- no mutations, so a crash between the two re-refreshes the same keys next pass
+-- (idempotent) instead of dropping them on the floor, which is the one failure the
+-- full-refresh oracle cannot see. An empty table reads as the epoch: everything dirty.
+create table if not exists rollup_refresh_marker
+(
+    marker    String,
+    watermark DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(watermark)
+order by marker;
+
 -- Phase-6 restatement history. One row per (reported_at, campaign_id, period)
 -- holding the four advertiser metrics (DECISIONS Phase 4) and the raw counts
 -- behind them, so a period's reported number is queryable *as of* each pass.

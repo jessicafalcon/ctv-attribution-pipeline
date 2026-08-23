@@ -176,7 +176,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   projection ordered by `event_time` on `attributed_conversions` (WINS — date-range
   prune), a FINAL-avoidance / bloom-skip-index candidate (documented NEGATIVE result —
   the schema doesn't reward one: leading key already prunes campaign, non-key columns
-  scattered), and PREWHERE (WINS). Reuses `bench.py`'s canonicalization + summary
+  scattered), and PREWHERE (WINS). Reuses `bench_common.py`'s canonicalization + summary
   reader; magnitude-free direction asserts + 6dp row-equality; rewrites the "Query cost
   levers" block in `docs/RESULTS.md`. Run after `make lake-reset PROFILE=bench_large
   CONFIRM=yes && make up && make seed PROFILE=bench_large
@@ -509,7 +509,7 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-18a-cost-and-ops.md`, RECONCILED 2026-08-22 — the branch's commit 1).
 **Last merged: Phase 19 (PR #33, 2026-08-22).** Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **33** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+DECISIONS "Process"). Open BACKLOG rows: **32** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
