@@ -310,9 +310,9 @@ operational path to lift this limitation; it is documented, not built.
 environment, so `PROFILE='$(shell touch x)' make lake-reset` runs the shell before
 any recipe or the Python guard, for any target — and `make -n` cannot show it (it
 builds no recipe environment). The fix is `unexport PROFILE SOURCE PARTITION SPEC
-BASE DELETED` in the Makefile (make has no reason to expand what it will not
-export), alongside `$(call _Q,$(value VAR))` on every recipe (the recipe-time
-vector `-n` does show). If you audit a recipe's user value, quote it through
+BASE DELETED CONFIRM` in the Makefile (make has no reason to expand what it will not
+export; it closes command-line and environment origins alike), alongside
+`$(call _Q,$(value VAR))` on every recipe (the recipe-time vector `-n` does show). If you audit a recipe's user value, quote it through
 `$(value)`+`_Q` and `unexport` it — never trust a `make -n` reading of the value.
 Residual: `MAKEFLAGS`/`MAKEOVERRIDES` from the environment (mistakes, not
 adversaries). See [`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-gotchas), gotcha "`make`

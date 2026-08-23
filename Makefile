@@ -8,18 +8,19 @@ PROFILE ?= tiny
 # of the value, which turned `--source "fixtures  "` into an argparse error.
 SOURCE ?= fixtures
 
-# make expands a COMMAND-LINE variable once at startup to export it to every
-# recipe's environment, so `PROFILE='$(shell touch x)' make lake-reset` runs the
-# `$(shell …)` before any recipe or Python guard — the $(value)/_Q quoting below
-# cannot stop that (it guards the recipe TEXT, not the export), and `make -n`
-# never shows it (it sets up no recipe environment). `unexport` removes make's
-# reason to expand these: no recipe reads any of them as a shell variable ($$VAR),
-# only as a make value via `$(call _Q,$(value VAR))`, so unexporting is
-# behaviour-preserving and closes the startup vector. Command-line values still
-# reach recipes and sub-makes (MAKEFLAGS is unaffected). (fix/make-quote-profile;
-# tests/test_makefile.py.) MAKEFLAGS/MAKEOVERRIDES from the environment stay a
-# stated residual — mistakes, not adversaries (DECISIONS Phase 17).
-unexport PROFILE SOURCE PARTITION SPEC BASE DELETED
+# make exports a variable to every recipe's environment and expands it to do so —
+# a command-line origin always, and an environment origin too on GNU Make ≥ 4 — so
+# `PROFILE='$(shell touch x)' make lake-reset` runs the `$(shell …)` before any
+# recipe or Python guard. The $(value)/_Q quoting below cannot stop that (it guards
+# the recipe TEXT, not the export), and `make -n` never shows it (it sets up no
+# recipe environment). `unexport` removes make's reason to expand these: no recipe
+# reads any of them as a shell variable ($$VAR), only as a make value via
+# `$(call _Q,$(value VAR))` (or, for CONFIRM, `$(value CONFIRM)` in _YES), so
+# unexporting is behaviour-preserving and closes the startup vector on both origins.
+# Command-line values still reach recipes and sub-makes (MAKEFLAGS is unaffected).
+# (fix/make-quote-profile; tests/test_makefile.py.) MAKEFLAGS/MAKEOVERRIDES from the
+# environment stay a stated residual — mistakes, not adversaries (DECISIONS Phase 17).
+unexport PROFILE SOURCE PARTITION SPEC BASE DELETED CONFIRM
 
 # Load ANTHROPIC_API_KEY from .env for the token targets ONLY (agent-run,
 # agent-eval). `uv run --env-file` injects into the child process it spawns, not
@@ -57,12 +58,19 @@ down:
 # reaches that process single-quoted and UNEXPANDED (`$(call _Q,$(value PROFILE))`,
 # below), and PROFILE is `unexport`ed (top), so a `PROFILE='$(shell …)'` from the
 # command line or environment never runs the shell — at recipe time OR make
-# startup. Both were Phase-17 residuals, closed in fix/make-quote-profile. CONFIRM
-# counts only
-# from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes' is a
-# separate stated residual — these guards are for mistakes, not for a user who
-# controls the environment (DECISIONS Phase 17).
-_YES = $(if $(filter command line,$(origin CONFIRM)),$(if $(filter yes,$(CONFIRM)),--yes,),)
+# startup. Both were Phase-17 residuals, closed in fix/make-quote-profile.
+#
+# CONFIRM (the confirm knob) carries the SAME vector and is closed the same way:
+# `--yes` only when CONFIRM is EXACTLY `yes` from the command line — `$(origin)`
+# ignores an exported CONFIRM; `$(value CONFIRM)` (not `$(CONFIRM)`) so a
+# command-line `CONFIRM='yes $(shell …)'` reaches the filter as TEXT (no
+# expansion), and the `$(words …) = 1` guard rejects it (it is `yes` PLUS
+# something), so it neither runs the shell nor auto-confirms; and CONFIRM is
+# `unexport`ed (top) so the same `$(shell …)` cannot run at make startup either.
+# Surviving stated residual: MAKEFLAGS/MAKEOVERRIDES from the environment — these
+# guards are for mistakes, not a user who controls the environment (DECISIONS
+# Phase 17).
+_YES = $(if $(filter command line,$(origin CONFIRM)),$(if $(filter yes,$(value CONFIRM)),$(if $(filter 1,$(words $(value CONFIRM))),--yes,),),)
 
 # _Q: single-quote a value for sh — the ONLY character that needs escaping inside
 # '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument (a

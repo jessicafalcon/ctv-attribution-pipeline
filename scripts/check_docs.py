@@ -290,7 +290,7 @@ TRACES: list[tuple[str, str]] = [
     ("reconcile/reconcile.py", "expand_candidates"),
     ("lake/load_serving.py", "_utc"),
     ("lake/destructive.py", "confirm_or_abort"),
-    ("Makefile", "unexport PROFILE SOURCE PARTITION SPEC BASE DELETED"),
+    ("Makefile", "unexport PROFILE SOURCE PARTITION SPEC BASE DELETED CONFIRM"),
     ("tests/test_clean_state_chains.py", "lake-reset"),
     ("tests/test_tz_invariance.py", "tzset"),
     ("tests/test_docs_accuracy_pins.py", "test_readme_accuracy_table_matches_pins"),
