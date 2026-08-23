@@ -32,9 +32,11 @@ partition counts but not the structure.
 - **Hot-window state in a plain in-memory dict.** The seeded profiles span days of
   *event-time* but only hundreds–thousands of events, so 7 days of window state is
   a few thousand rows — trivially in memory.
-- **ClickHouse single node**: ReplacingMergeTree, **synchronous inserts** (async
-  inserts are a scale-up lever, not built here — see the 50k/500k tiers below), a
-  scheduled rollup refresh.
+- **ClickHouse single node**: ReplacingMergeTree, a scheduled rollup refresh, and the
+  **async-insert lever built on the loader** (Phase 18b): `async_insert=1,
+  wait_for_async_insert=1` batches server-side into fewer, larger parts — default on in
+  `make run`, off in the golden/oracle/capture paths so their pins never move. Larger
+  buffers at the tiers below are the same lever turned up.
 - **The lake is the record (Phase 17).** The engine lands `raw.exposures` and
   `raw.attributed_conversions` in a local Iceberg lake (SqlCatalog on SQLite +
   `file://` warehouse, one lake per profile), both partitioned `day(event_time) ×
@@ -155,12 +157,26 @@ tables, and never changed on a populated lake — a new N means a new lake.
   exactly-once, and operational tooling (Bytewax proper is the Python-first
   alternative for the 50k tier — the Phase-18+ decision). The construct mapping is 1:1
   (below), so this is a port, not a redesign.
-- **ClickHouse becomes a cluster.** ReplicatedReplacingMergeTree, sharded by a
-  household hash (keeps a conversion's corrections on one shard) or by `campaign_id`
-  (keeps a report local); a Distributed table fans inserts and reads out; buffer
-  tables or async insert smooth the insert rate; rollups become **per-shard
-  refreshable MVs**. Point the agent's SELECT-only user and the heavy report queries
-  at a read replica so triage never contends with ingestion.
+- **ClickHouse becomes a cluster, sharded by `household_id`.** ReplicatedReplacingMergeTree
+  with a `Distributed` table fanning inserts and reads out; buffer tables or async insert
+  (built on the loader since Phase 18b, default on in `make run`) smooth the insert rate;
+  rollups become **per-shard refreshable MVs**. Point the agent's SELECT-only user and the
+  heavy report queries at a read replica so triage never contends with ingestion.
+
+  **Shard key: `household_id`, not `campaign_id`.** The expensive work is
+  household-keyed — the cross-device join (`resolve` maps a conversion's device/IP to a
+  household, then the engine joins the conversion to that household's exposures) and every
+  reconciliation *correction* (a restatement re-attributes a household's conversions). A
+  `hash(household_id)` shard key keeps all of a household's exposures, conversions and
+  corrections on **one shard**, so the join, the dedup (ReplacingMergeTree collapse) and
+  the restatement are shard-**local** — no cross-shard shuffle on the hot path. Reports are
+  the cheap side: aggregating the small `campaign_hourly` rollup across shards through the
+  `Distributed` table is a fan-in over a few pre-aggregated rows per shard. `campaign_id`
+  is rejected: it co-locates the cheap thing (per-campaign reports) at the cost of making
+  the expensive thing cross-shard — a household's conversions span campaigns, so the
+  household join would straddle campaign-shards — and campaign cardinality is low and
+  skewed (a few large campaigns), which unbalances shards and creates hot spots. Shard the
+  expensive path local; fan the cheap aggregate in.
 
 ## State backend progression
 
@@ -197,7 +213,7 @@ driver (`streaming/dataflow.py`) and its Flink equivalent.
 |---|---|---|---|
 | table engine | ReplacingMergeTree | ReplacingMergeTree | ReplicatedReplacingMergeTree |
 | topology | single node | single node | sharded + Distributed table |
-| inserts | synchronous | async inserts, larger buffers | buffer/Distributed fan-in |
+| inserts | async lever built, off by default (on in `make run`) | async, larger buffers | buffer/Distributed fan-in |
 | rollup | incremental refresh (dirty keys) | incremental, tuned interval | per-shard refreshable MVs |
 | `FINAL` read cost | negligible | watch part-merge lag | read replica for reports/agent |
 

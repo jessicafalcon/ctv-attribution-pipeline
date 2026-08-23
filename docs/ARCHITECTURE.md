@@ -154,7 +154,10 @@ Two event topics plus one reference topic. `exposures` is partitioned by
 `household_id`; `conversions` by `device_id` (the engine re-keys it to
 `household_id` in-process at the resolve step). `device_graph` is a compacted
 topic holding the current graph. Each topic has a JSON Schema in the registry;
-the producer and every consumer validate against it. Partition count is a
+the producer and every consumer validate against it. Every subject is registered at
+**BACKWARD compatibility** (Phase 18b), so the registry is a real data contract: a
+producer may add an optional field, but removing or renaming a required one is
+rejected at registration (409). Partition count is a
 documented scaling lever (SCALING.md notes the household-keyed re-partition a
 continuous multi-partition engine would need). There is no intermediate
 resolved-conversions topic: the resolve step is in-process (why: DECISIONS
@@ -262,8 +265,11 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
 
 - `attributed_conversions`: **ReplacingMergeTree** keyed on `conversion_id` with
   `processed_at` as version, so a replay or a reconciliation correction supersedes
-  the earlier row. Readers use `FINAL` or `argMax` at read. Inserts are synchronous
-  today; async inserts are a scaling lever (see SCALING.md), not a current property.
+  the earlier row. Readers use `FINAL` or `argMax` at read. The loader's inserts carry
+  the **async-insert lever** (Phase 18b: `async_insert=1, wait_for_async_insert=1`,
+  fewer/larger parts) — built on `lake/load_serving.py`, default on in `make run`, off in
+  the golden/oracle/capture paths so their pins never move; serving rows are byte-identical
+  either way (see SCALING.md).
 - `exposures_landed`: raw exposures, for the naive benchmark and the reconcile
   source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
