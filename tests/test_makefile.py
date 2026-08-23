@@ -12,6 +12,14 @@ Quirk worth knowing: GNU make still EXECUTES recipe lines that invoke `$(MAKE)`
 under `-n`, so each `test-int-*` dry run really spawns child makes; they are
 harmless only because `-n` propagates through MAKEFLAGS, so the children also
 dry-run and `docker compose down -v` never executes. No services, no network.
+
+Since fix/make-quote-profile every recipe interpolates the UNEXPANDED PROFILE /
+SOURCE / PARTITION through `$(call _Q,$(value VAR))`, closing the Phase-17
+residual where an env- or command-line-origin `PROFILE='$(shell …)'` ran the
+shell at recipe-expansion time — even under `make -n`, which is NOT a dry run of a
+variable's value. `test_profile_recipe_target_set_is_complete` pins the target set
+so a new `$(PROFILE)` recipe cannot appear unquoted; the marker probes prove no
+`$(shell …)` expands and the value reaches Python as one single-quoted argument.
 """
 
 import re
@@ -44,9 +52,11 @@ def _dry_run(target: str, *args: str) -> list[str]:
 
 
 def _profile_tokens(line: str) -> set[str]:
-    """Every PROFILE value on a line, token-exact (`PROFILE=x` or `--profile "x"`)."""
+    """Every PROFILE value on a line, token-exact (`PROFILE=x` or `--profile 'x'`).
+    Since fix/make-quote-profile the recipe form is single-quoted (`_Q`); the child
+    `$(MAKE) … PROFILE=x` lines stay bare, so both forms are matched."""
     return set(re.findall(r"PROFILE=(\S+)", line)) | set(
-        re.findall(r'--profile "([^"]+)"', line)
+        re.findall(r"""--profile ['"]([^'"]+)['"]""", line)
     )
 
 
@@ -61,7 +71,7 @@ def _isolated_live_targets() -> list[str]:
 
 def test_make_resolve_default_source_has_no_trailing_whitespace() -> None:
     (line,) = [ln for ln in _dry_run("resolve") if "resolve.replay" in ln]
-    assert re.search(r'--source "fixtures"(\s|$)', line), line
+    assert re.search(r"--source 'fixtures'(\s|$)", line), line
 
 
 def test_no_variable_assignment_carries_an_inline_comment() -> None:
@@ -158,7 +168,7 @@ def test_destructive_recipes_are_one_python_process_each() -> None:
     ):
         lines = [ln for ln in _dry_run(target, "PROFILE=tiny") if ln.strip()]
         assert lines[0].startswith(
-            f'uv run python -m lake.destructive {action} --profile "tiny"'
+            f"uv run python -m lake.destructive {action} --profile 'tiny'"
         ), lines
         assert len(lines) == 1, lines  # ONE process; nothing can run after a refusal
         assert "--yes" not in lines[0]  # prompts unless CONFIRM=yes on the command line
@@ -255,3 +265,169 @@ def test_review_tool_spec_is_not_expanded_by_make(tmp_path: Path, target: str) -
     ).stdout
     assert not marker.exists()
     assert "--spec '$(shell touch" in out, out
+
+
+# ------------------------------------------------- fix/make-quote-profile: every
+# PROFILE / SOURCE / PARTITION recipe passes $(call _Q,$(value VAR)) so no user
+# value reaches sh expanded. The three destructive recipes are the sharp edge.
+
+# Every recipe that interpolates the PROFILE make-variable. The three destructive
+# ones first. test-int-* are NOT here: they pass a LITERAL `PROFILE=<p>` to child
+# makes and never expand `$(PROFILE)` themselves — the child recipe is what
+# interpolates, and it is already in this set.
+PROFILE_RECIPE_TARGETS = [
+    "lake-reset",
+    "replay-serving",
+    "lake-maintain",
+    "seed",
+    "resolve",
+    "run",
+    "run-hot",
+    "reconcile-dagster",
+    "dagster-ui",
+    "metrics-capture",
+    "eval",
+    "context",
+    "agent-run",
+]
+
+
+def _q(value: str) -> str:
+    """The single-quoted form `_Q = '$(subst ','\\'',$(1))'` produces for `value`."""
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def _recipe_lines_by_target() -> dict[str, list[str]]:
+    """target -> its tab-indented recipe lines, parsed from the Makefile source.
+    A `target: VAR = v` pin line is a header, not a recipe line, so a literal
+    `PROFILE = medium` pin never counts as an interpolation."""
+    out: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in MAKEFILE.read_text().splitlines():
+        header = re.match(r"^([a-z][a-z0-9-]*):", line)
+        if header:
+            current = header.group(1)
+            out.setdefault(current, [])
+        elif line.startswith("\t") and current is not None:
+            out[current].append(line)
+        elif line and not line[0].isspace():
+            current = None  # a variable assignment / comment ends the recipe block
+    return out
+
+
+def _profile_interpolating_targets() -> set[str]:
+    """Targets whose recipe EXPANDS the PROFILE make-variable — `$(value PROFILE)`
+    or a bare `$(PROFILE)` — as opposed to a literal `PROFILE=x` handed to a
+    child make."""
+    return {
+        t
+        for t, lines in _recipe_lines_by_target().items()
+        for ln in lines
+        if "$(value PROFILE)" in ln or re.search(r"\$\(PROFILE\)", ln)
+    }
+
+
+def test_profile_recipe_target_set_is_complete() -> None:
+    # The pin that stops a new `$(PROFILE)` recipe from appearing unquoted: the
+    # set of targets whose recipe interpolates PROFILE must equal the parametrized
+    # list the probes below cover. Add a recipe, add it here (and it inherits the
+    # marker probes) or this fails.
+    assert _profile_interpolating_targets() == set(PROFILE_RECIPE_TARGETS)
+
+
+def test_every_profile_reference_goes_through_value_and_Q() -> None:
+    # No recipe may interpolate the make-EXPANDED PROFILE / SOURCE / PARTITION;
+    # each reference is `$(call _Q,$(value VAR))`. A bare `"$(PROFILE)"` — the
+    # Phase-17 residual — fails here (fix/make-quote-profile).
+    offenders: list[tuple[str, str]] = []
+    for target, lines in _recipe_lines_by_target().items():
+        for ln in lines:
+            bare = re.sub(
+                r"\$\(call _Q,\$\(value (?:PROFILE|SOURCE|PARTITION)\)\)", "", ln
+            )
+            if re.search(r"\$\((?:PROFILE|SOURCE|PARTITION)\)", bare):
+                offenders.append((target, ln))
+    assert offenders == [], offenders
+
+
+@pytest.mark.parametrize("target", PROFILE_RECIPE_TARGETS)
+@pytest.mark.parametrize("origin", ["env", "cmdline"])
+def test_profile_shell_is_not_expanded_by_make(
+    tmp_path: Path, target: str, origin: str
+) -> None:
+    # `$(value PROFILE)`: an env- OR command-line-origin `PROFILE='$(shell touch
+    # marker)'` used to run the shell at recipe-expansion time, even under -n
+    # (BACKLOG row; PR-35 probes). The literal must reach the recipe single-quoted.
+    marker = tmp_path / f"expanded_{origin}"
+    value = f"$(shell touch {marker})"
+    argv = ["make", "-n", "--no-print-directory", target]
+    if origin == "env":
+        env = clean_env(PROFILE=value)
+    else:
+        argv.append(f"PROFILE={value}")
+        env = clean_env()
+    out = subprocess.run(
+        argv, cwd=REPO_ROOT, capture_output=True, text=True, env=env
+    ).stdout
+    assert not marker.exists(), f"{target}/{origin}: make expanded the $(shell …)"
+    assert _q(value) in out, out
+
+
+@pytest.mark.parametrize("target", PROFILE_RECIPE_TARGETS)
+def test_profile_hostile_quoting_is_one_argument(tmp_path: Path, target: str) -> None:
+    # `PROFILE='x"; touch m; "'` renders as one single-quoted argument — the
+    # `; touch` lives inside the quotes, never as a second shell command.
+    value = f'x"; touch {tmp_path / "pwned"}; "'
+    out = subprocess.run(
+        ["make", "-n", "--no-print-directory", target, f"PROFILE={value}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(),
+    ).stdout
+    assert _q(value) in out, out
+    assert not (tmp_path / "pwned").exists()  # -n never executes a leaf recipe
+
+
+@pytest.mark.parametrize("target", PROFILE_RECIPE_TARGETS)
+def test_profile_apostrophe_is_escaped(target: str) -> None:
+    # `PROFILE=it's` → `'it'\''s'` (the only char `_Q` escapes is `'`).
+    out = subprocess.run(
+        ["make", "-n", "--no-print-directory", target, "PROFILE=it's"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(),
+    ).stdout
+    assert "'it'\\''s'" in out, out
+
+
+@pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
+def test_destructive_shell_profile_is_refused_and_lake_untouched(
+    tmp_path: Path, target: str
+) -> None:
+    # The REAL recipe (not -n) under `make -i` with a $(shell …) PROFILE: `$(value
+    # PROFILE)` keeps it unexpanded and `_Q` single-quotes it, so
+    # lake/destructive.py's [a-z0-9_]+ validation refuses it — the destructive
+    # action never runs, the lake is untouched. The make-expansion vector,
+    # complementing test_hostile_profile_refused_even_under_make_i (PROFILE=../x).
+    #
+    # NOTE: this does NOT assert the $(shell …) marker is uncreated. A
+    # command-line-origin PROFILE is expanded by make at STARTUP to export it to
+    # recipe environments — independent of the recipe or $(value) — so the touch
+    # runs before Python ever validates. Closing THAT needs `unexport PROFILE …`;
+    # it is an open design question (see the phase report). What is guaranteed
+    # here is the load-bearing invariant: the value is refused and nothing
+    # destructive happens.
+    res = _make_in_sandbox(
+        tmp_path,
+        "-i",
+        target,
+        f"PROFILE=$(shell touch {tmp_path / 'expanded'})",
+        "CONFIRM=yes",
+    )
+    out = res.stdout + res.stderr
+    assert "refusing" in out, out
+    assert "marker set" not in out and "removed" not in out
+    assert (tmp_path / "data" / "x").exists()
+    assert (tmp_path / "data" / "lake" / "tiny").exists()
