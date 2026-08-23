@@ -231,8 +231,8 @@ their threshold-crossing values come from a real stage run, never hand-authored)
 
 `PartCountHigh` (Phase 18a) is the one exception, and it is labelled as such rather
 than smoothed over: its threshold is ClickHouse's OWN `parts_to_delay_insert` default
-(150), because no threshold between our profiles exists — the real captures read 5
-active parts on both tiny and long_delay, part count following insert batching and
+(150), because no threshold between our profiles exists — the real captures peak at 4
+active parts on tiny and 5 on long_delay, part count following insert batching and
 merge timing rather than event volume. Its SILENCE is proven by both real captures;
 its FIRING by a synthetic input in a file whose name says so
 (`observability/rules/tests/alerts_synthetic_test.yml`, `active_parts=151`). A

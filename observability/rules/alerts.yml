@@ -21,8 +21,9 @@
 # reason is recorded rather than hidden. Its threshold is ClickHouse's OWN
 # parts_to_delay_insert default (150) — the point where the server starts throttling
 # inserts — not a number chosen between two of our captures, because none exists: the
-# real captures are 5 active parts max on tiny and 5 on long_delay (part count here
-# follows insert batching and merge timing, not event volume). So its SILENCE is
+# real captures peak at 4 active parts on tiny and 5 on long_delay, two orders of
+# magnitude below the threshold (part count here follows insert batching and merge
+# timing, not event volume). So its SILENCE is
 # proven by both real captures and its FIRING by a synthetic promtool input
 # (observability/rules/tests/alerts_synthetic_test.yml, active_parts=151) — the file
 # name says synthetic. A merge-lag rule is deliberately NOT shipped: every settled
@@ -89,5 +90,5 @@ groups:
             {{ $labels.table }} has {{ $value }} active parts — ClickHouse delays
             inserts from 150 (parts_to_delay_insert) and rejects them at 300
             (parts_to_throw_insert). Threshold is the SERVER's default, not a
-            number measured between our profiles: real captures read 5 parts max
+            number measured between our profiles: real captures peak at 5 parts
             (see alerts_test.yml). Check background merges before writing more.

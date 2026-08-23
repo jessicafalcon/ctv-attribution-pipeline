@@ -122,8 +122,8 @@ through it).
    `clickhouse_merge_backlog_seconds`. **One** alert rule, `PartCountHigh`
    (`clickhouse_active_parts > 150`): the threshold is ClickHouse's own
    `parts_to_delay_insert` default, cited in the rule's annotation, because no
-   threshold "between the profiles" exists — the real captures read 5 active parts max
-   on BOTH tiny and long_delay (part count follows insert batching and merge timing,
+   threshold "between the profiles" exists — the real captures peak at 4 active parts
+   on tiny and 5 on long_delay (part count follows insert batching and merge timing,
    not event volume). Its SILENCE is proven by the two real captures and its FIRING by
    a synthetic promtool input (`alerts_synthetic_test.yml`, `active_parts=151` — the
    file name and header say synthetic). A merge-lag rule is NOT shipped: every settled

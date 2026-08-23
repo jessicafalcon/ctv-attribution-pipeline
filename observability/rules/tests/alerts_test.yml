@@ -21,13 +21,13 @@ tests:
       - series: 'clickhouse_active_parts{table="attributed_conversions"}'
         values: '4+0x15'
       - series: 'clickhouse_active_parts{table="campaign_hourly"}'
-        values: '1+0x15'
+        values: '2+0x15'
       - series: 'clickhouse_active_parts{table="exposures_landed"}'
         values: '5+0x15'
       - series: 'clickhouse_active_parts{table="report_snapshots"}'
         values: '2+0x15'
       - series: 'clickhouse_active_parts{table="rollup_dirty"}'
-        values: '4+0x15'
+        values: '5+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag
@@ -68,13 +68,13 @@ tests:
       - series: 'clickhouse_active_parts{table="attributed_conversions"}'
         values: '1+0x15'
       - series: 'clickhouse_active_parts{table="campaign_hourly"}'
-        values: '1+0x15'
+        values: '2+0x15'
       - series: 'clickhouse_active_parts{table="exposures_landed"}'
         values: '4+0x15'
       - series: 'clickhouse_active_parts{table="report_snapshots"}'
         values: '2+0x15'
       - series: 'clickhouse_active_parts{table="rollup_dirty"}'
-        values: '5+0x15'
+        values: '2+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag

@@ -2,7 +2,7 @@
 # The only fixture in this repo whose numbers are not captured from a
 # real run: PartCountHigh's threshold is the SERVER's
 # parts_to_delay_insert default (150) and no profile here
-# leaves a table near it (real captures: 5 active parts max, see
+# leaves a table near it (real captures peak at 5 active parts, see
 # alerts_test.yml, which proves the SILENCE side). This file proves only
 # that the rule fires when a table does cross the server's own limit.
 rule_files:
@@ -21,5 +21,4 @@ tests:
               severity: warning
               table: attributed_conversions
             exp_annotations:
-              summary: >-
-                attributed_conversions has 151 active parts — ClickHouse delays inserts from 150 (parts_to_delay_insert) and rejects them at 300 (parts_to_throw_insert). Threshold is the SERVER's default, not a number measured between our profiles: real captures read 5 parts max (see alerts_test.yml). Check background merges before writing more.
+              summary: "attributed_conversions has 151 active parts \u2014 ClickHouse delays inserts from 150 (parts_to_delay_insert) and rejects them at 300 (parts_to_throw_insert). Threshold is the SERVER's default, not a number measured between our profiles: real captures peak at 5 parts (see alerts_test.yml). Check background merges before writing more."

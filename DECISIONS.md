@@ -2093,8 +2093,8 @@ below, never deleted.
   read access to every attribution row to count parts).
 - **ONE alert rule ships, `PartCountHigh > 150`, and its threshold is the SERVER's
   number — the documented exception to "fixtures come from real captures".** No
-  threshold between our profiles exists: the clean captures read 5 active parts max on
-  BOTH tiny and long_delay, because part count follows insert batching and merge
+  threshold between our profiles exists: the clean captures peak at 4 active parts on
+  tiny and 5 on long_delay, because part count follows insert batching and merge
   timing rather than event volume (tiny even has MORE `rollup_dirty` parts than
   long_delay). 150 is ClickHouse's own `parts_to_delay_insert` default — the point
   where the server throttles writers — cited in the rule's annotation. Its silence is
