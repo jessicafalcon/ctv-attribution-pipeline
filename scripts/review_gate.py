@@ -5,11 +5,12 @@ One process, one line per check, exit 1 on any FAIL, never a traceback. Run via
 `make review-gate [SPEC=specs/<file>.md] [BASE=main] [DELETED=a,b]` — the first
 thing `/review-round N` does, before any agent is spawned.
 
-  a. `make test`, `make lint`          (subprocess; last 20 lines on red)
+  a. `make test`; `ruff check` + `ruff format --check` (read-only — never
+     `make lint`, whose ruff-format hook rewrites files) (last 20 lines on red)
   b. `make check-docs`
   c. Evidence rows   — every `tests/….py::test_x` and `make <target>` the spec's
-                       Evidence section names must exist (pytest --collect-only,
-                       make -n). Needs --spec.
+                       Evidence section names must exist (pytest --collect-only;
+                       the Makefile's declared targets — never `make -n`). --spec.
   d. Record updates  — every file on the spec's Record-updates list is in
                        `git diff --name-only <base>...HEAD` (three-dot: the
                        branch's own changes since the merge-base, so a main that
@@ -36,6 +37,7 @@ from review_common import (  # noqa: E402
     resolve_spec,
     run,
     section,
+    suite_env,
     tail,
 )
 
@@ -58,6 +60,24 @@ def check_make(target: str, root: Path) -> bool:
         return True
     print(f"FAIL make {target} (exit {code}); last lines:\n{tail(out)}")
     return False
+
+
+def check_lint(root: Path) -> bool:
+    """Read-only lint. NOT `make lint`: pre-commit's ruff-format hook rewrites
+    files in place — in exactly the failing case — and a gate must not share a
+    medium with the tree it judges (coherence audit B7, PR #35)."""
+    ok = True
+    for name, cmd in (
+        ("ruff check", ["uv", "run", "ruff", "check", "."]),
+        ("ruff format --check", ["uv", "run", "ruff", "format", "--check", "."]),
+    ):
+        code, out = run(cmd, root)
+        if code == 0:
+            print(f"PASS {name}")
+        else:
+            print(f"FAIL {name} (exit {code}); last lines:\n{tail(out)}")
+            ok = False
+    return ok
 
 
 # --------------------------------------------------------------------- c
@@ -90,7 +110,7 @@ def collected_ids(root: Path) -> set[str]:
             "no:cacheprovider",
         ],
         root,
-        env={"CTV_INT": "1", "PATH": "/usr/bin:/bin", "HOME": str(Path.home())},
+        env=suite_env(root),
     )
     ids: set[str] = set()
     for ln in out.splitlines():
@@ -101,9 +121,20 @@ def collected_ids(root: Path) -> set[str]:
     return ids
 
 
-def make_target_exists(target: str, root: Path) -> bool:
-    code, _ = run(["make", "-n", "-s", target], root)
-    return code != 2
+def make_targets(root: Path) -> set[str]:
+    """Target names declared in the Makefile (`name:` at column 0). A set lookup,
+    never `make -n <name>`: `-n` still recurses through `$(MAKE)` lines (the
+    test-int-* recipes run `$(MAKE) down` / `lake-reset CONFIRM=yes`), so
+    existence-checking a name scraped from spec prose must not invoke make."""
+    targets: set[str] = set()
+    mk = root / "Makefile"
+    if not mk.exists():
+        return targets
+    for line in mk.read_text().splitlines():
+        m = re.match(r"^([a-z][a-z0-9-]*):", line)
+        if m:
+            targets.add(m.group(1))
+    return targets
 
 
 def check_evidence(spec_text: str, root: Path) -> bool:
@@ -114,13 +145,14 @@ def check_evidence(spec_text: str, root: Path) -> bool:
         )
         return False
     ids = collected_ids(root)
+    known = make_targets(root)
     ok = True
     for t in tests:
         if t not in ids:
             print(f"FAIL evidence: named test does not exist: {t}")
             ok = False
     for m in targets:
-        if not make_target_exists(m, root):
+        if m not in known:
             print(f"FAIL evidence: named make target does not exist: make {m}")
             ok = False
     if ok:
@@ -185,9 +217,19 @@ def check_records(spec_text: str, root: Path, base: str) -> bool:
 
 
 def check_deleted(symbols: list[str], root: Path, spec: Path | None) -> bool:
+    """`git grep -F -w`: the symbol is a literal, never a regex (a `[` used to
+    produce "1 hits" whose one hit was git's own `fatal: brackets not balanced`).
+    A git error is its own FAIL line, not a hit count."""
     ok = True
     for sym in symbols:
-        code, out = run(["git", "grep", "-n", "-w", "-e", sym, "--", "."], root)
+        code, out = run(["git", "grep", "-F", "-n", "-w", "-e", sym, "--", "."], root)
+        if code >= 2:  # 0 = hits, 1 = none, 2+/128+ = git itself failed
+            print(
+                f"FAIL deleted symbol: git grep error for {sym!r}: "
+                f"{tail(out, 1).strip()}"
+            )
+            ok = False
+            continue
         hits = [
             ln
             for ln in out.splitlines()
@@ -230,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     if not a.skip_make:
         results += [
             check_make("test", ROOT),
-            check_make("lint", ROOT),
+            check_lint(ROOT),
             check_make("check-docs", ROOT),
         ]
     if spec:

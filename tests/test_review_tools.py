@@ -202,3 +202,54 @@ def test_mutate_reports_survived_and_killed_and_leaves_the_tree_untouched(
     assert (repo / "pkg" / "mod.py").read_text() == MOD
     assert list(scratch.iterdir()) == []  # every worktree removed
     assert "mut-" not in _git(repo, "worktree", "list")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        '__import__("os").system("id")',
+        "f()",
+        "x",
+        "1+1",
+        "[" * 200 + "]" * 200,
+    ],
+)
+def test_constant_return_value_must_be_a_short_literal(bad: str) -> None:
+    text = f"## Invariants\n```mutations\npkg/mod.py::f   constant-return:{bad}\n```\n"
+    with pytest.raises(common.Refused, match="not a literal|longer than"):
+        mutate.parse_mutations(text)
+
+
+def test_constant_return_accepts_literals() -> None:
+    for ok in ("0", "None", "'x'", "(1,2)", "-1.5", "True"):
+        text = (
+            f"## Invariants\n```mutations\npkg/mod.py::f   constant-return:{ok}\n```\n"
+        )
+        assert mutate.parse_mutations(text)[0].arg == ok
+
+
+def test_suite_env_is_reduced(tmp_path: Path) -> None:
+    env = common.suite_env(tmp_path)
+    assert set(env) == {"PATH", "HOME", "PYTHONPATH", "CTV_INT"}
+    assert env["PYTHONPATH"] == str(tmp_path)
+
+
+def test_prose_make_sure_is_not_a_target_and_no_make_runs(repo: Path, capsys) -> None:
+    (repo / "Makefile").write_text("lint:\n\ttrue\n")
+    spec = "## Evidence\n| 1 | make sure `make lint` is green |\n"
+    assert gate.check_evidence(spec, repo) is False
+    out = capsys.readouterr().out
+    assert "named make target does not exist: make sure" in out
+    assert gate.make_targets(repo) == {"lint"}
+
+
+def test_deleted_symbol_is_literal_and_git_errors_are_distinct(
+    repo: Path, capsys
+) -> None:
+    assert (
+        gate.check_deleted(["zz[("], repo, None) is True
+    )  # literal `[` is not in the tree
+    assert gate.check_deleted(["old_symbol"], repo, None) is False
+    out = capsys.readouterr().out
+    assert "PASS deleted symbol gone: zz[(" in out
+    assert "(1 hits)" in out

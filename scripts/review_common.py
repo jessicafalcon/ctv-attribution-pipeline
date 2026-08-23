@@ -5,6 +5,7 @@ beyond the stdlib (ast, subprocess, pathlib)."""
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -47,6 +48,20 @@ def run(
         cmd, cwd=cwd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL
     )
     return res.returncode, res.stdout + res.stderr
+
+
+def suite_env(tree: Path) -> dict[str, str]:
+    """The ONE environment a child pytest gets (mutate's suite, the gate's
+    --collect-only): PATH, HOME, PYTHONPATH=tree, CTV_INT=1 (collect-only never
+    executes; the sweep's suite ignores tests/integration). Never the parent's full
+    environment — credentials do not reach code a spec's text shaped (security
+    review, PR #35: one path was reduced, the other inherited everything)."""
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", str(Path.home())),
+        "PYTHONPATH": str(tree),
+        "CTV_INT": "1",
+    }
 
 
 def tail(out: str, n: int = 20) -> str:

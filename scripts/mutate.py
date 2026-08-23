@@ -22,9 +22,11 @@ Exactly four operators:
                       key in the function; else the column list after the first
                       `order by` in a string constant
 
-Each mutation: `git worktree add --detach <scratch>/mut-N HEAD` (the working
-tree is never touched; the mutation is applied to HEAD), the offline suite runs
-there with THIS interpreter, the worktree is removed in a `finally`. One line per
+Each mutation: `git worktree add --detach <tmp>/mutate-*/mut-N HEAD` (the system
+temp dir; the working tree is never touched; the mutation is applied to HEAD), the
+offline suite runs there with THIS interpreter and a REDUCED environment
+(`review_common.suite_env`: PATH, HOME, PYTHONPATH, CTV_INT — never credentials),
+the worktree is removed in a `finally` (and stale ones pruned at start). One line per
 mutation — KILLED (suite red) or SURVIVED (suite green) — plus file:line; exit 1
 if any SURVIVED or ERROR. Uses ast/subprocess/pathlib only. Not a pytest file."""
 
@@ -32,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 import re
 import sys
 import tempfile
@@ -40,9 +41,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_common import ROOT, Refused, die, resolve_spec, run, section  # noqa: E402
+from review_common import (  # noqa: E402
+    ROOT,
+    Refused,
+    die,
+    resolve_spec,
+    run,
+    section,
+    suite_env,
+)
 
 OPERATORS = ("delete-call", "constant-return", "invert-guard", "swap-sort-key")
+MAX_LITERAL = 64  # chars; `constant-return:<v>` is a small literal, nothing else
 _BLOCK = re.compile(r"```mutations\n(.*?)```", re.S)
 _ORDER_BY = re.compile(r"(order by\s+)([^\n;)]+?)(\s*(?:limit\b|$))", re.I | re.M)
 SUITE = [
@@ -91,6 +101,8 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
                 f"refusing: unknown operator {parts[1]!r} "
                 f"(one of {', '.join(OPERATORS)})"
             )
+        if arg:
+            _literal_or_refuse(arg)
         if (
             Path(file).is_absolute()
             or ".." in Path(file).parts
@@ -105,6 +117,22 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
     return out
 
 
+def _literal_or_refuse(arg: str) -> None:
+    """`<v>` is written into a source file that the sweep's pytest then imports —
+    so it must be a Python LITERAL (`0`, `None`, `'x'`, `(1, 2)`), never an
+    expression. Spec text is model-authored; it never reaches exec."""
+    if len(arg) > MAX_LITERAL:
+        raise Refused(
+            f"refusing: constant-return value longer than {MAX_LITERAL} chars"
+        )
+    try:
+        ast.literal_eval(arg)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        raise Refused(
+            f"refusing: constant-return value is not a literal: {arg!r}"
+        ) from None
+
+
 # -------------------------------------------------------- text surgery
 
 
@@ -112,7 +140,10 @@ class Source:
     """Line-level edits guided by ast spans, so everything around the mutation
     keeps its formatting (ast.unparse of a whole file would reformat it)."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, tree: Path) -> None:
+        # A tracked symlink could point out of the worktree; the write must not.
+        if tree.resolve() not in path.resolve().parents:
+            raise Refused(f"refusing: {path.name} resolves outside the worktree")
         self.path = path
         self.text = path.read_text()
         self.lines = self.text.splitlines(keepends=True)
@@ -170,7 +201,7 @@ def apply(m: Mutation, tree: Path) -> str:
         for rel in files.split():
             if rel.startswith("tests/"):
                 continue
-            src = Source(tree / rel)
+            src = Source(tree / rel, tree)
             stmts = [n for n in ast.walk(src.tree) if pred(n)]
             for n in sorted(
                 stmts, key=lambda n: -n.lineno
@@ -183,7 +214,7 @@ def apply(m: Mutation, tree: Path) -> str:
                 f"refusing: no statement-level call to {m.func}() outside tests/"
             )
         return ",".join(sorted(hits))
-    src = Source(tree / m.file)
+    src = Source(tree / m.file, tree)
     fn = src.function(m.func)
     if m.op == "constant-return":
         first = fn.body[0]
@@ -245,6 +276,7 @@ def sweep(
 ) -> int:
     """Run every mutation; print one line each; return the exit code."""
     survivors = 0
+    run(["git", "worktree", "prune"], root)  # a SIGKILLed earlier sweep leaves one
     for i, m in enumerate(mutations, 1):
         tree = scratch / f"mut-{i}"
         try:
@@ -264,9 +296,7 @@ def sweep(
                 print(f"ERROR    {m}: {e}")
                 survivors += 1
                 continue
-            code, _ = run(
-                suite, tree, env={**os.environ, "CTV_INT": "0", "PYTHONPATH": str(tree)}
-            )
+            code, _ = run(suite, tree, env=suite_env(tree))
             verdict = "KILLED  " if code != 0 else "SURVIVED"
             survivors += code == 0
             print(f"{verdict} {m} -> {where}")
@@ -293,9 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         mutations = parse_mutations(spec.read_text())
     except Refused as e:
         die(str(e))
-    scratch = Path(
-        tempfile.mkdtemp(prefix="mutate-", dir=os.environ.get("MUTATE_SCRATCH") or None)
-    )
+    scratch = Path(tempfile.mkdtemp(prefix="mutate-"))  # system temp; no env knob
     try:
         return sweep(mutations, ROOT, scratch, SUITE)
     finally:

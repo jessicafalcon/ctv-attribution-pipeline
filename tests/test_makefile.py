@@ -239,3 +239,19 @@ def test_review_tool_spec_value_is_one_literal_argument(target: str) -> None:
     assert line.count("echo") == 1  # inside the quoted argument only
     (line,) = [ln for ln in _dry_run(target, "SPEC=it's") if "scripts/" in ln]
     assert "--spec 'it'\\''s'" in line, line
+
+
+@pytest.mark.parametrize("target", ["review-gate", "mutate"])
+def test_review_tool_spec_is_not_expanded_by_make(tmp_path: Path, target: str) -> None:
+    # `$(value SPEC)`: an env-origin `SPEC='$(shell touch marker)'` used to run the
+    # shell at recipe-expansion time, even under -n (security review, PR #35).
+    marker = tmp_path / "expanded"
+    out = subprocess.run(
+        ["make", "-n", target],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(SPEC=f"$(shell touch {marker})"),
+    ).stdout
+    assert not marker.exists()
+    assert "--spec '$(shell touch" in out, out

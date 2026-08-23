@@ -349,16 +349,20 @@ lint:
 # are in the diff; DELETED=a,b greps for removed symbols. ONE process validates
 # SPEC (an existing file under specs/, nothing derived from it) before anything
 # runs; the value is single-quoted for sh (`_Q`); nothing here edits, commits, or fixes. `/review-round N` runs it first.
-# _Q: single-quote a Make variable for sh — the ONLY character that needs escaping
-# inside '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument
-# (a "$(VAR)" interpolation ran the echo — found by this branch's threat-model probe).
+# _Q: single-quote a value for sh — the ONLY character that needs escaping inside
+# '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument (a
+# "$(VAR)" interpolation ran the echo — this branch's threat-model probe). Callers
+# pass `$(value VAR)`, the UNEXPANDED text: make expands a variable before _Q ever
+# sees it, so `SPEC='$(shell …)'` would otherwise run at recipe time, even under
+# -n (security review, PR #35). The three destructive recipes still interpolate
+# "$(PROFILE)" and keep Phase 17's stated residual until fix/make-quote-profile.
 _Q = '$(subst ','\'',$(1))'
 review-gate:
-	uv run python scripts/review_gate.py $(if $(SPEC),--spec $(call _Q,$(SPEC)),) --base $(call _Q,$(if $(BASE),$(BASE),main)) $(if $(DELETED),--deleted $(call _Q,$(DELETED)),)
+	uv run python scripts/review_gate.py $(if $(value SPEC),--spec $(call _Q,$(value SPEC)),) --base $(call _Q,$(if $(value BASE),$(value BASE),main)) $(if $(value DELETED),--deleted $(call _Q,$(value DELETED)),)
 
 # The mutation sweep (scripts/mutate.py): each line of the spec's ```mutations
 # block is applied to HEAD in a temporary git worktree (never this tree), the
 # offline suite runs there, the worktree is removed (try/finally). One line per
 # mutation, KILLED or SURVIVED; exit 1 on any survivor. SPEC validated in-process.
 mutate:
-	uv run python scripts/mutate.py --spec $(call _Q,$(SPEC))
+	uv run python scripts/mutate.py --spec $(call _Q,$(value SPEC))
