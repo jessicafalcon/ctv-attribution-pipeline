@@ -627,6 +627,20 @@ handled.*
   `event_time >= … and household_id = …` predicate reported `Total Files Read: 1`
   of 24 — it prunes on BOTH the day and the bucket transform, which is what makes
   the 90-day reconcile join partition-local instead of a scan.
+- **ClickHouse has no `alter table … modify engine`, so adding a ReplacingMergeTree
+  VERSION to a live table is a rebuild** (Phase 18a, verified on the pinned 24.8
+  image: `alter table … add column` is accepted, `alter table … modify engine` fails
+  with code 62 — the parser expects STATISTICS / COLUMN / ORDER BY / SAMPLE BY / TTL /
+  SETTING / QUERY / SQL SECURITY / DEFINER / REFRESH / COMMENT). The pattern used for
+  `report_snapshots` (`clickhouse/apply.py`): add the column → `create <t>_v2 as <t>
+  engine = ReplacingMergeTree(version)` → `insert … select * replace (…)` → compare
+  row counts → `exchange tables` (atomic on the default `Atomic` database engine) →
+  drop the scratch. Nothing is dropped before it has been copied; a crash before the
+  exchange leaves the original intact, and one after it leaves a scratch table the
+  next apply drops. This matters more than it looks: `report_snapshots` is the one
+  serving table `make replay-serving` does NOT rebuild from the lake
+  (`orchestration/replay.py` `SERVING_TABLES`), so a drop-and-recreate migration
+  would be unrecoverable data loss (BACKLOG).
 
 ---
 

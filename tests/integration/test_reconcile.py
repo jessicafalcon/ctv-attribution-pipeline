@@ -205,9 +205,10 @@ def test_second_pass_is_idempotent() -> None:
 def test_second_pass_twins_are_byte_identical() -> None:
     # Direct twin identity, both versioned tables: the raw (un-FINAL) rows of the
     # two passes must be byte-identical per key. Twins are observable in both —
-    # campaign_hourly (versioned) and report_snapshots (no version column) both
-    # keep the passes' parts unmerged for a while (merges are background and
-    # asynchronous; a version column does not defer them). If a merge happened
+    # campaign_hourly and report_snapshots (both versioned since Phase 18a) keep
+    # the passes' parts unmerged for a while (merges are background and
+    # asynchronous; a version column does not defer them, it only decides the
+    # winner when one runs). If a merge happened
     # to collapse a table's twins before the read there is nothing to compare
     # and that table is skipped — the money pin above is the always-on guard.
     client = connect()

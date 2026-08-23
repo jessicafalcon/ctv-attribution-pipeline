@@ -1997,3 +1997,45 @@ below, never deleted.
   `streaming/` rename and a BACKLOG triage the spec never carried; replaced with the
   spec's Done-when and a Delivered paragraph. The intro status paragraph (still "17
   built, in review") updated.
+
+### Phase 18a
+
+- **`report_snapshots` gains a ReplacingMergeTree VERSION, `snapshot_version` =
+  `max(processed_at)` over the rows the snapshot summarized.** Data-derived like
+  `reported_at` and computed entirely server-side (a Python datetime round-trip
+  renders in the caller's local timezone — Phase 6), monotone across the two passes
+  because reconciliation stamps `processed_at = reconciled_at`, strictly greater
+  than the hot max. The table had no version at all, so which twin a merge kept was
+  undefined by construction; it had worked only because Decimal-summed money makes
+  the twins identical (RUNBOOK incident 3). Rejected: a pass sequence number (the
+  BACKLOG row's phrasing) — invented state with no deterministic source that a
+  replay restarts at 1, which is wrong in exactly the case the column exists for.
+- **The SORT KEY is unchanged (`reported_at, campaign_id, period`).** `make restate`
+  reads BOTH the pre- and post-reconciliation rows through `FINAL`, so the version
+  disambiguates twins WITHIN one key and never collapses the pair. A consequence
+  worth stating: twins on a fully-equal sort key can only come from a re-run, which
+  the determinism pin makes byte-identical — equal versions over equal content is a
+  defined choice. The column declares the rule for the case the pin exists to
+  exclude, and `tests/integration/test_snapshot_version.py` shapes that case (with a
+  docstring saying it is not reachable through the pipeline). Rejected: keying on
+  `(campaign_id, period)` with `reported_at` as the version — it collapses the pair
+  the restatement view is built on.
+- **The migration is create → backfill → `exchange tables` → drop, inside
+  `clickhouse/apply.py`, guarded by `engine_full`.** ClickHouse has no `alter table
+  … modify engine` (verified live on the pinned 24.8 image, ARCHITECTURE §8). Not
+  destructive by this repo's definition: rows are copied first, the exchange is
+  atomic on the `Atomic` database engine, and nothing is dropped that is not already
+  in the new table. Two guards: the scratch table is dropped at the START of every
+  apply (a post-exchange crash leaves the OLD table there, already copied), and a
+  row-count comparison refuses to exchange a short copy — loud and retryable beats
+  silent loss, which matters because `report_snapshots` is the one serving table
+  `make replay-serving` does NOT rebuild from the lake (new BACKLOG row). Rejected:
+  a `make migrate-snapshots` target — a fourth destructive-shaped entry point for a
+  change that preserves every row.
+- **Legacy rows are backfilled `snapshot_version = reported_at`.** Almost inert:
+  `reported_at` is in the sort key, so a legacy row only ever competes with a twin of
+  its own pass. Rejected: `toDateTime64(0, 3)` — it flattens legacy twins back to
+  "undefined", the bug being fixed. Stated residual: between the migration and the
+  next pass, legacy rows carry `reported_at` as their version and new rows carry
+  `max(processed_at)`; the two quantities never meet under one sort key.
+

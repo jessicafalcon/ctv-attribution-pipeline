@@ -99,22 +99,33 @@ order by (campaign_id, hour);
 -- a present-but-fixed sentinel this phase (campaign-total grain); day-grain slots
 -- in later without a schema change. ReplacingMergeTree so re-running a pass
 -- (byte-identical rows) converges.
+--
+-- Phase 18a: `snapshot_version` is the ReplacingMergeTree VERSION — max(processed_at)
+-- over the rows the snapshot summarized (data-derived, no wall clock, no counter),
+-- monotone across the two passes because reconciliation stamps processed_at =
+-- reconciled_at, strictly greater than the hot max. Without it, which twin a merge
+-- kept was undefined by construction (BACKLOG). The SORT KEY is unchanged and keeps
+-- `reported_at`: `make restate` needs BOTH the pre- and post-reconciliation rows to
+-- survive FINAL, so the version disambiguates twins WITHIN a key and never collapses
+-- the pair. Existing volumes are migrated by clickhouse/apply.py (ClickHouse has no
+-- `alter table ... modify engine`).
 create table if not exists report_snapshots
 (
-    reported_at     DateTime64(3, 'UTC'),
-    campaign_id     String,
-    period          String,
-    spend           Float64,
-    revenue         Float64,
-    conversions     UInt64,
-    purchases       UInt64,
-    exposures       UInt64,
-    roas            Nullable(Float64),
-    cpa             Nullable(Float64),
-    cvr             Nullable(Float64),
-    site_visit_rate Nullable(Float64)
+    reported_at      DateTime64(3, 'UTC'),
+    campaign_id      String,
+    period           String,
+    spend            Float64,
+    revenue          Float64,
+    conversions      UInt64,
+    purchases        UInt64,
+    exposures        UInt64,
+    roas             Nullable(Float64),
+    cpa              Nullable(Float64),
+    cvr              Nullable(Float64),
+    site_visit_rate  Nullable(Float64),
+    snapshot_version DateTime64(3, 'UTC')
 )
-engine = ReplacingMergeTree
+engine = ReplacingMergeTree(snapshot_version)
 order by (reported_at, campaign_id, period);
 
 -- Eval guard marker (BACKLOG 43). A single-row table naming which profile

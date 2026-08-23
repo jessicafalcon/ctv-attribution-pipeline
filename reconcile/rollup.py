@@ -5,7 +5,9 @@ FINAL and stamped with a data-derived `reported_at` version.
 ALL (campaign_id, hour) keys with a higher `reported_at`, so FINAL is the latest
 complete rollup — never an insert-triggered summing MV (a correction would
 double-count) and never a TRUNCATE (CLAUDE.md). `report_snapshots` keeps one row
-per (reported_at, campaign_id) so a period's number is queryable as of each pass.
+per (reported_at, campaign_id) so a period's number is queryable as of each pass,
+versioned by `snapshot_version` (Phase 18a) so a twin on one sort key is decided
+by the data, not by merge timing.
 
 Both read FINAL on the source ReplacingMergeTree tables (DECISIONS Phase 4), so
 duplicate exposure landings and pre-reduction rows never inflate a denominator.
@@ -108,6 +110,17 @@ group by
 # report.sql (DECISIONS Phase 4 definitions), plus the snapshot key columns and
 # the raw counts so a snapshot is self-contained. NULL on a zero denominator.
 #
+# snapshot_version (Phase 18a) is the table's ReplacingMergeTree VERSION:
+# max(processed_at) over the CREDITED rows this snapshot summarizes — the same
+# {path_filter} set, so the pre (hot-only) snapshot versions on the hot rows and
+# the post one on the reconciled stamp, which is strictly greater. Computed
+# server-side for the same reason as reported_at (a Python datetime round-trip
+# renders in the caller's local timezone). It disambiguates twins WITHIN a sort
+# key; the pre/post pair sits on different reported_at values and is never
+# collapsed, which `make restate` depends on. A pass that credited nothing has no
+# processed_at to take a max of and falls back to reported_at (same pass stamp,
+# still data-derived).
+#
 # {path_filter} makes the snapshot order-independent and re-run-safe: the PRE
 # (hot) snapshot filters `and a.path = 'hot'` — the hot-attributed set is
 # invariant under reconciliation (it only rewrites hot-UNattributed rows), so the
@@ -138,7 +151,8 @@ credited as
     select
         e.campaign_id as campaign_id,
         a.conversion_type as conversion_type,
-        a.revenue as revenue
+        a.revenue as revenue,
+        a.processed_at as processed_at
     from attributed_conversions as a final
     inner join exposures as e
         on a.exposure_id = e.exposure_id
@@ -174,7 +188,13 @@ select
     coalesce(c.revenue, 0) / nullIf(s.spend, 0) as roas,
     s.spend / nullIf(coalesce(c.purchases, 0), 0) as cpa,
     coalesce(c.conversions, 0) / nullIf(s.exposures, 0) as cvr,
-    coalesce(c.site_visits, 0) / nullIf(s.exposures, 0) as site_visit_rate
+    coalesce(c.site_visits, 0) / nullIf(s.exposures, 0) as site_visit_rate,
+    if
+    (
+        (select count() from credited) = 0,
+        reported_at,
+        (select max(processed_at) from credited)
+    ) as snapshot_version
 from spend_by_campaign as s
 left join conv_by_campaign as c
     on s.campaign_id = c.campaign_id
