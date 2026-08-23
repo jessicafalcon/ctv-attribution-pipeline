@@ -19,6 +19,7 @@ from clickhouse_connect.driver.client import Client
 
 from clickhouse.apply import MigrationError, migrate_report_snapshots
 from clickhouse.client import connect
+from reconcile import rollup
 
 PROBE = "_report_snapshots_probe"
 
@@ -205,3 +206,41 @@ def test_a_short_copy_is_refused_rather_than_exchanged(client: Client) -> None:
         f"where database = currentDatabase() and name = '{PROBE}'"
     ).result_rows[0][0]
     assert "ReplacingMergeTree(" not in engine
+
+
+def test_a_pass_that_credits_nothing_never_versions_below_a_prior_pass(
+    client: Client,
+) -> None:
+    """The no-credit fallback, against real data. Forced by an impossible path
+    filter (`path = 'no_such_path'`), so the CREDITED set is empty while every
+    other input is the live one — the shape a profile with zero attributions
+    would produce, without mutating a table.
+
+    The fallback must be max(processed_at) over ALL current rows, not
+    `reported_at`: reported_at is max(ingest_time) + offset, while a reconciled
+    row's processed_at is max(ingest_time) + RECONCILE_DELTA_MS, so the pre pass's
+    reported_at sits BELOW a version already written (measured, DECISIONS 18a).
+    """
+    _probe_like_the_real_table(client)
+    sql = rollup._WRITE_REPORT_SNAPSHOT.replace(
+        "/*path_filter*/", "and a.path = 'no_such_path'"
+    )
+    sql = sql.replace("insert into report_snapshots", f"insert into {PROBE}")
+    client.command(sql, parameters={"offset_ms": 0, "period": rollup.PERIOD})
+
+    all_rows_max = client.query(
+        "select max(processed_at) from attributed_conversions final"
+    ).result_rows[0][0]
+    versions = client.query(
+        f"select distinct snapshot_version, reported_at from {PROBE}"
+    ).result_rows
+    assert versions, "the no-credit pass wrote no rows"
+    for version, reported_at in versions:
+        assert version == all_rows_max
+        # The point of the ruling: the fallback would have gone BACKWARDS here.
+        assert version >= reported_at
+
+    prior = client.query(
+        "select max(snapshot_version) from report_snapshots"
+    ).result_rows[0][0]
+    assert all_rows_max >= prior, "a no-credit pass versioned below a prior pass"

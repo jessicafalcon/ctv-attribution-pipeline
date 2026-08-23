@@ -118,8 +118,12 @@ group by
 # renders in the caller's local timezone). It disambiguates twins WITHIN a sort
 # key; the pre/post pair sits on different reported_at values and is never
 # collapsed, which `make restate` depends on. A pass that credited nothing has no
-# processed_at to take a max of and falls back to reported_at (same pass stamp,
-# still data-derived).
+# processed_at to take a max of and falls back to max(processed_at) over ALL
+# current rows — NOT to reported_at, which is measured to be SMALLER than a prior
+# pass's version: reported_at is max(ingest_time) + offset, while a reconciled
+# row's processed_at is max(ingest_time) + RECONCILE_DELTA_MS, so the pre pass's
+# reported_at (offset 0) sits a second BELOW it. The all-rows max is a superset of
+# every credited set, so it can never be lower than a version already written.
 #
 # {path_filter} makes the snapshot order-independent and re-run-safe: the PRE
 # (hot) snapshot filters `and a.path = 'hot'` — the hot-attributed set is
@@ -192,7 +196,7 @@ select
     if
     (
         (select count() from credited) = 0,
-        reported_at,
+        (select max(processed_at) from attributed_conversions final),
         (select max(processed_at) from credited)
     ) as snapshot_version
 from spend_by_campaign as s

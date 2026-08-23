@@ -68,6 +68,21 @@ def test_snapshot_version_is_the_credited_max_processed_at_not_a_clock() -> None
     assert not re.search(r"\bnow\(|\bnow64\(|\btoday\(", sql)
 
 
+def test_the_no_credit_fallback_is_the_all_rows_max_not_reported_at() -> None:
+    """A pass that credits nothing has no credited processed_at to take a max of.
+    The fallback must not be `reported_at`: measured on a live stack, the pre
+    pass's reported_at (max(ingest_time) + 0) is a full second BELOW a prior post
+    pass's version (a reconciled processed_at is max(ingest_time) +
+    RECONCILE_DELTA_MS), so the version would go backwards. max(processed_at) over
+    ALL current rows is a superset of every credited set and cannot."""
+    sql = " ".join(rollup._WRITE_REPORT_SNAPSHOT.split())
+    assert (
+        "if ( (select count() from credited) = 0, "
+        "(select max(processed_at) from attributed_conversions final), "
+        "(select max(processed_at) from credited) ) as snapshot_version"
+    ) in sql
+
+
 def test_snapshot_version_is_the_last_column_of_the_insert() -> None:
     # Positional INSERT: the version must sit where the DDL puts it, or every
     # column after it silently shifts.

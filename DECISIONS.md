@@ -2038,4 +2038,16 @@ below, never deleted.
   "undefined", the bug being fixed. Stated residual: between the migration and the
   next pass, legacy rows carry `reported_at` as their version and new rows carry
   `max(processed_at)`; the two quantities never meet under one sort key.
+- **The no-credit fallback is `max(processed_at)` over ALL current rows, decided by
+  measurement, not by reading.** A pass that credits nothing has no credited
+  `processed_at`; the first cut fell back to `reported_at`, which is WRONG in a way
+  only the numbers show: `reported_at` is `max(ingest_time) + offset` while a
+  reconciled row's `processed_at` is `max(ingest_time) + RECONCILE_DELTA_MS`, so on
+  the live stack the pre pass's fallback (2026-08-31 15:40:49.413) sat a second
+  BELOW a prior post pass's version (…50.413) — the version going backwards. The
+  all-rows max is a superset of every credited set, so it can never be lower than a
+  version already written; it can be EQUAL when the global max has not moved, which
+  only ever happens across different sort keys and so never decides a twin. Pinned
+  by `tests/test_snapshot_version.py::test_the_no_credit_fallback_is_the_all_rows_max_not_reported_at`
+  and the live no-credit pass in `tests/integration/test_snapshot_version.py`.
 
