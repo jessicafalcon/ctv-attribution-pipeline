@@ -131,6 +131,102 @@ def test_every_rows_version_equals_the_max_stamp_of_what_it_summarizes(client) -
     )
 
 
+def test_reverse_order_day_loads_leave_the_same_rollup_dirty(client) -> None:
+    """Invariant 5 — the SCENARIO, not the SQL shape (code-review round 1). A
+    conversion's day loaded BEFORE its exposure's day (reachable: `make
+    reconcile-dagster PARTITION=<day>` materializes one day) must leave the SAME
+    `rollup_dirty` FINAL as the sorted order. `_DIRTY_FROM_EXPOSURE_CREDITS` is the
+    recovery statement that upholds it, and it never fires in the sorted live flow
+    (`orchestration/run.py` loads `sorted(days)`), so a wrong day filter there would
+    drop a key silently while every other test still passes — a stale served rollup.
+
+    Exercised on isolated scratch tables (the real loader SQL string-replaced onto
+    them, the same idiom the version test uses), so it runs the ACTUAL statements
+    without touching the stack's serving state. Data: one exposure on an early day,
+    one conversion attributed to it on a later day.
+    """
+    from lake import load_serving as ls
+
+    exp, att, d_s, d_r = "ro_scr_exp", "ro_scr_att", "ro_scr_dirty_s", "ro_scr_dirty_r"
+    scratch = [exp, att, d_s, d_r]
+
+    def onto(sql: str, dirty: str) -> str:
+        return (
+            sql.replace("rollup_dirty", dirty)
+            .replace("exposures_landed", exp)
+            .replace("attributed_conversions", att)
+        )
+
+    def dt(s: str) -> str:
+        return f"toDateTime64('{s}', 3, 'UTC')"
+
+    # A "day load" mirrors the real loader: insert THAT day's rows, THEN run its
+    # recorder statements. The conversion's processed_at (08-03) is LATER than the
+    # exposure's ingest (08-01), so the key's max-stamp version is the conversion's —
+    # present in reverse order ONLY if the exposure-credits recovery statement fired.
+    exp_insert = (
+        f"insert into {exp} values ('exp-x', {dt('2026-08-01 10:00:00.000')}, "
+        f"{dt('2026-08-01 10:05:00.000')}, 'camp-x')"
+    )
+    att_insert = (
+        f"insert into {att} values ('exp-x', {dt('2026-08-03 09:00:00.000')}, "
+        f"{dt('2026-08-03 09:10:00.000')}, 1)"
+    )
+    load_e = (
+        exp_insert,
+        "2026-08-01",
+        [ls._DIRTY_FROM_EXPOSURES, ls._DIRTY_FROM_EXPOSURE_CREDITS],
+    )
+    load_a = (att_insert, "2026-08-03", [ls._DIRTY_FROM_ATTRIBUTED])
+
+    def run(dirty: str, loads: list) -> list[tuple]:
+        # Reset exp/att to EMPTY so the load ORDER genuinely controls what a recorder
+        # sees: in reverse order the exposures are absent when the conversion day
+        # loads, so `_DIRTY_FROM_ATTRIBUTED` finds nothing and the recovery statement
+        # on the exposure day must carry the credit.
+        for t in (exp, att, dirty):
+            client.command(f"drop table if exists {t}")
+        client.command(
+            f"create table {exp} (exposure_id String, event_time DateTime64(3,'UTC'), "
+            "ingest_time DateTime64(3,'UTC'), campaign_id String) "
+            "engine=ReplacingMergeTree order by (campaign_id, event_time, exposure_id)"
+        )
+        client.command(
+            f"create table {att} (exposure_id String, event_time DateTime64(3,'UTC'), "
+            "processed_at DateTime64(3,'UTC'), attributed UInt8) "
+            "engine=ReplacingMergeTree order by (exposure_id, event_time)"
+        )
+        client.command(
+            f"create table {dirty} (campaign_id String, hour DateTime('UTC'), "
+            "version DateTime64(3,'UTC')) engine=ReplacingMergeTree(version) "
+            "order by (campaign_id, hour)"
+        )
+        for insert_sql, day, recorders in loads:
+            client.command(insert_sql)
+            for sql in recorders:
+                client.command(onto(sql, dirty), parameters={"day": day})
+        return client.query(
+            f"select campaign_id, hour, version from {dirty} final "
+            "order by campaign_id, hour"
+        ).result_rows
+
+    try:
+        sorted_order = run(d_s, [load_e, load_a])  # exposure day first (the live order)
+        reverse_order = run(
+            d_r, [load_a, load_e]
+        )  # conversion day first (PARTITION=<day>)
+
+        assert reverse_order == sorted_order, (sorted_order, reverse_order)
+        # the recovery branch actually fired: the key exists and its version is the
+        # CONVERSION's processed_at (08-03), never the exposure's ingest (08-01).
+        assert len(reverse_order) == 1, reverse_order
+        _, _, version = reverse_order[0]
+        assert str(version).startswith("2026-08-03"), version
+    finally:
+        for t in scratch:
+            client.command(f"drop table if exists {t}")
+
+
 def test_a_replayed_refresh_cannot_lose_to_an_earlier_one(client) -> None:
     # The concrete consequence, exercised: recompute every key (what a replay's load
     # does) and the served rollup must be unchanged — same versions, same content, no
