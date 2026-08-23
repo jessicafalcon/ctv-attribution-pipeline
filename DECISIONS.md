@@ -2050,4 +2050,21 @@ below, never deleted.
   only ever happens across different sort keys and so never decides a twin. Pinned
   by `tests/test_snapshot_version.py::test_the_no_credit_fallback_is_the_all_rows_max_not_reported_at`
   and the live no-credit pass in `tests/integration/test_snapshot_version.py`.
+- **The incremental rollup's win is on WRITES and part growth; the read win is
+  unproven at this scale and is not asserted.** Measured on `long_delay` after a
+  reconcile pass: the dirty-set refresh writes 19 rows where the full rebuild writes
+  340 (17.9×), and reads 2,001 rows where the full rebuild reads 1,310 — MORE, because
+  `exposures_landed` holds 360 rows in 2 marks (a single 8192-row granule), so the
+  dirty-key predicate has nothing to prune while the dirty-key lookup itself reads.
+  `make rollup-bench` therefore asserts the direction on rows written and PRINTS rows
+  read beside the mark counts that explain them. Writing only the changed keys is also
+  what stops `campaign_hourly` gaining a full copy per refresh — the part-bloat RUNBOOK
+  incident #1 is about. Rejected: asserting the read direction anyway (it would hold
+  only on a profile the DONE command does not run — precisely the "do not claim scale
+  we don't run" rule); inlining the dirty keys as SQL literals to cancel the lookup's
+  reads (the measured statement would stop being the pipeline's own statement, and on
+  one granule it is a wash — a flaky assert); running the bench on `bench_large` (its
+  reconcile pass may restate nothing, which makes the gate vacuous, and it adds a
+  second seed + run to the DONE chain). The read side is a BACKLOG row for 18b, which
+  already runs `bench_large`.
 

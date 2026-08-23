@@ -1,5 +1,5 @@
 """Live: the eval profile/DB-mismatch guard fires against a real ClickHouse
-(BACKLOG 43). Pins the DB-glue path `accuracy/run.py._db_profile_marker` →
+(BACKLOG 43). Pins the DB-glue path `accuracy/guard.py db_profile_marker` →
 `assert_profile_marker` that the offline unit test (`tests/test_eval_guard.py`)
 bypasses (it calls the pure function directly). Skipped when ClickHouse is
 unreachable, so `make test` stays green offline; runs under `make test-int`.

@@ -73,10 +73,18 @@ def configure(profile: str) -> Path:
     `make lake-reset` enforces) and refuses a LAKE_ROOT override outside pytest —
     LAKE_ROOT is for tmp-lake fixtures only."""
     global _profile
+    _profile = validate_profile(profile)
+    return _lake_root()
+
+
+def validate_profile(profile: str) -> str:
+    """The profile-name rule, in one place: `[a-z0-9_]+`. Returns it unchanged or
+    raises. Public because entry points that take `--profile` but bind NO lake
+    (`make rollup-bench` reads ClickHouse only) must refuse an empty, path-escaping
+    or metacharacter value by exactly the same rule the lake paths use."""
     if not _PROFILE_RE.match(profile):
         raise LakeRootUnset(f"profile {profile!r} is not [a-z0-9_]+")
-    _profile = profile
-    return _lake_root()
+    return profile
 
 
 def profile() -> str | None:

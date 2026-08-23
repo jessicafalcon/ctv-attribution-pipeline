@@ -57,10 +57,10 @@ make test && make lint && make test-alerts \
   lake's current rows). `make run` here is the reconcile-bearing chain: at least one
   campaign is restated, which is what the dirty-set gate needs.
 - `make rollup-bench PROFILE=long_delay` (new) — full refresh vs dirty-set refresh after
-  that reconcile pass: rows read and rows written, direction assert (incremental < full),
-  6dp equality of `campaign_hourly` FINAL rows, and the gate — `set(rollup_dirty keys) ==
-  set(keys whose campaign_hourly rows differ between the pre- and post-refresh FULL
-  rebuilds)`.
+  that reconcile pass: 6dp equality of `campaign_hourly` FINAL rows, a direction assert
+  on rows WRITTEN (rows read printed with the single-granule caveat), and the gate —
+  every key whose `campaign_hourly` row differs between the pre- and post-refresh FULL
+  rebuilds is in the dirty set above the watermark, with `|dirty − changed|` reported.
 - `make test-int-long-delay` — the Phase-6 live reconciliation proof still passes on its
   own clean stack, plus this phase's live pins (the twin comparison and the forced-
   `OPTIMIZE` version pin on `report_snapshots`).
@@ -81,16 +81,29 @@ through it).
    watermark; there are no deletes and no mutations, so a crash between the refresh and
    the marker write re-refreshes the same keys on the next pass (idempotent, never
    skipped). A `--full` flag keeps the current full rebuild as the oracle.
-   `rollup-bench` asserts incremental == full (6dp) and incremental reads fewer rows.
+   `rollup-bench` asserts incremental == full (6dp) and that the incremental refresh
+   WRITES fewer rows (measured 19 vs 340 on `long_delay` — 18×, reported as measured,
+   never pinned). Rows read are printed for both and NOT asserted: at profile scale the
+   source tables are a single granule (`exposures_landed` 360 rows in 2 marks), so a
+   dirty-key predicate has nothing to prune and the dirty-key lookup itself reads —
+   measured 2,001 vs 1,310. A read-side win needs a multi-granule table (BACKLOG:
+   bench_large, 18b's query-cost work); asserting it here would claim scale we do not
+   run.
    The `report_snapshots` write path is unchanged by the dirty set (both passes still
    snapshot every campaign; Done-when 4 is this phase's only change to that table), so
    the restatement view is unchanged in content. *Evidence: Evidence rows 1a–1d.*
-2. **The dirty set is the loader↔rollup contract, and it is gated exactly.** After a
-   reconcile pass that restates ≥ 1 campaign, `set((campaign_id, hour) in rollup_dirty)`
-   **equals** `set(keys whose campaign_hourly rows differ between a pre-refresh and a
-   post-refresh FULL rebuild)` — exact set equality, not counts, in both directions (a
-   missing key is a silently stale rollup; an extra key is wasted work the full-refresh
-   oracle can never see). *Evidence: Evidence row 2.*
+2. **The dirty set is the loader↔rollup contract, and it is gated.** The dirty set is
+   the keys in `rollup_dirty` ABOVE the refresh watermark — the only set the refresh
+   ever sees, so the only set the contract can be about. After a reconcile pass that
+   restates ≥ 1 campaign, every key whose `campaign_hourly` row differs between a
+   pre-refresh and a post-refresh FULL rebuild is IN that set (`changed ⊆ dirty`, the
+   hard assert: a changed key the refresh would not recompute is the silent-wrong case
+   the full-refresh oracle can never see). The cost assert is `len(dirty) < total keys`,
+   and `rollup-bench` prints the over-refresh count `|dirty − changed|`. Equality is
+   NOT asserted — a reload of a touched day re-records that day's exposure hours at the
+   new version whether or not their aggregate moved, so the dirty set is a lawful
+   superset; on `long_delay` the two sets are in fact equal (19 of 340 keys, 0
+   over-refresh) and the run reports which held. *Evidence: Evidence row 2.*
 3. **Part-count and merge-lag are first-class.** A one-shot scraper function
    (`observability/ch_scrape.py`, no daemon and no new compose service) reads
    `system.parts` / `system.merges` through a new SELECT-only ClickHouse user

@@ -34,11 +34,12 @@ def test_versioned_writes_sum_money_in_decimal_via_tostring() -> None:
     # `REFRESH_SQL` counts; `__doc__` does not hold "insert into"); a tripwire
     # over the module's constants — an INSERT built inside a function body
     # escapes it (BACKLOG: AST scan). The behavioural money pins are the proof.
-    # Scoped to the two MONEY tables by name (Phase 18a added money-free INSERT
-    # constants to this module — the rollup_dirty / rollup_refresh_marker
-    # bookkeeping writes). A new money-bearing table must be added here
-    # deliberately; the tripwire below then holds it to the Decimal path.
-    money_tables = ("campaign_hourly", "report_snapshots")
+    # Scoped to the MONEY tables, named ONCE in the module under test
+    # (`rollup.MONEY_TABLES`) — Phase 18a added money-free INSERT constants here
+    # (rollup_dirty, rollup_refresh_marker). A new money-bearing table is covered
+    # by adding it to that constant and is NOT covered if you forget: there is no
+    # per-INSERT escape comment, which is how a tripwire stops firing.
+    money_tables = rollup.MONEY_TABLES
     inserts = [
         v
         for k, v in vars(rollup).items()

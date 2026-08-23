@@ -34,6 +34,14 @@ from clickhouse_connect.driver.client import Client
 # in later by widening this column, no schema change (BACKLOG / agent phase).
 PERIOD = "all"
 
+# The tables this module writes MONEY into. Single-sourced because
+# tests/test_rollup_decimal.py scans exactly these INSERTs for the Decimal path
+# (fix/snapshot-float-determinism): a new money-bearing table is covered by adding it
+# here, and is NOT covered if you forget — the tripwire has no per-INSERT escape
+# hatch. The module's other INSERTs (rollup_dirty, rollup_refresh_marker) carry no
+# money.
+MONEY_TABLES = ("campaign_hourly", "report_snapshots")
+
 
 # reported_at is computed ENTIRELY server-side — `max(ingest_time) over the fixed
 # state + offset_ms` — never round-tripped through a Python datetime. Reading a
@@ -101,7 +109,7 @@ from
         /*dirty_exposures*/
     ) as e
         on a.exposure_id = e.exposure_id
-    where a.attributed = 1
+    where a.attributed = 1 /*path_filter*/
 )
 group by
     campaign_id,
@@ -250,8 +258,24 @@ from rollup_dirty final
 """
 
 
+def campaign_hourly_rows(client: Client, *, hot_only: bool = False) -> list[tuple]:
+    """The rollup aggregate as a SELECT — the same expression `refresh_campaign_hourly`
+    inserts, read without writing. `hot_only` restricts the credit join to `path =
+    'hot'`, i.e. the rollup as it stood BEFORE reconciliation (the hot-attributed set
+    is invariant under reconciliation, the same seam the PRE report snapshot uses). Two
+    calls therefore give the pre- and post-reconciliation FULL rebuilds the dirty-set
+    gate compares (`queries/rollup_bench.py`)."""
+    sql = _REFRESH_CAMPAIGN_HOURLY.replace("insert into campaign_hourly", "", 1)
+    sql = sql.replace("/*dirty_exposures*/", "")
+    sql = sql.replace("/*path_filter*/", "and a.path = 'hot'" if hot_only else "")
+    # reported_at is dropped: it is the pass stamp, not part of the aggregate being
+    # compared (and it differs between a pre and a post rebuild by construction).
+    rows = client.query(sql, parameters={"offset_ms": 0}).result_rows
+    return [r[:-1] for r in rows]
+
+
 def refresh_campaign_hourly(
-    client: Client, offset_ms: int, *, full: bool = False
+    client: Client, offset_ms: int, *, full: bool = False, marker: str = MARKER
 ) -> None:
     """Recompute the rollup from FINAL (current state, both paths) and insert it as
     a new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the highest
@@ -262,12 +286,22 @@ def refresh_campaign_hourly(
     already has. `full=True` recomputes every key — the equality ORACLE the
     incremental path is measured against (`make rollup-bench`), and the escape hatch
     if a dirty set is ever suspect. Both write the watermark: a full refresh covered
-    everything by definition."""
-    sql = _REFRESH_CAMPAIGN_HOURLY.replace(
-        "/*dirty_exposures*/", "" if full else _DIRTY_FILTER
+    everything by definition. `marker` names the watermark row — the pipeline uses the
+    default; `make rollup-bench` passes its OWN row so measuring never moves the
+    pipeline's watermark (the marker is versioned by its own value, so it can rise but
+    never be rewound)."""
+    client.command(
+        refresh_sql(full=full), parameters={"offset_ms": offset_ms, "marker": marker}
     )
-    client.command(sql, parameters={"offset_ms": offset_ms, "marker": MARKER})
-    client.command(_WRITE_MARKER, parameters={"marker": MARKER})
+    client.command(_WRITE_MARKER, parameters={"marker": marker})
+
+
+def refresh_sql(*, full: bool) -> str:
+    """The refresh statement, full or dirty-filtered. Public so `make rollup-bench`
+    measures the SAME SQL the pipeline runs, never a copy of it."""
+    return _REFRESH_CAMPAIGN_HOURLY.replace(
+        "/*dirty_exposures*/", "" if full else _DIRTY_FILTER
+    ).replace("/*path_filter*/", "")
 
 
 def write_report_snapshot(client: Client, offset_ms: int, *, hot_only: bool) -> None:
