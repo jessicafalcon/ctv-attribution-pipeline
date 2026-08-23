@@ -74,3 +74,11 @@ def tail(out: str, n: int = 20) -> str:
 def die(msg: str, code: int = 2) -> None:
     print(msg)
     sys.exit(code)
+
+
+if __name__ == "__main__":  # `review_common.py env <tree>` → K=V lines for `env -i`
+    if len(sys.argv) == 3 and sys.argv[1] == "env":
+        for k, v in suite_env(Path(sys.argv[2])).items():
+            print(f"{k}={v}")
+        sys.exit(0)
+    die("usage: review_common.py env <worktree>")

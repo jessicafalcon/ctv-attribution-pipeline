@@ -1,5 +1,5 @@
 ---
-description: Review round N on a phase branch (tooling/fix/docs branches get one line — run the agents directly). Step 1 derives the range (round 1 main...HEAD; round N the review-round-(N−1) tag) and refuses an existing review-round-N tag; step 2 runs make review-gate + make mutate (red → no agents); step 3 prints the spec's Invariants; step 4 spawns code-reviewer + functionality-tester (+ security-reviewer in round 1 when the surface is touched) scoped to the range with "missed in round N−1" labelling; step 5 writes the ANNOTATED local tag (six key=value lines, never pushed), then the consolidated table and the two-round cap check — fail-closed, parsed anchored — printing CAP / cap watch / no cap. Read-only, report-only, then STOP.
+description: Review round N on a phase branch (tooling/fix/docs branches get one line — run the agents directly). Step 1 derives the range (round 1 main...HEAD; round N the review-round-(N−1) tag) and refuses an existing review-round-N tag via scripts/round_tag.py; step 2 runs make review-gate + make mutate (red → no agents); step 3 prints the spec's Invariants; step 4 spawns code-reviewer + functionality-tester (+ security-reviewer in round 1 when the surface is touched) scoped to the range with "missed in round N−1" labelling; step 5 prints the consolidated table, writes the round tag with `round_tag.py write` (six anchored key=value fields, local, never pushed), then runs `round_tag.py cap` — the two-round rule as code — printing CAP / cap watch / no cap. Read-only, report-only, then STOP.
 ---
 
 Run review round **$ARGUMENTS** (an integer N ≥ 1) on the current phase branch.
@@ -19,9 +19,12 @@ worktrees `make mutate` registers and removes under `.git/worktrees/`.
 - Spec: the one `specs/phase-*.md` whose slug matches the branch name
   (`phase-18a-cost-and-ops` → `specs/phase-18a-cost-and-ops.md`). If none
   matches, ask for `SPEC=` and stop. Set `SPEC=<that path>`.
-- Tag collision, checked HERE before anything runs: if `review-round-N` already
-  exists, print it and STOP — a round is reviewed once; a re-run is round N+1, or
-  the developer deletes the tag on purpose.
+- Tag collision, checked HERE before anything runs: `uv run python
+  scripts/round_tag.py read N` must fail with "missing" — if it prints a record,
+  round N already ran; STOP (a round is reviewed once; a re-run is round N+1, or
+  the developer deletes the tag on purpose). For N ≥ 2, `read N−1` must print a
+  record; a parse error or "missing" STOPS the command — the previous round's
+  tag is not a round record, and nothing is inferred from it.
 - Range: round 1 → `RANGE=main...HEAD` (three-dot: the branch since its
   merge-base, so a main that advanced under the branch adds nothing). Round N > 1 → the local tag
   `review-round-(N−1)` must exist (`git tag -l 'review-round-*'`); if it does
@@ -79,7 +82,7 @@ Round 1 only: if `git diff --name-only <RANGE>` touches `.github/`,
 `docker-compose.yml`, `clickhouse/users*`, `.env*`, or `agent/`, also spawn
 **security-reviewer** with the same range.
 
-## 5. Consolidate, cap-check, tag, STOP
+## 5. Consolidate, tag, cap-check, STOP
 
 Print one table over every finding from every agent:
 
@@ -90,48 +93,40 @@ Class is exactly one of **correctness** (wrong output, a survivor, an invariant
 with no pin, a caller/clock-sourced mechanism), **security**, **record** (a
 stale or missing record sentence), **wording** (names, comments, docs prose).
 
-Tag first — every completed round is tagged, cap or no cap, or the scoped pass
-that follows a cap has no boundary. The tag is ANNOTATED and its message is the
-round's record (`git tag -l --format='%(contents)' 'review-round-*'` is the
-audit trail):
+Tag — every completed round is tagged BEFORE the cap check, or the scoped pass
+that follows a cap has no boundary. The tag is written by CODE, never composed
+by hand (DECISIONS "Process": model-written text reaches a control decision only
+through fixed fields a script parses):
 
 ```
-git tag -a review-round-N HEAD -m "round=N
-range=<RANGE>
-agents=code-reviewer,functionality-tester[,security-reviewer]
-correctness=<count>
-cap=<yes|no|n/a>
-gate=review-gate:OK mutate:<killed>/<survived>/<errors>"
+uv run python scripts/round_tag.py write N --range <RANGE> \
+  --agents code-reviewer,functionality-tester[,security-reviewer] \
+  --correctness <count of correctness rows in the table> \
+  --cap <yes|no|n/a> --gate "review-gate:OK mutate:<killed>/<survived>/<errors>"
 ```
 
-The message is EXACTLY these six `key=value` lines and nothing else — never a
-finding title, never free text (DECISIONS "Process": model-authored text never
-reaches a control decision). `cap` is `yes` when every correctness finding in
-this round's table falls inside `review-round-(N−1)..HEAD`, `no` otherwise,
-`n/a` in round 1 (no previous fixes). `gate` keeps ERROR as a third state,
-never folded into survived.
+`--cap` is `n/a` in round 1; otherwise `yes` when the table has ≥ 1 correctness
+row and EVERY one falls inside `review-round-(N−1)..HEAD` (the previous round's
+fixes), else `no` — zero correctness rows is `no` (no findings is no evidence),
+and the script refuses any other combination. The script refuses an existing
+tag, validates the six fields against their patterns, reads the tag back, and
+never pushes (a local annotated tag; `git push` sends none unless asked).
 
-Local; never pushed — `git push` sends no tag unless asked, and this command
-never pushes.
-
-Cap check (CLAUDE.md Workflow rules, "Review cap" — two consecutive rounds).
-THIS = this round's `cap` value above. PREV = the `cap` line of the
-`review-round-(N−1)` tag, read with `git tag -l --format='%(contents)'
-review-round-(N−1)` and parsed ANCHORED: the line must match `^cap=(yes|no|n/a)$`
-exactly, every line of the message must match `^(round|range|agents|
-correctness|cap|gate)=.*$`, and each key appears once — anything else is a
-**parse error** that stops the command ("tag review-round-(N−1) is not a round
-record"), never a default. A missing tag stops the same way. If N ≥ 3 and
-THIS=yes and PREV=yes, print:
+Cap check (CLAUDE.md Workflow rules, "Review cap" — two consecutive rounds), as
+code: `uv run python scripts/round_tag.py cap N --this <the --cap value above>`
+prints exactly one of
 
 ```
 CAP: fixes are generating findings — write the invariant, re-implement once
+cap watch: one more such round trips the cap
+no cap
 ```
 
-and STOP; the next step is a fix amendment, then ONE scoped pass (the round
-after this one, against the tag just written), not another round of patches.
-Otherwise print **"no cap"** — and, when N ≥ 2 and THIS=yes alone, **"cap
-watch: one more such round trips the cap"** (CLAUDE.md Workflow rules).
+(round 1 reads no tag; N ≥ 2 reads `review-round-(N−1)` with the anchored
+parser — a bad tag is a parse error that stops the command, never a default;
+CAP needs N ≥ 3, this round `yes` AND the previous round `yes`). On CAP, STOP:
+the next step is a fix amendment, then ONE scoped pass (the round after this
+one, against the tag just written), not another round of patches.
 
 Close with the one line the developer decides on per finding: **fix
 (wording/test-only)**, **fix amendment (design change → spec paragraph first,

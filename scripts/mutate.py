@@ -26,7 +26,10 @@ Each mutation: `git worktree add --detach <tmp>/mutate-*/mut-N HEAD` (the system
 temp dir; the working tree is never touched; the mutation is applied to HEAD), the
 offline suite runs there with THIS interpreter and a REDUCED environment
 (`review_common.suite_env`: PATH, HOME, PYTHONPATH, CTV_INT — never credentials),
-the worktree is removed in a `finally` (and stale ones pruned at start). One line per
+the worktree is removed in a `finally` that also asserts `git worktree list` is
+unchanged (stale ones pruned at start). Verdicts: KILLED / SURVIVED / ERROR, one
+per mutation, summing to the mutation count; a registry change is a separate
+latched REGISTRY line, reported once, failing the run. One line per
 mutation — KILLED (suite red) or SURVIVED (suite green) — plus file:line; exit 1
 if any SURVIVED or ERROR. Uses ast/subprocess/pathlib only. Not a pytest file."""
 
@@ -34,7 +37,7 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
+import posixpath
 import re
 import sys
 import tempfile
@@ -114,16 +117,17 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
 def _repo_path(file: str) -> str:
     """A mutation target, resolved ONCE and gated on `Path.parts`, never on a
     string prefix (DECISIONS "Process", the model-text invariant): `./tests/x.py`,
-    `tests/../lake/x.py` and `lake/./x.py` all normalize first, then the rules —
-    relative, no `..`, `.py`, not under tests/ — apply to the parts."""
-    parts = PurePosixPath(os.path.normpath(file)).parts
+    `tests/../lake/x.py` and `lake/./x.py` all normalize first (posixpath, so the
+    rule is platform-independent), then the rules — relative, no `..`, `.py`, not
+    under tests/ (casefolded: macOS is case-insensitive) — apply to the parts."""
+    parts = PurePosixPath(posixpath.normpath(file)).parts
     if not parts or Path(file).is_absolute() or ".." in parts or parts[0] == "..":
         raise Refused(
             f"refusing: mutation target must be a repo-relative path: {file!r}"
         )
     if not parts[-1].endswith(".py"):
         raise Refused(f"refusing: mutation target must be a .py file: {file!r}")
-    if parts[0] == "tests":
+    if parts[0].casefold() == "tests":  # the filesystem may not be case-sensitive
         raise Refused(
             f"refusing: {file!r} is under tests/ — the sweep never mutates the "
             "oracle it judges by (every operator, not only delete-call)"
@@ -294,6 +298,7 @@ def sweep(
     """Run every mutation; print one line each; return the exit code."""
     survivors = 0
     errors = 0
+    registry_changed = False  # latched: its own outcome, never a mutation verdict
     run(["git", "worktree", "prune"], root)  # a SIGKILLed earlier sweep leaves one
     _, before = run(["git", "worktree", "list"], root)
     for i, m in enumerate(mutations, 1):
@@ -323,13 +328,17 @@ def sweep(
             run(["git", "worktree", "remove", "--force", str(tree)], root)
             run(["git", "worktree", "prune"], root)
             _, after = run(["git", "worktree", "list"], root)
-            if after != before:  # `git status` cannot see .git/worktrees; this can
-                print(f"ERROR    worktree registry changed after {m}:\n{after}")
-                errors += 1
-    bad = survivors + errors
+            if after != before and not registry_changed:
+                # `git status` cannot see .git/worktrees; this can. Reported once.
+                print(f"REGISTRY worktree registry changed after {m}:\n{after}")
+                registry_changed = True
+    killed = len(mutations) - survivors - errors  # the triple always sums to len
+    assert killed >= 0
+    bad = survivors + errors + registry_changed
     print(
-        f"mutate {'FAIL' if bad else 'OK'}: {len(mutations) - bad}/{len(mutations)} "
-        f"killed, {survivors} survived, {errors} errors"
+        f"mutate {'FAIL' if bad else 'OK'}: {killed}/{len(mutations)} killed, "
+        f"{survivors} survived, {errors} errors"
+        + (", worktree registry changed" if registry_changed else "")
     )
     return 1 if bad else 0
 

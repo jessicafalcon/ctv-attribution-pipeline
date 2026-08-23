@@ -186,8 +186,9 @@ below, never deleted.
   approval. (3) **Review cap** — two consecutive rounds reporting correctness
   findings only in the previous round's fixes → stop fixing, write the invariant,
   re-implement against it once, one scoped pass. (4) **Scoped re-review** — round
-  N+1 reviews round N's diff plus the invariant list; a finding on older code is
-  labelled "missed in round N" (`/review-round N`). (5) The agents check what the
+  N reviews round N−1's diff plus the invariant list (`/review-round N`); a
+  finding on code not changed inside that range is labelled "missed in round
+  N−1", the ONE literal (CLAUDE.md Workflow rules). (5) The agents check what the
   checklist could not: functionality-tester runs a mandatory **Mutation** step over
   every new write path and guard and confirms every Evidence-row test exists;
   code-reviewer reads the Invariants section and flags any mechanism whose value
@@ -215,12 +216,13 @@ below, never deleted.
   (a list nobody diffs is prose); **deleted-symbol grep** (self-review item 1 was
   the most-skipped item); **the mutation sweep** (`make mutate` — "delete this call,
   does the suite notice" found the real 18a bugs and is a loop, not a judgment);
-  **the round's diff range** (a local `review-round-N` tag — round N+1 reviews
-  exactly what round N's fixes touched, no hand-picked SHA); **the cap arithmetic** — a
-  PROCEDURE the command follows, not an automated edge: the gate and the sweep are
-  scripts with exit codes, while the range, the tag and the cap are steps the model
-  executes from the command text (the tag persists their state; nothing verifies the
-  count the model writes). It is a procedure until it is a script line
+  **the round's diff range and the cap arithmetic** (`scripts/round_tag.py`: the
+  tag is written, read and the two-round rule decided by code — a local annotated
+  `review-round-N` tag, round N+1 reviews exactly what round N's fixes touched, no
+  hand-picked SHA). Still a PROCEDURE the command follows, not an automated edge:
+  the correctness COUNT the model passes to `round_tag.py write` is the model's
+  reading of its own table — nothing verifies it; everything downstream of that
+  number is code
   (the written two-round rule: this round AND the previous one reported
   correctness findings only inside the previous round's fixes → print CAP; the
   first cut fired after one quiet round, and 18a is the evidence against that —
@@ -255,8 +257,9 @@ below, never deleted.
   safe inspection)
   after PR #35 merges. Until then the PROFILE residual stands as written.
 
-- **Model-authored text never reaches an oracle or a control decision
-  (2026-08-23; PR #35 review cap, security track).** Rounds 2 and 3 each found a
+- **Model-authored text never reaches an oracle; it reaches a control decision
+  only through fixed fields a script parses, never free text (2026-08-23; PR #35
+  review cap, security track).** Rounds 2 and 3 each found a
   hole inside the guard the previous round had added (`CTV_INT` on the sweep, then
   `./tests/x.py` through a `startswith("tests/")` check) — the two-round cap fired
   on the tooling branch itself, and this is the invariant it was re-implemented
@@ -269,14 +272,23 @@ below, never deleted.
   on string prefix.* Mechanisms that satisfy it: `scripts/mutate.py::_repo_path`
   (one `normpath`, rules on the parts — pinned with `./tests/oracle.py`,
   `tests/./oracle.py`, `lake/../tests/x.py`); the `review-round-N` tag message is
-  exactly six `key=value` lines, `cap=yes|no|n/a` (round 1 writes `n/a`), read
-  line-anchored, any deviation a parse error that stops the command; `gate=`
-  keeps ERROR as a third state, never folded into survived; the functionality-
-  tester's hand worktree uses the interpreter captured absolutely in the main tree
-  (not taken: `uv run` inside the worktree — a second environment per mutation,
-  and `uv sync` is `make setup`'s job) and asserts `git worktree list` equal
-  before/after inside the same try/finally (`git status` cannot see
-  `.git/worktrees/`). Stated residuals, not fixes: the backticked `` `make …` ``
+  written and read by `scripts/round_tag.py` — exactly six `key=value` lines,
+  each value matched by its own pattern, git's one trailing newline stripped, any
+  deviation a parse error that stops the command (the scoped pass found the
+  first cut of this as PROSE in the command: unanchored values, a rule that
+  rejected git's own output, round 1 undefined — a parser that is prose cannot be
+  pinned, so the tag became a script, which is what the cap prescribed);
+  `cap=n/a` in round 1, `correctness=0` forces `cap=no` (no findings is no
+  evidence — two clean rounds print "no cap"), `round_tag.py cap N` is the
+  two-round rule as code; `gate=` keeps ERROR as a third state, never folded into
+  survived, and the verdict triple always sums to the mutation count (a worktree
+  registry change is a separate latched outcome); the functionality-tester's hand
+  worktree uses the interpreter captured absolutely in the main tree (not taken:
+  `uv run` inside the worktree — a second environment per mutation, and `uv sync`
+  is `make setup`'s job), the same `review_common.suite_env` environment through
+  `env -i` (one env builder, two callers), and compares `git worktree list`
+  before/after as its last step (the `try/finally` is `mutate.py`'s; the shell
+  recipe is linear — `git status` cannot see `.git/worktrees/`). Stated residuals, not fixes: the backticked `` `make …` ``
   scraper checks the first target per span; `make_targets` reads `define` bodies
   and column-0 continuations — both mitigated by the `.PHONY` equality pin, which
   goes red on the first non-phony rule BY DESIGN: that rule then gets an explicit

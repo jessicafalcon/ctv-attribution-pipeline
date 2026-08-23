@@ -355,7 +355,7 @@ lint:
 # "$(VAR)" interpolation ran the echo — this branch's threat-model probe). Callers
 # pass `$(value VAR)`, the UNEXPANDED text: make expands a variable before _Q ever
 # sees it, so `SPEC='$(shell …)'` would otherwise run at recipe time, even under
-# -n (security review, PR #35). Every "$(PROFILE)" recipe (~15, the three
+# -n (security review, PR #35 round 1). Every "$(PROFILE)" recipe (~15, the three
 # destructive ones first) still interpolates the expanded value and keeps Phase
 # 17's stated residual until fix/make-quote-profile (BACKLOG row).
 _Q = '$(subst ','\'',$(1))'
@@ -365,7 +365,8 @@ review-gate:
 # The mutation sweep (scripts/mutate.py): each line of the spec's ```mutations
 # block is applied to HEAD in a temporary git worktree (never this tree), the
 # offline suite runs there under a reduced env, the worktree is removed
-# (try/finally). One line per mutation, KILLED / SURVIVED / ERROR; exit 1 on any
-# survivor or error. SPEC validated in-process.
+# (try/finally, which also asserts `git worktree list` unchanged). One verdict per
+# mutation, KILLED / SURVIVED / ERROR, summing to the count; a registry change is a
+# separate latched REGISTRY line; exit 1 on any of them. SPEC validated in-process.
 mutate:
 	uv run python scripts/mutate.py --spec $(call _Q,$(value SPEC))

@@ -106,8 +106,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `scripts/` — the offline guards, none a pytest file: `check_docs.py` (the one
   docs guard, `make check-docs`; was `docs/check_runbook.py`, Phase 19),
   `review_gate.py` (`make review-gate`), `mutate.py` (`make mutate`),
-  `review_common.py` (their shared SPEC validator / section parser / reduced
-  child env).
+  `round_tag.py` (the `review-round-N` tag: write / read / the cap rule, all
+  code), `review_common.py` (their shared SPEC validator / section parser /
+  reduced child env — `review_common.py env <tree>` prints it for `env -i`).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -272,8 +273,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   be a Python literal ≤ 64 chars (`ast.literal_eval`) or the whole run is refused
   — spec text never reaches exec. One line per mutation: `KILLED`, `SURVIVED`
   (a correctness finding), or `ERROR` (the operator could not be applied — a
-  spec/tooling defect) + file:line; exit 1 on any survivor or error, 2 on a
-  refused SPEC. ~30 s per mutation at repo size. Same inbound-branch caveat as
+  spec/tooling defect) + file:line — the three always sum to the mutation count;
+  a worktree-registry change is a separate latched `REGISTRY` line, reported
+  once; exit 1 on any survivor, error or registry change, 2 on a refused SPEC. ~30 s per mutation at repo size. Same inbound-branch caveat as
   the run-tests hook (Project tooling): it runs that branch's conftest.py —
   review it before running on someone else's branch
 
@@ -452,9 +454,11 @@ standard way over the clever way.
 - Review cap: if two consecutive review rounds report correctness findings
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
-  fourth round of patches on patches. `/review-round` prints "cap watch" after
-  the FIRST such round, "CAP" after the second; round N−1's bit is read from its
-  annotated tag, fail-closed.
+  fourth round of patches on patches. `scripts/round_tag.py cap N` is this rule
+  as code: "cap watch" after the FIRST such round, "CAP" after the second (N ≥ 3);
+  round 1 has no previous fixes (`cap=n/a`); a round with zero correctness
+  findings is `cap=no` (no findings is no evidence); round N−1's value is read
+  from its annotated tag with an anchored parser — a bad tag stops, never defaults.
 - `/review-round N` is the review gate: its deterministic half (`make
   review-gate`, `make mutate`) runs before any agent is spawned, in every round.
 - Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
@@ -577,8 +581,10 @@ never auto-fixed, ignored, or committed around.
   agent are touched), then writes the round's ANNOTATED local tag (six `key=value`
   lines: round, range, agents, correctness, cap, gate — never pushed) BEFORE the cap check, prints the
   consolidated finding table and the CAP / "cap watch" / "no cap" line, then
-  stops. The cap reads round N−1's bit from its tag and fails closed (missing or
-  unparsable → "no"). Read-only, report-only.
+  stops — the tag written and read by `scripts/round_tag.py`, and the cap check
+  run as `round_tag.py cap N` (the two-round rule as code): a missing or
+  unparsable previous tag is a parse error that STOPS the command, never a
+  default. Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 
