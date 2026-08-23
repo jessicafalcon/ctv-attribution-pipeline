@@ -224,7 +224,7 @@ reproduced by the command it states.
   `make bench` if the rollup ever stops being the smaller read. The structural point: the
   naive scan grows with every event, the rollup read is bounded by `(campaign, hour)`.
 - **Alert rules** are proven by `promtool test rules` against REAL captured stage
-  registries (`make test-alerts`): all four fire on `long_delay`; on `tiny` only
+  registries (`make test-alerts`): the four workload rules fire on `long_delay`; on `tiny` only
   `RestatementMagnitude` fires (its own deferral landing restates ROAS). They detect
   *operational* faults, not inflation — a green alert board does not mean the numbers
   are right, which is the agent's job.
@@ -292,10 +292,10 @@ resolve/         conversion → household resolution (in-process map step; devic
 streaming/       attribution engine: pure core + batch-drain driver (window, dedup, lateness, eviction)
 lake/            Iceberg lake of record: catalog, schemas, landing, DuckDB reads, ClickHouse loader
 orchestration/   Dagster assets (lake → ClickHouse load, day-partitioned reconcile) + headless CLI
-reconcile/       periodic long-window matcher over the lake, rollup refresh, snapshots
-clickhouse/      DDL, users (agent_ro is SELECT-only), migrations
+reconcile/       periodic long-window matcher over the lake, rollup, snapshots
+clickhouse/      DDL, users (agent_ro SELECT-only; metrics_ro metadata-only), migrations
 queries/         reporting SQL, restatement view, naive-vs-optimized benchmark, cost levers
-observability/   prometheus.yml, alert rules, grafana dashboard (JSON)
+observability/   prometheus.yml, 5 alert rules, the clickhouse_ scrape, grafana (JSON)
 agent/           collectors, hypothesis catalog, probe registry, loop, webhook, eval/
 accuracy/        household-grain precision/recall vs the truth side file
 common/          kafka.py — the shared start→end topic drain (engine + graph loader)

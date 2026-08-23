@@ -19,7 +19,8 @@ the serving tables and it knows exactly which day it just loaded, so it is the
 only place that cannot disagree with what ClickHouse holds: after each day's
 insert it records that day's (campaign_id, hour) rollup keys in `rollup_dirty`,
 stamped with a data-derived version. `reconcile.rollup.refresh_campaign_hourly`
-then recomputes only the keys whose version rose above the refresh watermark.
+then recomputes only the keys whose recorded version differs from the version the
+rollup was last computed against (`rollup_refreshed`, one row per key).
 """
 
 from collections.abc import Sequence

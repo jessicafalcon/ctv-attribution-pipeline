@@ -43,14 +43,26 @@ PERIOD = "all"
 MONEY_TABLES = ("campaign_hourly", "report_snapshots")
 
 
-# reported_at is computed ENTIRELY server-side — `max(ingest_time) over the fixed
-# state + offset_ms` — never round-tripped through a Python datetime. Reading a
-# DateTime back into Python renders it in the client's local timezone, which
-# differs between the `make run` subprocess and an in-process caller, stamping the
-# same instant at different wall-clocks (a determinism break). Keeping it in SQL
-# makes reported_at identical no matter which process writes the snapshot; the
-# offset (0 for the pre/hot pass, RECONCILE_DELTA_MS for the post pass) keeps the
-# two snapshots strictly ordered.
+# reported_at is computed ENTIRELY server-side, never round-tripped through a Python
+# datetime: reading a DateTime back into Python renders it in the caller's local
+# timezone, so the same instant would be stamped at different wall-clocks by `make
+# run` and by an in-process caller (a determinism break).
+#
+# For `campaign_hourly` (Phase 18a, review-gate round 3) it is also DATA-DERIVED PER
+# KEY: `max(stamp)` over the rows that key summarizes — an exposure's `ingest_time`,
+# a credited conversion's `processed_at`. Same rule as `snapshot_version`. The
+# consequence is the invariant the whole incremental path rests on: the SAME CONTENT
+# always carries the SAME VERSION, whoever computed it. A hot load, a reconcile
+# refresh, a replay and a full rebuild agree; a key whose data moved gets a strictly
+# higher stamp (a reconciled `processed_at` exceeds every hot one) and supersedes;
+# a key whose data did not move re-inserts an identical row the ReplacingMergeTree
+# collapses. The earlier scheme stamped `max(ingest_time) + offset_ms` from the
+# CALLER, which meant a replay (offset 0) wrote rows the RMT discarded as older than
+# a reconcile pass's (offset 1000) while the dirty bookkeeping marked those keys
+# clean — silently stale, exactly the class this phase exists to remove.
+#
+# `report_snapshots` keeps its caller offset: its pre/post pair is a deliberate TWO
+# ROW history per campaign (the restatement view reads both), not a version race.
 
 
 # Rollup buckets by the credited exposure's event-time hour, so spend/exposures
@@ -67,14 +79,7 @@ select
     sum(is_purchase) as purchases,
     sum(is_site_visit) as site_visits,
     toFloat64(sum(toDecimal64(toString(rev), 4))) as revenue,
-    (
-        select max(t) from
-        (
-            select max(ingest_time) as t from exposures_landed final
-            union all
-            select max(ingest_time) as t from attributed_conversions final
-        )
-    ) + toIntervalMillisecond({offset_ms:Int64}) as reported_at
+    max(stamp) as reported_at
 from
 (
     select
@@ -85,7 +90,8 @@ from
         0 as is_conversion,
         0 as is_purchase,
         0 as is_site_visit,
-        0.0 as rev
+        0.0 as rev,
+        ingest_time as stamp
     from exposures_landed final
     /*dirty_exposures*/
     union all
@@ -97,7 +103,8 @@ from
         1 as is_conversion,
         a.conversion_type = 'purchase' as is_purchase,
         a.conversion_type = 'site_visit' as is_site_visit,
-        a.revenue as rev
+        a.revenue as rev,
+        a.processed_at as stamp
     from attributed_conversions as a final
     inner join
     (
@@ -226,11 +233,19 @@ order by s.campaign_id
 # was never refreshed again — measured at 321 of 340 keys on long_delay, and
 # reproduced as a stale served rollup (review gate, Phase 18a).
 #
-# `!=`, not `>`: a key's version can move DOWN as well as up (re-seed a profile after
-# `make lake-reset` and the same key's max ingest_time may land earlier), and "the
-# rollup was computed against a different version of this key" is the honest
-# condition. A LEFT JOIN with no match yields the epoch, so a key never refreshed is
-# always dirty.
+# `!=` rather than `>`: "the rollup was computed against a different version of this
+# key" is the condition that matters, and it does not depend on the two stamps being
+# ordered. (The earlier justification — "a version can move DOWN on a re-seed" — was
+# WRONG and is corrected here: `rollup_dirty` is a ReplacingMergeTree keyed on the
+# version, so a lower version is discarded on read and `d.version` never moves down.
+# The re-seed hazard is real and is closed elsewhere: `make replay-serving` truncates
+# this bookkeeping alongside the serving tables, and a fresh stack is `make down`.)
+#
+# `isNull(...) or ...`: a LEFT JOIN with no match yields the epoch under ClickHouse's
+# default `join_use_nulls = 0`, but if that setting is ever enabled the comparison
+# would evaluate NULL and every never-refreshed key would silently drop out of the
+# dirty set — the exact silent-wrong class this gate exists for. The predicate states
+# the intent instead of relying on a default nothing here sets.
 _DIRTY_KEYS = """
 select
     d.campaign_id,
@@ -239,7 +254,7 @@ select
 from rollup_dirty as d final
 left join rollup_refreshed as r final
     on d.campaign_id = r.campaign_id and d.hour = r.hour
-where d.version != r.version
+where isNull(r.version) or d.version != r.version
 order by
     d.campaign_id,
     hour_s
@@ -271,7 +286,9 @@ from
 )
 """
 
-# A full rebuild covered every key the loader has recorded, so it stamps all of them.
+# A whole-table rebuild covers every key the loader has recorded, so it stamps all of
+# them. Used by `queries/rollup_bench.py` after its scratch-table oracle run, never by
+# the pipeline (which only ever refreshes what moved).
 _STAMP_ALL_REFRESHED = """
 insert into rollup_refreshed
 select
@@ -300,35 +317,27 @@ def campaign_hourly_rows(client: Client, *, hot_only: bool = False) -> list[tupl
     sql = sql.replace("/*path_filter*/", "and a.path = 'hot'" if hot_only else "")
     # reported_at is dropped: it is the pass stamp, not part of the aggregate being
     # compared (and it differs between a pre and a post rebuild by construction).
-    rows = client.query(sql, parameters={"offset_ms": 0}).result_rows
+    rows = client.query(sql).result_rows
     return [r[:-1] for r in rows]
 
 
-def refresh_campaign_hourly(
-    client: Client, offset_ms: int, *, full: bool = False
-) -> int:
-    """Recompute the rollup from FINAL (current state, both paths) and insert it as a
-    new version stamped `max(ingest_time) + offset_ms`. FINAL keeps the highest
-    reported_at per key, so each key's latest row is the current one. Returns the
-    number of keys recomputed.
+def refresh_campaign_hourly(client: Client) -> int:
+    """Recompute the rollup for exactly the keys whose data has moved since the rollup
+    was last computed against them, then stamp those keys in `rollup_refreshed`.
+    Returns the number of keys recomputed.
 
-    Incremental by default (Phase 18a): only the keys whose `rollup_dirty` version
-    differs from their `rollup_refreshed` one are recomputed, and every other key keeps
-    the row it already has. `full=True` recomputes every key — the equality ORACLE the
-    incremental path is measured against (`make rollup-bench`), and the escape hatch if
-    a dirty set is ever suspect. Both then stamp `rollup_refreshed`, so a run converges
-    to "nothing dirty"."""
-    if full:
-        client.command(refresh_sql(full=True), parameters={"offset_ms": offset_ms})
-        client.command(_STAMP_ALL_REFRESHED)
-        return len(dirty_keys(client))
-
+    No caller-supplied version: each row carries `max(stamp)` over the source rows it
+    summarizes, so identical content always carries an identical version and the
+    ReplacingMergeTree resolves every re-computation for free — including a replay's.
+    No `full` branch either: a whole-table rebuild is a measurement tool
+    (`queries/rollup_bench.py` runs `refresh_sql(full=True)` into a scratch table),
+    not a pipeline path, and the live gate proves the incremental result equals it."""
     keys = dirty_keys(client)
     if not keys:
         return 0
     client.command(
         refresh_sql(full=False),
-        parameters={"offset_ms": offset_ms, "keys": [(c, h) for c, h, _ in keys]},
+        parameters={"keys": [(c, h) for c, h, _ in keys]},
     )
     client.command(_STAMP_REFRESHED, parameters={"keys": keys})
     return len(keys)

@@ -87,14 +87,15 @@ through it).
    cut compared every key to one scalar watermark, which left 321 of 340 keys on
    long_delay permanently unrefreshed and served a stale rollup (review gate). There are
    no deletes and no mutations, so a crash between the refresh and the stamp re-refreshes
-   the same keys on the next pass (idempotent, never skipped). A `--full` flag keeps the
-   whole-table rebuild as the oracle.
+   the same keys on the next pass (idempotent, never skipped). A whole-table rebuild survives only as a
+   MEASUREMENT tool (`queries/rollup_bench.py` runs it into a scratch table), never as
+   a pipeline path — the live gate proves the incremental result equals it.
    `rollup-bench` asserts incremental == full (6dp) and that the incremental refresh
-   WRITES fewer rows (measured 19 vs 340 on `long_delay` — 18×, reported as measured,
-   never pinned). Rows read are printed for both and NOT asserted: at profile scale the
+   WRITES fewer rows (measured 19 vs 340 on `long_delay` — 17.9×, reported as
+   measured, never pinned). Rows read are printed for both and NOT asserted: at profile scale the
    source tables are a single granule (`exposures_landed` 360 rows in 2 marks), so a
    dirty-key predicate has nothing to prune and the dirty-key lookup itself reads —
-   measured 2,001 vs 1,310. A read-side win needs a multi-granule table (BACKLOG:
+   identical on both sides. A read-side win needs a multi-granule table (BACKLOG:
    bench_large, 18b's query-cost work); asserting it here would claim scale we do not
    run.
    The `report_snapshots` write path is unchanged by the dirty set (both passes still
@@ -163,7 +164,7 @@ Every Done-when item names the test or command output that proves it.
 | 1b (per-key watermark, no deletes) | `tests/test_rollup_dirty.py::test_a_key_is_dirty_when_its_own_version_differs_not_when_it_beats_a_global_max`, `::test_a_version_that_moves_DOWN_still_marks_the_key_dirty`, `::test_refresh_selects_only_dirty_keys_and_binds_them`, `::test_crash_before_the_stamp_re_refreshes_the_same_keys`, `::test_the_dirty_set_is_never_deleted_or_mutated`, `::test_full_is_the_oracle_not_a_bypass` |
 | 1c (incremental == full) | `make rollup-bench PROFILE=long_delay` output line "campaign_hourly FINAL rows identical (6dp): N keys" |
 | 1d (incremental is cheaper) | same command, "rows read incremental < full" direction assert (magnitude printed, never pinned) |
-| 2 (the gate) | LIVE under `make test-int-long-delay` (moved there from the bench — a contract proven only by a target CI never runs is proven nowhere): `tests/integration/test_rollup_dirty.py::test_every_changed_key_was_refreshed`, `::test_the_served_rollup_equals_a_full_rebuild`, `::test_the_pipeline_converges_to_nothing_dirty`, `::test_every_served_row_carries_a_pass_stamp` (6 tests). Also reported by `make rollup-bench PROFILE=long_delay`: "dirty set == changed set (19 keys)" / "over-refresh: 0 keys" |
+| 2 (the gate) | LIVE under `make test-int-long-delay` (moved there from the bench — a contract proven only by a target CI never runs is proven nowhere): `tests/integration/test_rollup_dirty.py::test_every_changed_key_was_refreshed`, `::test_the_served_rollup_equals_a_full_rebuild`, `::test_the_pipeline_converges_to_nothing_dirty`, `::test_every_rows_version_equals_the_max_stamp_of_what_it_summarizes`, `::test_a_replayed_refresh_cannot_lose_to_an_earlier_one`, `::test_load_order_does_not_change_the_dirty_set`. Also reported by `make rollup-bench PROFILE=long_delay`: "dirty set == changed set (19 keys)" / "over-refresh: 0 keys" |
 | 3a (metrics from a real run, reproducibly) | `data/out/<p>/metrics/clickhouse.prom` after `make metrics-capture`; TWO full clean-stack tiny cycles produce byte-identical files (13 active / 11 unmerged); `tests/test_ch_scrape.py` (8 offline pins incl. the settle contract and "no wall clock in the registry") |
 | 3b (the rule is silent on real captures, fires on the server's threshold) | `make test-alerts` — promtool over `alerts_test.yml` (both real captures: `PartCountHigh` silent) and `alerts_synthetic_test.yml` (`active_parts=151`: fires, annotation matched) |
 | 3c (the principal is scoped, the re-frame traced) | `tests/integration/test_metrics_ro.py` — 7 ACCESS_DENIED cases + the scrape running end-to-end as `metrics_ro`; `make check-docs` green with `PartCountHigh` and both gauge names in `scripts/check_docs.py` `TRACES` |
@@ -223,7 +224,7 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
 ## Scope (files)
 
 - `lake/load_serving.py` — dirty-key recording on the ONE serving-table writer.
-- `reconcile/rollup.py` — marker-driven incremental refresh, `--full` oracle.
+- `reconcile/rollup.py` — per-key incremental refresh, data-derived row versions.
 - `clickhouse/ddl.sql` + migration — `rollup_dirty`, `rollup_refreshed`,
   `report_snapshots` version column; `clickhouse/users.d/metrics-ro.xml`.
 - `queries/bench_common.py` (new) — the graduated public `canonicalize` / `measure` /
@@ -231,11 +232,11 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   `queries/rollup_bench.py`; closes the BACKLOG row "Graduate `bench.py`'s
   `_canonicalize`/`_measure`/`_round_row` to a public shared harness module".
   `bench.py`'s printed output is byte-identical after the move.
-- `queries/rollup_bench.py` (new) — full vs incremental, the equality oracle, the gate.
-- `observability/ch_scrape.py` (new), `observability/rules/alerts.yml` (+2 rules),
+- `queries/rollup_bench.py` (new) — full vs incremental into scratch tables, the equality oracle, the gate.
+- `observability/ch_scrape.py` (new), `observability/rules/alerts.yml` (+1 rule),
   `observability/rules/tests/alerts_test.yml`, the recaptured
   `data/out/<profile>/metrics/*.prom` provenance (gitignored) via `make metrics-capture`.
-- `scripts/check_docs.py` — `TRACES`: the two new alert names, and the `_canonicalize`
+- `scripts/check_docs.py` — `TRACES`: the new alert name, the two gauge names, and the `_canonicalize`
   trace moved from `queries/bench.py` to `queries/bench_common.py`; `tests/test_check_docs.py`.
 - `Makefile` — `rollup-bench` target; the scraper line appended to `run`, `run-hot`,
   `metrics-capture`.
@@ -265,7 +266,7 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
       states what is still un-alerted (and that `PartCountHigh` would NOT have caught
       incident #1); the `_canonicalize` citation
       moves to `queries/bench_common.py`; the alert-list preamble goes from four rules
-      from four rules to five.
+      to five.
 - [ ] `BACKLOG.md` — closed (strike-through + "DONE Phase 18a"): the loader-owned
       dirty-set row ("Phase 18 spec needs a Phase-17 follow-up edit …"), "Graduate
       `bench.py`'s `_canonicalize`/`_measure`/`_round_row` …", "`report_snapshots` is a
@@ -281,15 +282,33 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
 - [ ] `README.md` — the cost-lever table gains one row (incremental rollup refresh);
       the first-screen copy of any regenerated number must match its block (checked by
       `make check-docs`); History row for 18a at exit.
-- [ ] `.env.example` — a commented `metrics_ro` entry if the user ever needs a
+- [x] `.env.example` — a commented `metrics_ro` entry if the user ever needs a
       credential (none in local dev, same posture as `agent_ro`).
-- [ ] Spec amendments — none. 18b's own commit 1 fixes its "cost writer user" scope
-      line to "reuses `metrics_ro`" (noted in its banner by this commit).
+- [x] Touched beyond the original Scope, and why (recorded rather than left for the
+      auditor to find): `docker-compose.yml` (the users.d mount the new principal
+      needs), `.github/workflows/ci.yml` + `Makefile` comments (the "four alerts"
+      count), `docs/SCALING.md` (its rollup row described the schedule that changed),
+      `accuracy/guard.py` + `accuracy/run.py` (`db_profile_marker` moved beside the
+      assert that consumes it, so `make rollup-bench` could reuse the guard),
+      `lake/iceberg_catalog.py` (`validate_profile` made public for the same reason),
+      `reconcile/reconcile.py` + `orchestration/run.py` + `orchestration/replay.py`
+      (the loader-side refresh and the replay truncation),
+      `.claude/agents/code-reviewer.md` (it enforced the superseded rollup rule).
+      NOT touched despite being listed: `tests/test_load_serving.py` and
+      `tests/test_metrics.py` — their coverage landed in `tests/test_rollup_dirty.py`
+      and `tests/test_ch_scrape.py` instead.
+- [x] Spec amendments — `specs/phase-18b-cost-and-ops.md`'s banner (this branch
+      edits it): its cost writer becomes its OWN `cost_rw`, its header's "two alert
+      rules" is corrected to one, and `ch_scrape.py` is named as a Pushgateway push
+      source. `specs/TEMPLATE.md` — BACKLOG rows cited by title.
 
 ## Threat model (REQUIRED)
 
-One new target, `make rollup-bench PROFILE=<p>`. It reads ClickHouse and writes a
-`docs/RESULTS.md` block; it deletes nothing and derives no path from `PROFILE` — the
+One new target, `make rollup-bench PROFILE=<p>`. It is NOT read-only: it applies the
+DDL (including the `report_snapshots` migration on an unmigrated stack), creates and
+drops two scratch tables of its own, and rewrites a `docs/RESULTS.md` block. What it
+never does is write the live rollup — the oracle must not share a medium with the thing
+it checks. It derives no path from `PROFILE` — the
 value is validated and checked against the `eval_meta` marker (the `make eval` pattern,
 BACKLOG 43) so the bench refuses a database populated from a different profile. Same
 shape as the destructive targets: ONE Python process (`uv run python -m
@@ -299,7 +318,6 @@ interpolating a user value.
 | Target | empty | `../x` | `"; ` | env-exported | `$(origin)` on CONFIRM | Pinned by |
 |---|---|---|---|---|---|---|
 | `make rollup-bench PROFILE=` | `LakeRootUnset: profile '' is not [a-z0-9_]+`, exit 1, before ClickHouse is touched | refused by the same rule (`lake.iceberg_catalog.validate_profile`, the one every lake path uses); no path is derived from `PROFILE` here, so there is nothing to escape | reaches argv as ONE element (`--profile "$(PROFILE)"`, no shell re-split) and is then refused by the rule | same refusal — the validation is in the process, not in Make, so origin does not change behaviour; an env-origin `PROFILE='$(shell …)'` remains the stated repo-wide residual (DECISIONS Phase 17) | n/a — no `CONFIRM`; nothing is deleted (pinned by `::test_rollup_bench_recipe_has_no_delete_and_no_confirm`) | `tests/test_makefile.py::test_rollup_bench_refuses_a_malformed_profile` (5 values), `::test_rollup_bench_is_one_python_process_with_a_quoted_profile`, `::test_rollup_bench_profile_from_the_environment_is_still_validated` |
-| `make rollup-bench … --full` | the flag is a fixed literal in the recipe/CLI, never a Make variable, so no user value reaches it; `--full` only *adds* the oracle rebuild — it cannot skip the equality assert | — | — | — | — | `tests/test_rollup_dirty.py::test_full_is_the_oracle_not_a_bypass` |
 | migration re-run | `clickhouse/apply.py` re-applies the `report_snapshots` version-column migration with no error and no row change (`create … if not exists` / guarded `alter`) | — | — | — | — | `tests/test_snapshot_version.py::test_migration_is_a_no_op_once_the_table_is_versioned`, `tests/integration/test_snapshot_version.py::test_migration_preserves_every_row_and_is_a_no_op_on_the_second_run` |
 
 ## Review & stack risk

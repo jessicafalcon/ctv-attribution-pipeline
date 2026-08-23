@@ -35,7 +35,7 @@ from orchestration.assets import (
     reconciled_conversions,
     reconciled_report,
 )
-from reconcile.reconcile import RECONCILE_DELTA_MS, candidate_days
+from reconcile.reconcile import candidate_days
 
 
 class UnknownPartitionError(ValueError):
@@ -68,7 +68,7 @@ def _rows(result: ExecuteInProcessResult, key: str) -> int:
     return int(event.materialization.metadata[key].value)
 
 
-def materialize_load(days: set[str], offset_ms: int = 0) -> dict[str, int]:
+def materialize_load(days: set[str]) -> dict[str, int]:
     """Load exactly `days` (YYYY-MM-DD event_time days — the days a landing
     TOUCHED, spec D6) from the lake into ClickHouse; return rows inserted per
     table. Idempotent per day (the ReplacingMergeTree collapses re-inserts).
@@ -76,11 +76,14 @@ def materialize_load(days: set[str], offset_ms: int = 0) -> dict[str, int]:
 
     Then REFRESHES the rollup keys this load touched (Phase 18a): the loader is the
     one writer of the serving tables, so the rollup is brought current where the load
-    moved it and nowhere else. `offset_ms` stamps `reported_at` — 0 for the hot load,
-    `RECONCILE_DELTA_MS` for the reconcile pass's reload, so the two passes' rollup
-    rows are distinct versions of their keys rather than same-version twins. Still a
-    batch step that recomputes from source, never an insert-triggered summing MV (the
-    determinism policy's line is about corrections double-counting).
+    moved it and nowhere else. Still a batch step that recomputes from source, never
+    an insert-triggered summing MV (the determinism policy's line is about corrections
+    double-counting).
+
+    No version argument: each rollup row carries `max(stamp)` over the rows it
+    summarizes, so what a load stamps depends only on the data it loaded — the hot
+    load, the reconcile reload and a replay all agree, and none can write a row the
+    ReplacingMergeTree discards as older than a correct one (review-gate round 3).
 
     A first load finds every key dirty, so it is a full-equivalent refresh; the
     reconcile pass's reload is then a genuinely incremental second pass — which is the
@@ -104,7 +107,7 @@ def materialize_load(days: set[str], offset_ms: int = 0) -> dict[str, int]:
     # imported by the offline suites (same reason as the other lazy imports here).
     from reconcile import rollup
 
-    totals["rollup_keys"] = rollup.refresh_campaign_hourly(connect(), offset_ms)
+    totals["rollup_keys"] = rollup.refresh_campaign_hourly(connect())
     return totals
 
 
@@ -123,7 +126,7 @@ def run_reconcile(partition: str | None) -> None:
         (event,) = result.get_asset_materialization_events()
         touched |= set(event.materialization.metadata["touched_days"].value)
         print(f"reconciled_conversions[{day}] materialized")
-    loaded = materialize_load(touched, RECONCILE_DELTA_MS)
+    loaded = materialize_load(touched)
     _materialize([reconciled_report], instance)
     print(
         f"reconcile-dagster: {len(days)} day-partition(s) recovered, "

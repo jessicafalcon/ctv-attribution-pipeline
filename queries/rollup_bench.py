@@ -54,7 +54,6 @@ from clickhouse.client import connect
 from lake.iceberg_catalog import validate_profile
 from queries.bench_common import ROUND, canonicalize, round_row
 from reconcile import rollup
-from reconcile.reconcile import RECONCILE_DELTA_MS
 
 RESULTS_PATH = Path(__file__).parent.parent / "docs" / "RESULTS.md"
 _START = "<!-- ROLLUP_BENCH_START -->"
@@ -82,6 +81,33 @@ order by
 def _keyed(rows: list[tuple]) -> dict[tuple, tuple]:
     """(campaign_id, hour) → the rounded aggregate for that key."""
     return {(r[0], r[1]): round_row(r[2:]) for r in rows}
+
+
+def _merged(incremental: dict, served: dict) -> dict:
+    """The served rollup with the incremental refresh's rows applied — what
+    `campaign_hourly FINAL` would hold after that refresh. Comparing THIS to the full
+    rebuild is the honest equality check: the incremental run only recomputes its own
+    keys, so comparing its output alone to a whole-table rebuild compares two
+    different questions."""
+    return {**served, **incremental}
+
+
+def _measure_into_scratch(client: Client, table: str, sql: str, params: dict) -> dict:
+    """Run a refresh into a throwaway table with `campaign_hourly`'s exact structure
+    and report what it read, wrote and produced. The live rollup is never written by
+    this tool: the oracle and the thing under test must not share a medium."""
+    client.command(f"drop table if exists {table}")
+    client.command(f"create table {table} as campaign_hourly")
+    try:
+        measured = _measure_refresh(
+            client,
+            sql.replace("insert into campaign_hourly", f"insert into {table}", 1),
+            params,
+        )
+        measured["rows"] = _keyed(_final_rows(client, table))
+        return measured
+    finally:
+        client.command(f"drop table if exists {table}")
 
 
 def _measure_refresh(client: Client, sql: str, params: dict) -> dict:
@@ -141,30 +167,32 @@ def run(client: Client | None = None) -> dict:
         )
 
     # --- equality + cost --------------------------------------------------------
-    # The pipeline's OWN statement, both ways, over the key set its second pass used.
-    # The hour crosses as the epoch SECONDS ClickHouse computed (`toUnixTimestamp`),
-    # never as a Python datetime: the driver renders a DateTime in the caller's local
-    # timezone, and re-binding that shifted instant matched 5 keys of 19 on a MDT
-    # laptop (found here, the same trap `_max_ingest` documents).
+    # Both refreshes write to their OWN scratch table, never to the live rollup: the
+    # oracle must not share a medium with the thing it checks. The earlier revision
+    # ran both into `campaign_hourly` — and since a row's version is now data-derived,
+    # identical content lands identical rows, so the ReplacingMergeTree would collapse
+    # the two runs and the "identical (6dp)" line could have been reading the FULL
+    # rebuild's rows back as the incremental one's (review gate, round 2).
     keys = sorted((r[0], int(r[2])) for r in touched)
-    full = _measure_refresh(
-        client, rollup.refresh_sql(full=True), {"offset_ms": RECONCILE_DELTA_MS}
+    full = _measure_into_scratch(
+        client, "_rollup_bench_full", rollup.refresh_sql(full=True), {}
     )
-    full_rows = _keyed(_final_rows(client))
-    incremental = _measure_refresh(
+    incremental = _measure_into_scratch(
         client,
+        "_rollup_bench_incremental",
         rollup.refresh_sql(full=False),
-        {"offset_ms": RECONCILE_DELTA_MS, "keys": keys},
+        {"keys": keys},
     )
-    incremental_rows = _keyed(_final_rows(client))
 
-    if full_rows != incremental_rows:
-        differing = [
-            k for k in full_rows if full_rows.get(k) != incremental_rows.get(k)
-        ]
+    served = _keyed(_final_rows(client))
+    after_incremental = _merged(incremental["rows"], served)
+    if full["rows"] != after_incremental:
+        differing = sorted(
+            k for k in full["rows"] if full["rows"].get(k) != after_incremental.get(k)
+        )
         raise AssertionError(
-            "incremental refresh disagrees with the full rebuild "
-            f"(rounded to {ROUND} dp) on {sorted(differing)[:5]}"
+            "the incremental refresh, applied to the served rollup, disagrees with a "
+            f"full rebuild (rounded to {ROUND} dp) on {differing[:5]}"
         )
     if incremental["written_rows"] >= full["written_rows"]:
         raise AssertionError(
@@ -196,13 +224,13 @@ select
     purchases,
     site_visits,
     revenue
-from campaign_hourly final
+from {table} final
 order by campaign_id, hour
 """
 
 
-def _final_rows(client: Client) -> list[tuple]:
-    return client.query(_FINAL_ROWS).result_rows
+def _final_rows(client: Client, table: str = "campaign_hourly") -> list[tuple]:
+    return client.query(_FINAL_ROWS.format(table=table)).result_rows
 
 
 def _granules(client: Client) -> list[tuple]:
@@ -297,7 +325,8 @@ def render(m: dict) -> str:
             "a multi-granule table (`bench_large`, ≈7 granules of exposures) and is "
             "a BACKLOG row for 18b, which already runs that profile.",
             "",
-            f"**Dirty-set gate:** changed vs dirty above the refresh watermark — "
+            "**Dirty-set gate:** the keys reconciliation changed vs the keys the "
+            "pipeline's own second-pass refresh recomputed — "
             f"{sets}, over-refresh {m['over_refresh']} keys. The contract is "
             "`changed ⊆ dirty` (a missed key serves a stale rollup while the "
             "full-refresh oracle still passes); equality is evidence, not the rule.",

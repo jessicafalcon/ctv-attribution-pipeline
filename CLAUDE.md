@@ -127,13 +127,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
   (service-free): device→household, IP fallback, fan-out → data/out/<profile>/;
   the unit proof of the resolve step the engine runs in-process
-- `make run` — engine (resolve in-process → hot join) → lake → Dagster load →
-  ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
+- `make run` — engine (resolve in-process → hot join) → lake → Dagster load (which
+  also refreshes the rollup keys it touched) → ClickHouse, then the reconciliation pass (reads the lake → appends corrections →
   reloads touched days → rollup + snapshots; a single pass, not a daemon); the full
   pipeline over the seeded stream. Every row in ClickHouse arrived through the lake
   (Phase 17). One lake per PROFILE, `data/lake/<profile>`, bound by each entry
   point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override)
-- `make run-hot` — engine → lake → load only, no reconciliation; backs the hot-path
+- `make run-hot` — engine → lake → load only (the load refreshes its rollup keys), no
+  reconciliation; both `run` and `run-hot` end with the one-shot `clickhouse_` storage
+  scrape, which exits non-zero if ClickHouse's part counts have not settled (BACKLOG); backs the hot-path
   oracle suites (tiny golden/accuracy, medium hardening) and CI, where a
   reconciliation pass would over-credit long-tail organics and shift the pins. Hot
   numbers exclude the deferred shared-IP conversions by design (Phase 16)
@@ -164,12 +166,12 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
 - `make rollup-bench PROFILE=<p>` — full rollup rebuild vs the Phase-18a dirty-set
-  refresh on a populated stack: asserts the two leave `campaign_hourly` FINAL identical
-  (6dp) and that the incremental refresh WRITES fewer rows (direction only; rows read
+  refresh on a populated stack, each run into its OWN scratch table (the live rollup is
+  never the oracle's medium; the tool also applies the DDL, so it is not read-only):
+  asserts the two agree (6dp) and that the incremental refresh WRITES fewer rows (direction only; rows read
   are printed with the granule counts explaining why they do not fall at profile size),
   and gates the loader↔rollup contract — every key whose rollup row changed is in the
-  dirty set above the refresh watermark (`changed ⊆ dirty`; equality is evidence, not
-  the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
+  set the refresh recomputed (`changed ⊆ dirty`; equality is evidence, not the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
   `make run PROFILE=<p>` on a profile whose reconcile pass restates something
   (`long_delay`)
 - `make eval` — attribution precision/recall vs truth for the given `PROFILE`
@@ -317,8 +319,12 @@ AI sits at the edge; the pipeline is deterministic.
   the wall clock.
 - The pipeline NEVER reads truth links.
 - Every write to attributed_conversions is idempotent (ReplacingMergeTree
-  keyed conversion_id, version processed_at). Rollups are refreshed on
-  schedule, never insert-triggered summing MVs (corrections would double-count).
+  keyed conversion_id, version processed_at). Rollups are refreshed as a BATCH step
+  that recomputes from source — since Phase 18a, by the loader over the keys each load
+  touched — never insert-triggered summing MVs (corrections would double-count). Every
+  rollup row's version is data-derived (`max(stamp)` over the rows it summarizes), so
+  identical content always carries an identical version and a re-computation can never
+  lose to an older one.
 - Test question for any design choice: "could this step give a different
   answer on a re-run?" If yes, justify in DECISIONS.md or fix it.
 

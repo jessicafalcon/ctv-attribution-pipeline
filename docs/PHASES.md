@@ -402,12 +402,12 @@ key unchanged.
 **Delivered.** `make rollup-bench PROFILE=long_delay` measures full vs incremental on
 a populated stack: identical `campaign_hourly` FINAL rows (6 dp, 340 keys), 19 rows
 written vs 340 (17.9×, the asserted direction), and the gate — 19 changed keys, 19
-dirty, 0 over-refresh. Rows read do NOT fall (2,004 vs 1,310) and are printed, never
-asserted: both source tables sit inside one 8,192-row granule, so a dirty-key
+dirty, 0 over-refresh. Rows read do NOT fall (they are identical — the incremental
+refresh reads what the full rebuild reads) and are printed, never asserted: both source tables sit inside one 8,192-row granule, so a dirty-key
 predicate has nothing to prune while its own lookup reads (BACKLOG: measure the read
 side on `bench_large`). `PartCountHigh`'s threshold is ClickHouse's own
-`parts_to_delay_insert` default because no threshold between the profiles exists (5
-active parts max on both) — silence proven by the two real captures, firing by a
+`parts_to_delay_insert` default because no threshold between the profiles exists (they peak at 4
+and 5 active parts) — silence proven by the two real captures, firing by a
 labelled synthetic fixture. No merge-lag rule ships (every settled capture reads 0);
 the metric does. The migration for `snapshot_version` is create → backfill →
 `exchange tables` → drop, because ClickHouse has no `alter table … modify engine`

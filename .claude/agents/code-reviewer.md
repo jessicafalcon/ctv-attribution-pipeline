@@ -36,7 +36,7 @@ When invoked:
   skips validation.
 - **Idempotent writes.** Every write to `attributed_conversions` goes through
   ReplacingMergeTree keyed `conversion_id`, version `processed_at`. Rollups
-  are refreshed on schedule — an insert-triggered summing MV is a BLOCKER
+  are refreshed by a batch step that recomputes from source (since Phase 18a, the loader over the keys a load touched) — an insert-triggered summing MV is a BLOCKER, and so is a rollup row version that comes from the caller rather than from the data
   (corrections would double-count). Replaying a topic from offset 0 must
   converge to the same ClickHouse state.
 - **Agent boundary.** Agent code is read-only (SELECT-only DB user), off the

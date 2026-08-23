@@ -2,8 +2,9 @@
 
 Three operations mutate state the pipeline cannot recompute from Kafka:
 `reset` deletes a profile's lake of record, `replay` TRUNCATEs the three ClickHouse
-serving tables (`exposures_landed`, `attributed_conversions`, `eval_meta`) before
-reloading them from the lake, `maintain` rewrites the lake's
+serving tables (`exposures_landed`, `attributed_conversions`, `eval_meta`, and since
+Phase 18a `campaign_hourly` + the `rollup_dirty` / `rollup_refreshed` bookkeeping)
+before reloading them from the lake, `maintain` rewrites the lake's
 data files (row content unchanged). Rounds 2 and 3 of the Phase-17 review each
 found a new hole in a Make-level guard ($(origin) → MAKEFLAGS; separate recipe
 lines → `make -i`): Make's variable model and multi-shell recipes cannot express
@@ -77,8 +78,9 @@ def reset(yes: bool) -> None:
 
 
 def replay(yes: bool) -> None:
-    """`make replay-serving`: TRUNCATE exposures_landed, attributed_conversions
-    and eval_meta, then reload every day the lake holds (no broker). Every
+    """`make replay-serving`: TRUNCATE the six derived tables (exposures_landed,
+    attributed_conversions, eval_meta, campaign_hourly, rollup_dirty,
+    rollup_refreshed), then reload every day the lake holds (no broker). Every
     refusal happens BEFORE the prompt and the TRUNCATE: an empty lake (truncating
     to reload nothing is data loss with a green exit code) and a lake day outside
     the static calendar (round 7: a regression once let that raise AFTER the
@@ -104,8 +106,9 @@ def replay(yes: bool) -> None:
             "tables (nothing would reload them)"
         )
     confirm_or_abort(
-        "replay-serving TRUNCATEs exposures_landed, attributed_conversions and "
-        f"eval_meta, then reloads {len(days)} day(s) from the lake "
+        "replay-serving TRUNCATEs exposures_landed, attributed_conversions, "
+        "eval_meta, campaign_hourly, rollup_dirty and rollup_refreshed, then "
+        f"reloads {len(days)} day(s) from the lake "
         f"{_lake_root().resolve()}",
         yes=yes,
     )

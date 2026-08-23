@@ -2054,9 +2054,11 @@ below, never deleted.
 - **The incremental rollup's win is on WRITES and part growth; the read win is
   unproven at this scale and is not asserted.** Measured on `long_delay` after a
   reconcile pass: the dirty-set refresh writes 19 rows where the full rebuild writes
-  340 (17.9×), and reads 2,001 rows where the full rebuild reads 1,310 — MORE, because
-  `exposures_landed` holds 360 rows in 2 marks (a single 8192-row granule), so the
-  dirty-key predicate has nothing to prune while the dirty-key lookup itself reads.
+  340 (17.9×), and reads exactly what the full rebuild reads — `exposures_landed` holds
+  360 rows in 2 marks (a single 8192-row granule), so a dirty-key predicate has nothing
+  to prune. (An earlier revision read MORE, because the key filter was a sub-query
+  against `rollup_dirty`; binding the keys as a parameter array removed those reads —
+  review-gate round 2.)
   `make rollup-bench` therefore asserts the direction on rows written and PRINTS rows
   read beside the mark counts that explain them. Writing only the changed keys is also
   what stops `campaign_hourly` gaining a full copy per refresh — the part-bloat RUNBOOK
@@ -2077,12 +2079,14 @@ below, never deleted.
   reproduce: a clean tiny run ended at 13 active parts and was at 9 a few seconds
   later. The wait is bounded and RAISES on the cap — a moving number must never reach
   a committed fixture — and how long it waited is printed, never exported. Evidence:
-  two full clean-stack tiny cycles produced BYTE-IDENTICAL `clickhouse.prom` (13
-  active / 11 unmerged). Rejected: a compose exporter (a new always-on surface for a
+  two full clean-stack cycles produced BYTE-IDENTICAL `clickhouse.prom` — verified on
+  tiny before the fix round and again on long_delay after it (18 active / 15 unmerged
+  both times). The committed captures are tiny 11/9 and long_delay 18/15. Rejected: a compose exporter (a new always-on surface for a
   number that only matters at the end of a pass); returning the last sample on
   timeout (that is how an invented number gets into a fixture).
-- **`metrics_ro` needs `SHOW TABLES ON default.*` on top of its two system-table
-  grants, and that is not a widening.** ClickHouse filters `system.parts` /
+- **`metrics_ro` needs a SHOW grant on top of its two system-table grants, and that
+  is not a widening.** *(Superseded in scope by the round-1 review entry below: the
+  grant is per table, on the five the scraper counts, not `default.*`.)* ClickHouse filters `system.parts` /
   `system.merges` rows to tables the user may see, so the first cut — SELECT on those
   two tables and nothing else — reported "0 active parts": green, wrong, silent
   (ARCHITECTURE §8). SHOW makes table NAMES visible and no row of data readable;
@@ -2095,8 +2099,8 @@ below, never deleted.
   number — the documented exception to "fixtures come from real captures".** No
   threshold between our profiles exists: the clean captures peak at 4 active parts on
   tiny and 5 on long_delay, because part count follows insert batching and merge
-  timing rather than event volume (tiny even has MORE `rollup_dirty` parts than
-  long_delay). 150 is ClickHouse's own `parts_to_delay_insert` default — the point
+  timing rather than event volume — the two profiles' peaks sit one part apart, two
+  orders of magnitude below the threshold. 150 is ClickHouse's own `parts_to_delay_insert` default — the point
   where the server throttles writers — cited in the rule's annotation. Its silence is
   proven by both real captures; its firing by a synthetic promtool input in a file
   whose name and header say synthetic (`alerts_synthetic_test.yml`, 151 parts).
@@ -2163,8 +2167,10 @@ below, never deleted.
 - **The gate moved out of the bench into `make test-int-long-delay`.** A contract
   proven only by a `make` target that neither CI nor `make test` runs is proven nowhere
   it matters — the phase shipped with the dirty set untested, and mutation testing
-  confirmed `!=`→`>`, a dropped key filter and a skipped stamp were all silent. Twelve
-  offline pins and six live ones now fail on each.
+  confirmed `!=`→`>`, a dropped key filter and a skipped stamp were all silent. The
+  offline pins fail on each of those, and on two more the round-2 review found still
+  surviving (deleting the loader's dirty-key recording, and deleting the loader's
+  refresh entirely); the live gate covers what only a real stack can show.
 - **The scrape keeps a non-zero exit inside `make run` / `run-hot`.** Loud over
   silently green: the rows are landed before it runs, so a failed scrape loses no data
   and hides no result. The residual is stated rather than smoothed — a settle-cap
@@ -2185,7 +2191,19 @@ below, never deleted.
   agent_ro claim.
 - **The money tripwire is fail-closed by derivation.** `tests/test_rollup_decimal.py`
   derives the expected set from `clickhouse/ddl.sql` (tables with a money column) ∩ the
-  tables this module inserts into, and asserts it equals `rollup.MONEY_TABLES` — so
-  18b's `query_cost_daily` cannot slip past the Decimal-path scan by being forgotten.
-  The first cut's hand-maintained tuple would have let it.
+  tables this module inserts into, and asserts it equals `rollup.MONEY_TABLES` — so a
+  money-bearing table added to THIS module cannot slip past the Decimal-path scan by
+  being forgotten, where the first cut's hand-maintained tuple would have let it.
+  Scope, stated rather than overclaimed: the derivation covers `reconcile/rollup.py`'s
+  INSERTs and the `spend` / `revenue` columns, so 18b's `query_cost_daily` — written by
+  `queries/cost_report.py`, with cost columns — is NOT covered and needs its own guard.
+- **A writer gets its own principal: 18b creates `cost_rw`, it does not widen
+  `metrics_ro`.** The earlier ruling ("one user, 18b reuses it") was right while both
+  consumers were readers; 18b's Done-when 4 needs `SELECT ON system.query_log` and
+  `INSERT INTO query_cost_daily`, so reusing `metrics_ro` would widen the principal
+  this phase pinned as read-only metadata-only. `metrics_ro` stays as it is;
+  `cost_rw` gets exactly those two grants, following the per-table precedent
+  established here. Recorded because 18a's spec carried the superseded instruction as
+  a "do not re-litigate" decision, which 18b's commit 1 would have read against its
+  own banner (review gate, round 2).
 

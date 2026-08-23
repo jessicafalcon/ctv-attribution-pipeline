@@ -128,7 +128,8 @@ to inflate the optimized win.
 The Phase-6 rollup recomputed every `(campaign_id, hour)` key on every refresh. Since
 Phase 18a the Dagster loader — the one writer of the serving tables — records the keys
 each day it loads touches (`rollup_dirty`, versioned by a data-derived stamp), and the
-refresh recomputes only the keys above a watermark it advances after the fact. The full
+refresh recomputes only the keys whose recorded version differs from the one the rollup
+was last computed against, stamping them afterwards. The full
 rebuild stays as the equality ORACLE: `make rollup-bench` runs both and refuses to
 believe an incremental refresh that changed an answer.
 
@@ -149,13 +150,13 @@ _Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on a rollu
 | measure | full rebuild | dirty-set refresh | |
 |---|---|---|---|
 | rows written | 340 | 19 | 17.9× fewer — **asserted** (direction only) |
-| rows read | 1,310 | 1,310 | unchanged — printed, **not** asserted |
+| rows read | 835 | 835 | unchanged — printed, **not** asserted |
 
 **The write saving is the structural one.** Rewriting only the 19 changed keys instead of all 340 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
 
 **Rows read do not move: `attributed_conversions` 115 rows in 2 marks; `exposures_landed` 360 rows in 2 marks.** A granule is 8,192 rows, so both source tables sit inside ONE — a dirty-key predicate has nothing to skip, and the incremental refresh reads exactly what the full rebuild reads. The saving here is entirely in what is WRITTEN. Whether a dirty-key filter can also prune READS is answerable only on a multi-granule table (`bench_large`, ≈7 granules of exposures) and is a BACKLOG row for 18b, which already runs that profile.
 
-**Dirty-set gate:** changed vs dirty above the refresh watermark — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
+**Dirty-set gate:** the keys reconciliation changed vs the keys the pipeline's own second-pass refresh recomputed — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
 
 <!-- ROLLUP_BENCH_END -->
 
@@ -251,15 +252,15 @@ alerting without a fireable measurement is not.
 
 Two honesty boundaries on what this proves:
 
-- **These four detect *operational* faults** (lag, watermark stall, match-rate move,
-  restatement magnitude), **not attribution inflation.** Catching a
+- **These rules detect *operational* faults** (lag, watermark stall, match-rate move,
+  restatement magnitude, part growth), **not attribution inflation.** Catching a
   plausible-but-wrong number — a ROAS that looks fine but is inflated by a
   device-graph mismatch — is the **agent's** job (ARCHITECTURE §4), which is the
   exact reason the agent earns its place. A green alert board does not mean the
   numbers are right.
 - **The rules discriminate; they do not isolate.** The fixtures prove each rule
-  **fires on the anomalous profile (`long_delay`)**, and three of the four **stay
-  silent on the clean one (`tiny`)** — a discrimination between a knobbed profile
+  **fires on the anomalous profile (`long_delay`)**, and three of the four workload
+  rules **stay silent on the clean one (`tiny`)** — a discrimination between a knobbed profile
   and a baseline. The exception since Phase 16 is `RestatementMagnitude`: tiny's 5
   shared-IP conversions are deferred hot and credited by the reconcile pass, which
   restates one campaign's ROAS by 12.9 (threshold 1.0) — a real restatement, so the

@@ -166,10 +166,13 @@ cost-levers:
 # incremental refresh WRITES fewer rows (direction only — rows read are printed with
 # the granule counts that explain why they do NOT fall at this size), and the
 # dirty-set gate: every key whose rollup row changed is in the dirty set above the
-# refresh watermark. Rewrites the "Rollup refresh" block in docs/RESULTS.md. ONE
+# rollup recomputed. Rewrites the "Rollup refresh" block in docs/RESULTS.md. ONE
 # python process: it validates PROFILE ([a-z0-9_]+) and refuses a DB populated from
-# another profile (the eval_meta marker) before it reads anything. PROFILE is never a
-# path here and nothing is deleted. Run after `make run PROFILE=<p>` on a profile
+# another profile (the eval_meta marker) BEFORE it touches anything. PROFILE is never
+# a path. It is not read-only: it applies the DDL (including the report_snapshots
+# migration on an unmigrated stack) and creates + drops two scratch tables of its own
+# — the live rollup is never its write target, which is what makes its equality check
+# an oracle rather than a self-comparison. Run after `make run PROFILE=<p>` on a profile
 # whose reconcile pass restates something (long_delay).
 rollup-bench:
 	uv run python -m queries.rollup_bench --profile "$(PROFILE)"

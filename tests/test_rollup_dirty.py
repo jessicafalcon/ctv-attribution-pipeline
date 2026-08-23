@@ -57,19 +57,28 @@ def test_a_key_is_dirty_when_its_own_version_differs_not_when_it_beats_a_global_
     sql = " ".join(rollup._DIRTY_KEYS.split())
     assert "left join rollup_refreshed" in sql
     assert "on d.campaign_id = r.campaign_id and d.hour = r.hour" in sql
-    assert "where d.version != r.version" in sql
+    assert "where isNull(r.version) or d.version != r.version" in sql
     # No global aggregate anywhere in the selection: max()/min() over the dirty table
     # is exactly the shape that produced the bug.
     assert not re.search(r"\b(max|min)\s*\(", sql), sql
 
 
-def test_a_version_that_moves_DOWN_still_marks_the_key_dirty() -> None:
-    # `!=`, not `>`: re-seeding a profile after `make lake-reset` can leave the same
-    # key with an EARLIER max ingest_time, and "the rollup was computed against a
-    # different version of this key" is the honest condition. A `>` comparison would
-    # serve the previous seed's rollup forever.
-    assert "!=" in rollup._DIRTY_KEYS
-    assert ">" not in rollup._DIRTY_KEYS.replace("!=", "")
+def test_a_never_refreshed_key_is_dirty_even_if_the_join_yields_null() -> None:
+    """`isNull(r.version) or ...`: an unmatched LEFT JOIN row yields the epoch under
+    ClickHouse's default `join_use_nulls = 0`, but if that setting is ever enabled the
+    bare `!=` would evaluate NULL and every never-refreshed key would silently drop out
+    of the dirty set — the silent-wrong class this gate exists for. The predicate says
+    what it means instead of relying on a default nothing here sets.
+
+    (What this test is NOT: the earlier version of it claimed `!=` protects against a
+    key's version moving DOWN on a re-seed. That was wrong — `rollup_dirty` is a
+    ReplacingMergeTree keyed on the version, so a lower version is discarded on read
+    and `d.version` never moves down. The re-seed hazard is real and is closed by
+    `make replay-serving` truncating this bookkeeping, pinned in
+    tests/test_replay_serving.py.)
+    """
+    sql = " ".join(rollup._DIRTY_KEYS.split())
+    assert "where isNull(r.version) or d.version != r.version" in sql
 
 
 def test_keys_cross_the_process_boundary_as_integers_never_as_datetimes() -> None:
@@ -85,14 +94,15 @@ def test_keys_cross_the_process_boundary_as_integers_never_as_datetimes() -> Non
 
 def test_refresh_selects_only_dirty_keys_and_binds_them() -> None:
     client = _Client(dirty=[_KEY_A, _KEY_B])
-    assert rollup.refresh_campaign_hourly(client, offset_ms=1000) == 2
+    assert rollup.refresh_campaign_hourly(client) == 2
     refresh, stamp = client.commands
     assert refresh[0].startswith("insert into campaign_hourly")
     assert refresh[1]["keys"] == [
         (_KEY_A[0], _KEY_A[1]),
         (_KEY_B[0], _KEY_B[1]),
     ]
-    assert refresh[1]["offset_ms"] == 1000
+    # No caller version: the row's `reported_at` is data-derived inside the SQL.
+    assert "offset_ms" not in refresh[1]
     # …and the stamp carries the VERSIONS, not just the keys.
     assert stamp[0].startswith("insert into rollup_refreshed")
     assert stamp[1]["keys"] == [_KEY_A, _KEY_B]
@@ -111,7 +121,7 @@ def test_the_key_filter_is_applied_to_both_exposure_reads() -> None:
 
 def test_nothing_dirty_writes_nothing() -> None:
     client = _Client(dirty=[])
-    assert rollup.refresh_campaign_hourly(client, offset_ms=0) == 0
+    assert rollup.refresh_campaign_hourly(client) == 0
     assert client.commands == []
 
 
@@ -131,28 +141,42 @@ def test_crash_before_the_stamp_re_refreshes_the_same_keys() -> None:
 
     crashing = _CrashAfterRefresh(dirty=[_KEY_A])
     try:
-        rollup.refresh_campaign_hourly(crashing, offset_ms=0)
+        rollup.refresh_campaign_hourly(crashing)
     except RuntimeError:
         pass
     assert [sql.split()[2] for sql, _ in crashing.commands] == ["campaign_hourly"]
     # The dirty set is untouched by a refresh (no deletes, no mutations), so the next
     # pass sees the same key and recomputes it.
     retry = _Client(dirty=[_KEY_A])
-    assert rollup.refresh_campaign_hourly(retry, offset_ms=0) == 1
+    assert rollup.refresh_campaign_hourly(retry) == 1
 
 
-def test_full_is_the_oracle_not_a_bypass() -> None:
-    # `full=True` must recompute EVERY key and still stamp them, so a full rebuild
-    # converges to "nothing dirty" exactly like an incremental one. It must never be
-    # a way to skip the stamp (which would leave every key dirty forever) nor to skip
-    # the equality the bench asserts.
-    client = _Client(dirty=[_KEY_A, _KEY_B])
-    rollup.refresh_campaign_hourly(client, offset_ms=0, full=True)
-    statements = [sql for sql, _ in client.commands]
-    assert statements[0].startswith("insert into campaign_hourly")
-    assert "{keys:" not in statements[0]
-    assert statements[1].startswith("insert into rollup_refreshed")
-    assert "from rollup_dirty final" in statements[1]
+def test_the_rollup_row_version_is_data_derived_not_caller_supplied() -> None:
+    """The invariant the whole incremental path rests on (review-gate round 3): a
+    row's `reported_at` is `max(stamp)` over the rows it summarizes — an exposure's
+    `ingest_time`, a credited conversion's `processed_at` — so the SAME CONTENT always
+    carries the SAME VERSION, whoever computed it. A caller-supplied offset meant a
+    replay (offset 0) wrote rows the ReplacingMergeTree discarded as older than a
+    reconcile pass's (offset 1000), while the bookkeeping marked those keys clean."""
+    sql = " ".join(rollup._REFRESH_CAMPAIGN_HOURLY.split())
+    assert "max(stamp) as reported_at" in sql
+    assert "ingest_time as stamp" in sql
+    assert "a.processed_at as stamp" in sql
+    # no caller parameter reaches the rollup's version any more
+    assert "offset_ms" not in rollup._REFRESH_CAMPAIGN_HOURLY
+    # …while report_snapshots KEEPS its offset: its pre/post pair is a deliberate
+    # two-row history, not a version race.
+    assert "{offset_ms:Int64}" in rollup._WRITE_REPORT_SNAPSHOT
+
+
+def test_there_is_no_full_rebuild_branch_in_the_pipeline_path() -> None:
+    # A whole-table rebuild is a measurement tool (queries/rollup_bench.py runs
+    # refresh_sql(full=True) into a scratch table), never something `make run` can
+    # take. The dead `full=True` branch also always returned 0 keys while claiming to
+    # return the count it recomputed (review gate).
+    import inspect
+
+    assert "full" not in inspect.signature(rollup.refresh_campaign_hourly).parameters
 
 
 def test_the_dirty_set_is_never_deleted_or_mutated() -> None:
@@ -221,3 +245,81 @@ def test_a_reload_of_the_same_day_records_the_same_versions() -> None:
     ):
         assert "final" in sql
         assert "group by" in sql
+
+
+def test_the_loader_actually_calls_the_recorders() -> None:
+    """Surviving mutation (review gate, round 2): deleting the
+    `record_dirty_exposure_keys(...)` call from `load_exposures_day` passed the ENTIRE
+    offline suite — nothing asserted the loader records anything, only that the SQL
+    was well formed. A first hot load would then never mark exposure-only keys dirty
+    and their spend rows would be missing from the rollup.
+    """
+    calls: list[tuple[str, str]] = []
+
+    class _Recorder:
+        def command(self, sql: str, parameters: dict | None = None) -> None:
+            table = "rollup_dirty" if "insert into rollup_dirty" in sql else "?"
+            side = (
+                "exposures"
+                if "from exposures_landed final\nwhere" in sql
+                else "credits"
+            )
+            if "attributed_conversions" in sql.split("from")[1]:
+                side = "attributed"
+            calls.append((table, side))
+
+        def insert(self, *a, **k) -> None:
+            pass
+
+    client = _Recorder()
+    load_serving.record_dirty_exposure_keys(client, "2026-08-01")
+    load_serving.record_dirty_attributed_keys(client, "2026-08-01")
+    assert [t for t, _ in calls] == ["rollup_dirty"] * 3, calls
+    # both directions of the credit mapping, plus the exposure side
+    assert len({side for _, side in calls}) >= 2
+
+
+def test_the_day_loaders_record_before_they_return(monkeypatch) -> None:
+    # The call sites themselves, not just the helpers: a load that inserts rows and
+    # returns without recording leaves the rollup stale for those keys.
+    recorded: list[str] = []
+    monkeypatch.setattr(load_serving, "read_exposures_for_days", lambda days: [])
+    monkeypatch.setattr(load_serving, "read_current", lambda days: [])
+    monkeypatch.setattr(load_serving, "insert_exposures", lambda c, r: None)
+    monkeypatch.setattr(load_serving, "insert_attributed", lambda c, r: None)
+    monkeypatch.setattr(
+        load_serving,
+        "record_dirty_exposure_keys",
+        lambda c, d: recorded.append(f"exp:{d}"),
+    )
+    monkeypatch.setattr(
+        load_serving,
+        "record_dirty_attributed_keys",
+        lambda c, d: recorded.append(f"att:{d}"),
+    )
+    load_serving.load_exposures_day(object(), "2026-08-01")
+    load_serving.load_attributed_day(object(), "2026-08-01")
+    assert recorded == ["exp:2026-08-01", "att:2026-08-01"]
+
+
+def test_the_loader_refreshes_the_rollup_after_it_loads(monkeypatch) -> None:
+    """Surviving mutation (review gate, round 2): nothing pinned that
+    `materialize_load` refreshes at all — the whole loader-side refresh could be
+    deleted and every suite stayed green, leaving `campaign_hourly` frozen at whatever
+    the last explicit refresh produced."""
+    import orchestration.run as run
+
+    calls: list[str] = []
+    monkeypatch.setattr(run, "DayPartitionsDefinition", None, raising=False)
+    monkeypatch.setattr(run, "_materialize", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(run, "_rows", lambda *a, **k: 0, raising=False)
+    monkeypatch.setattr(run, "connect", lambda: object(), raising=False)
+    monkeypatch.setattr(
+        rollup, "refresh_campaign_hourly", lambda client: calls.append("refresh") or 7
+    )
+    monkeypatch.setattr(
+        run.DAY_PARTITIONS, "get_partition_keys", lambda: ["2026-08-01"], raising=False
+    )
+    totals = run.materialize_load({"2026-08-01"})
+    assert calls == ["refresh"]
+    assert totals["rollup_keys"] == 7

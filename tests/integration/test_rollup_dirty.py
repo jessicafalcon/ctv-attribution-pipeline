@@ -17,7 +17,6 @@ import pytest
 from clickhouse.client import connect
 from queries.bench_common import round_row
 from reconcile import rollup
-from reconcile.reconcile import RECONCILE_DELTA_MS
 
 
 @pytest.fixture(scope="module")
@@ -93,104 +92,60 @@ def test_the_pipeline_converges_to_nothing_dirty(client) -> None:
 
 def test_a_refresh_with_nothing_dirty_writes_nothing(client) -> None:
     before = client.query("select count() from campaign_hourly").result_rows[0][0]
-    assert rollup.refresh_campaign_hourly(client, offset_ms=0) == 0
+    assert rollup.refresh_campaign_hourly(client) == 0
     after = client.query("select count() from campaign_hourly").result_rows[0][0]
     assert after == before
 
 
-def test_every_served_row_carries_a_pass_stamp(client) -> None:
-    """The hot load refreshes at offset 0 and the reconcile reload at
-    RECONCILE_DELTA_MS, so every rollup row's `reported_at` is one of those two
-    data-derived stamps — never a wall clock, and never a third value from some
-    unaccounted refresh.
+def test_every_rows_version_equals_the_max_stamp_of_what_it_summarizes(client) -> None:
+    """The invariant the incremental path rests on (review-gate round 3): a rollup
+    row's `reported_at` is `max(stamp)` over the source rows that key summarizes — an
+    exposure's `ingest_time`, a credited conversion's `processed_at`. Asserted PER KEY
+    against a recomputation, not against a pass counter.
 
-    NOT asserted here: that both stamps are simultaneously present. Superseded
-    ReplacingMergeTree rows are collapsed by a background merge (and `make
-    rollup-bench` legitimately re-refreshes every key at the post stamp), so "two
-    distinct versions exist right now" is a transient physical fact, not a contract.
-    The contract — which offset each load stamps — is pinned offline in
-    `tests/test_touched_days.py`.
+    Why it matters: identical content then always carries an identical version, so a
+    replay, a reconcile refresh and a full rebuild agree, and none of them can write a
+    row the ReplacingMergeTree discards as older than a correct one. The previous
+    scheme stamped `max(ingest_time) + a caller offset`, which made `make
+    replay-serving` (offset 0) write rows that lost to a reconcile pass's (offset
+    1000) while the bookkeeping marked those keys clean — stale, and invisible.
     """
-    base = client.query(
-        "select toUnixTimestamp64Milli(max(t)) from ("
-        "select max(ingest_time) as t from exposures_landed final "
-        "union all "
-        "select max(ingest_time) as t from attributed_conversions final)"
-    ).result_rows[0][0]
-    stamps = {
-        int(r[0])
+    sql = (
+        rollup._REFRESH_CAMPAIGN_HOURLY.replace("insert into campaign_hourly", "", 1)
+        .replace("/*dirty_exposures*/", "")
+        .replace("/*path_filter*/", "")
+    )
+    expected = {(r[0], r[1]): r[-1] for r in client.query(sql).result_rows}
+    served = {
+        (r[0], r[1]): r[2]
         for r in client.query(
-            "select distinct toUnixTimestamp64Milli(reported_at) from campaign_hourly"
+            "select campaign_id, hour, reported_at from campaign_hourly final"
         ).result_rows
     }
-    assert stamps <= {base, base + RECONCILE_DELTA_MS}, (
-        f"rollup rows carry a stamp that is neither pass: {sorted(stamps)} "
-        f"(hot={base}, post={base + RECONCILE_DELTA_MS})"
+    assert served.keys() == expected.keys()
+    differing = {
+        k: (served[k], expected[k]) for k in expected if served[k] != expected[k]
+    }
+    assert not differing, (
+        f"row version is not the data's own stamp: {list(differing)[:5]}"
     )
 
 
-def test_load_order_does_not_change_the_dirty_set(client) -> None:
-    """The ruled pin: days loaded in reverse leave an IDENTICAL `rollup_dirty` FINAL.
-
-    Runs in its own throwaway database so the live bookkeeping is never touched. The
-    hazard it closes: a conversion's rollup key is the hour of the exposure it credits,
-    so loading the conversion day BEFORE the exposure day finds no exposure to join —
-    the conversion side records nothing. The exposure day's load therefore records
-    credits in the reverse direction too, and the final state stops depending on the
-    order Dagster happened to materialize the partitions in.
-    """
-    from clickhouse_connect import get_client
-
-    from lake import load_serving
-
-    admin = connect()
-    admin.command("drop database if exists rollup_order_probe")
-    admin.command("create database rollup_order_probe")
-    try:
-        probe = get_client(host="127.0.0.1", port=8123, database="rollup_order_probe")
-        probe.command(
-            "create table exposures_landed (exposure_id String, event_time DateTime64"
-            "(3,'UTC'), ingest_time DateTime64(3,'UTC'), campaign_id String) "
-            "engine = ReplacingMergeTree "
-            "order by (campaign_id, event_time, exposure_id)"
+def test_a_replayed_refresh_cannot_lose_to_an_earlier_one(client) -> None:
+    # The concrete consequence, exercised: recompute every key (what a replay's load
+    # does) and the served rollup must be unchanged — same versions, same content, no
+    # row discarded as older.
+    before = client.query(
+        "select campaign_id, hour, reported_at, spend, revenue from campaign_hourly "
+        "final order by campaign_id, hour"
+    ).result_rows
+    client.command(
+        rollup.refresh_sql(full=True).replace(
+            "insert into campaign_hourly", "insert into campaign_hourly", 1
         )
-        probe.command(
-            "create table attributed_conversions (conversion_id String, event_time "
-            "DateTime64(3,'UTC'), exposure_id String, attributed UInt8, processed_at "
-            "DateTime64(3,'UTC')) engine = ReplacingMergeTree(processed_at) "
-            "order by conversion_id"
-        )
-        probe.command(
-            "create table rollup_dirty (campaign_id String, hour DateTime('UTC'), "
-            "version DateTime64(3,'UTC')) engine = ReplacingMergeTree(version) "
-            "order by (campaign_id, hour)"
-        )
-        # exposure on day 1, the conversion crediting it on day 3
-        probe.command(
-            "insert into exposures_landed values "
-            "('e-1', '2026-08-01 05:00:00.000', '2026-08-01 05:00:01.000', 'camp-00')"
-        )
-        probe.command(
-            "insert into attributed_conversions values "
-            "('c-1', '2026-08-03 09:00:00.000', 'e-1', 1, '2026-08-03 09:00:05.000')"
-        )
-
-        def _record(days: list[str]) -> list[tuple]:
-            probe.command("truncate table rollup_dirty")
-            for day in days:
-                load_serving.record_dirty_exposure_keys(probe, day)
-                load_serving.record_dirty_attributed_keys(probe, day)
-            return probe.query(
-                "select campaign_id, hour, version from rollup_dirty final "
-                "order by campaign_id, hour"
-            ).result_rows
-
-        forward = _record(["2026-08-01", "2026-08-03"])
-        reverse = _record(["2026-08-03", "2026-08-01"])
-        assert forward == reverse, (
-            f"load order changed the dirty set: {forward} vs {reverse}"
-        )
-        # …and the version is the CREDIT's stamp, not merely the exposure's, in both.
-        assert forward and forward[0][2].isoformat().startswith("2026-08-03T09:00:05")
-    finally:
-        admin.command("drop database if exists rollup_order_probe")
+    )
+    after = client.query(
+        "select campaign_id, hour, reported_at, spend, revenue from campaign_hourly "
+        "final order by campaign_id, hour"
+    ).result_rows
+    assert after == before

@@ -295,7 +295,8 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
 - Sort keys chosen for the query pattern (`campaign_id`, `hour`).
 - A SELECT-only user exists for the agent (`agent_ro`), and a second, narrower one
   for the storage scrape (`metrics_ro`: `system.parts` / `system.merges` plus SHOW
-  on the database, so it can count parts and read no row of data — Phase 18a).
+  TABLES on the five tables the scraper counts — enough to see those tables' parts,
+  not enough to read a row of data — Phase 18a).
 - How ClickHouse is STORING the data is measured at the end of every run by a
   one-shot scrape (`observability/ch_scrape.py`, prefix `clickhouse_`): active parts
   and level-0 (never-merged) parts per table, plus the elapsed of any merge in
@@ -673,8 +674,10 @@ handled.*
   live). `metrics_ro` was granted `SELECT ON system.parts` + `SELECT ON system.merges`
   and nothing else; the scrape returned zero rows and printed "0 active parts" —
   green, wrong, and silent. ClickHouse restricts those rows to tables the user has
-  some privilege on. `GRANT SHOW TABLES ON default.*` is the narrowest fix: it makes
-  table NAMES visible and no data row readable (every SELECT / INSERT / ALTER / DROP /
+  some privilege on. `GRANT SHOW TABLES` lifts it, and is granted PER TABLE on the five
+  the scraper counts (a database-wide grant would make every future table visible
+  too): it exposes those tables' names — and, through `system.tables`, their engine
+  and sort key — and no data row (every SELECT / INSERT / ALTER / DROP /
   CREATE against a pipeline table is still `ACCESS_DENIED` —
   `tests/integration/test_metrics_ro.py`). Generalization: a read-only principal that
   reports ZERO is indistinguishable from a healthy empty system — assert a

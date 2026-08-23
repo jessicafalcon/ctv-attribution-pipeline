@@ -21,8 +21,10 @@ What it reports is how ClickHouse is STORING the data, never what the data says:
       capture on this stack. It is a point-in-time observation of in-flight work,
       not a backlog that accumulates.
 
-Reads as `metrics_ro`, a user granted SELECT on `system.parts` and `system.merges`
-and nothing else (clickhouse/users.d/metrics-ro.xml) — it cannot read a pipeline row.
+Reads as `metrics_ro`: SELECT on `system.parts` and `system.merges`, plus SHOW TABLES
+on exactly the five tables below (clickhouse/users.d/metrics-ro.xml) — ClickHouse
+filters those system tables to what the user may see, and SHOW is what lifts the
+filter without making a single pipeline row readable.
 """
 
 import argparse
@@ -66,9 +68,11 @@ MERGE_BACKLOG = Gauge(
     registry=REGISTRY,
 )
 
-# The scraper's own tables of interest: everything this pipeline writes. Named, not
-# discovered, so a stray table (a probe, a bench scratch) cannot appear in a captured
-# fixture and move a threshold.
+# The tables whose storage is watched: the five the serving layer READS. Named, not
+# discovered, so a probe, a bench scratch or a future table cannot appear in a captured
+# fixture and move a threshold — and `metrics_ro`'s SHOW grants match this list exactly.
+# Deliberately absent: `eval_meta` (one row) and `rollup_refreshed` (bookkeeping the
+# refresh reads, whose part growth is a BACKLOG row rather than an alerted signal).
 TABLES = (
     "attributed_conversions",
     "exposures_landed",
@@ -97,9 +101,10 @@ where database = {db:String}
 
 
 def connect_metrics() -> Client:
-    """The SELECT-only handle for the scrape. `metrics_ro` is granted SELECT on
-    `system.parts` and `system.merges` only, so a scrape cannot read pipeline data
-    even by accident; overridable for a hardened deploy."""
+    """The SELECT-only handle for the scrape. `metrics_ro` holds SELECT on
+    `system.parts` / `system.merges` and SHOW TABLES on the five tables this module
+    counts — so a scrape cannot read pipeline data even by accident; overridable for a
+    hardened deploy."""
     return get_client(
         host=os.environ.get("CLICKHOUSE_HOST", "127.0.0.1"),
         port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
