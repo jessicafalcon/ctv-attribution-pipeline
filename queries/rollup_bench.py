@@ -39,6 +39,7 @@ the watermark they advance is this tool's own marker row, never the pipeline's.
 """
 
 import argparse
+from pathlib import Path
 
 from clickhouse_connect.driver.client import Client
 
@@ -52,6 +53,10 @@ from reconcile.reconcile import RECONCILE_DELTA_MS
 
 # This tool's own watermark row: measuring must never advance the pipeline's.
 BENCH_MARKER = "rollup_bench"
+
+RESULTS_PATH = Path(__file__).parent.parent / "docs" / "RESULTS.md"
+_START = "<!-- ROLLUP_BENCH_START -->"
+_END = "<!-- ROLLUP_BENCH_END -->"
 
 _HOT_WATERMARK = """
 select max(t) from
@@ -239,6 +244,75 @@ def format_report(m: dict) -> str:
     return "\n".join(lines)
 
 
+def render(m: dict) -> str:
+    """The docs/RESULTS.md block, regenerated verbatim by this command (the
+    `cost-levers` / `scale-curve` pattern, so `make check-docs` guards it). Both
+    numbers are stated — the write saving AND the read cost — with the mark counts
+    that explain the second, so a reader cannot take the headline for a read win."""
+    granules = "; ".join(
+        f"`{t}` {rows:,} rows in {marks} marks" for t, rows, marks in m["granules"]
+    )
+    write_ratio = m["full"]["written_rows"] / max(m["incremental"]["written_rows"], 1)
+    sets = (
+        f"identical ({m['dirty']} keys)"
+        if m["equal_sets"]
+        else f"{m['changed']} changed ⊆ {m['dirty']} dirty"
+    )
+    return "\n".join(
+        [
+            _START,
+            "",
+            "_Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on "
+            f"a rollup of {m['total_keys']} `(campaign_id, hour)` keys of which the "
+            f"reconcile pass changed {m['changed']}. Rows read/written are "
+            "ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to "
+            "merged steady state first._",
+            "",
+            "| measure | full rebuild | dirty-set refresh | |",
+            "|---|---|---|---|",
+            f"| rows written | {m['full']['written_rows']:,} | "
+            f"{m['incremental']['written_rows']:,} | "
+            f"{write_ratio:.1f}× fewer — **asserted** (direction only) |",
+            f"| rows read | {m['full']['read_rows']:,} | "
+            f"{m['incremental']['read_rows']:,} | MORE — printed, **not** asserted |",
+            "",
+            f"**The write saving is the structural one.** Rewriting only the "
+            f"{m['incremental']['written_rows']} changed keys instead of all "
+            f"{m['total_keys']} is what an incremental rollup buys, and it is what "
+            "stops `campaign_hourly` gaining a full copy per refresh — the un-merged "
+            "part growth RUNBOOK incident #1 is about.",
+            "",
+            f"**The read side gets worse here, and the reason is size:** {granules}. A "
+            "granule is 8,192 rows, so both tables sit inside ONE — a dirty-key "
+            "predicate has nothing to skip, while the predicate's own subquery reads "
+            "`rollup_dirty` once per `exposures_landed` branch. A read-side win needs "
+            "a multi-granule table (`bench_large`, ≈7 granules of exposures); that "
+            "measurement is a BACKLOG row for 18b, which already runs that profile. "
+            "Asserting a read win from this profile would be claiming scale we do not "
+            "run.",
+            "",
+            f"**Dirty-set gate:** changed vs dirty above the refresh watermark — "
+            f"{sets}, over-refresh {m['over_refresh']} keys. The contract is "
+            "`changed ⊆ dirty` (a missed key serves a stale rollup while the "
+            "full-refresh oracle still passes); equality is evidence, not the rule.",
+            "",
+            _END,
+        ]
+    )
+
+
+def write_results(section: str) -> None:
+    text = RESULTS_PATH.read_text()
+    if _START not in text or _END not in text:
+        raise AssertionError(
+            f"{RESULTS_PATH} is missing the {_START} / {_END} markers — add the "
+            "'Rollup refresh' section skeleton first."
+        )
+    head = text[: text.index(_START)]
+    tail = text[text.index(_END) + len(_END) :]
+    RESULTS_PATH.write_text(head + section + tail)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", required=True)
@@ -250,7 +324,10 @@ def main(argv: list[str] | None = None) -> None:
     client = connect()
     apply_ddl(client)
     assert_profile_marker(db_profile_marker(client), profile)
-    print(format_report(run(client)))
+    measured = run(client)
+    write_results(render(measured))
+    print(format_report(measured))
+    print("\nwrote docs/RESULTS.md → 'Rollup refresh: full rebuild vs dirty set'")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -158,6 +158,19 @@ bench:
 # PROFILE on every step — the engine binds its lake from --profile).
 cost-levers:
 	uv run python -m queries.measure_levers
+
+# Rollup refresh: full rebuild vs dirty-set refresh (Phase 18a), on a populated
+# stack. Asserts the two leave campaign_hourly FINAL identical (6dp), that the
+# incremental refresh WRITES fewer rows (direction only — rows read are printed with
+# the granule counts that explain why they do NOT fall at this size), and the
+# dirty-set gate: every key whose rollup row changed is in the dirty set above the
+# refresh watermark. Rewrites the "Rollup refresh" block in docs/RESULTS.md. ONE
+# python process: it validates PROFILE ([a-z0-9_]+) and refuses a DB populated from
+# another profile (the eval_meta marker) before it reads anything. PROFILE is never a
+# path here and nothing is deleted. Run after `make run PROFILE=<p>` on a profile
+# whose reconcile pass restates something (long_delay).
+rollup-bench:
+	uv run python -m queries.rollup_bench --profile "$(PROFILE)"
 
 # Dump each stage's terminal Prometheus registry from a REAL run (the provenance
 # of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make

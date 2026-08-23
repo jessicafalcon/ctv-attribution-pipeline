@@ -226,3 +226,61 @@ def test_lake_reset_removes_exactly_the_profile_lake(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "data" / "lake" / "tiny").exists()
     assert (tmp_path / "data" / "x").exists()
+
+
+# --- `make rollup-bench PROFILE=<p>` (Phase 18a) -----------------------------
+# Non-destructive: it reads ClickHouse and rewrites a generated docs block. The
+# threat model is therefore only about the VARIABLE — an empty, path-escaping,
+# metacharacter or environment-exported PROFILE must be refused inside the one
+# process, before anything is read (there is no CONFIRM: nothing is deleted).
+
+
+def test_rollup_bench_is_one_python_process_with_a_quoted_profile() -> None:
+    lines = [ln for ln in _dry_run("rollup-bench", "PROFILE=tiny") if ln.strip()]
+    assert lines == ['uv run python -m queries.rollup_bench --profile "tiny"'], lines
+    # No shell splitting of the value, so a metacharacter reaches argv as ONE
+    # element and is then refused by the profile rule below.
+    (line,) = _dry_run("rollup-bench", 'PROFILE=a"; touch pwned')
+    assert line.count("--profile") == 1 and "touch pwned" in line
+    assert "&&" not in line and ";" not in line.split("--profile")[0]
+
+
+@pytest.mark.parametrize(
+    "value", ["", "../x", 'a"; touch pwned', "Tiny", "tiny/../../etc"]
+)
+def test_rollup_bench_refuses_a_malformed_profile(value: str) -> None:
+    # Same `[a-z0-9_]+` rule as every lake path (lake.iceberg_catalog
+    # .validate_profile) — refused in-process, before ClickHouse is touched, so
+    # `make -i` cannot step past it into a read of the wrong DB.
+    res = subprocess.run(
+        ["uv", "run", "python", "-m", "queries.rollup_bench", "--profile", value],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    assert res.returncode != 0, res.stdout
+    assert "is not [a-z0-9_]+" in res.stdout + res.stderr
+
+
+def test_rollup_bench_profile_from_the_environment_is_still_validated() -> None:
+    # `PROFILE ?=` is overridable from the environment; an exported hostile value
+    # must hit the same in-process refusal as a command-line one (there is no
+    # $(origin) gate here because there is nothing destructive to gate).
+    res = subprocess.run(
+        ["make", "rollup-bench"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(PROFILE="../x"),
+    )
+    assert res.returncode != 0
+    assert "is not [a-z0-9_]+" in res.stdout + res.stderr
+
+
+def test_rollup_bench_recipe_has_no_delete_and_no_confirm() -> None:
+    recipe = re.search(
+        r"^rollup-bench:\n((?:\t.*\n)+)", MAKEFILE.read_text(), re.M
+    ).group(1)
+    assert "rm " not in recipe and "truncate" not in recipe and "drop" not in recipe
+    assert "CONFIRM" not in recipe and "_YES" not in recipe

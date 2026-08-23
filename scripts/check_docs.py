@@ -145,6 +145,12 @@ def _markers() -> list[tuple[str, Path, str, str]]:
             _const("queries/measure_levers.py", "_START"),
             _const("queries/measure_levers.py", "_END"),
         ),
+        (
+            "rollup-bench",
+            RESULTS,
+            _const("queries/rollup_bench.py", "_START"),
+            _const("queries/rollup_bench.py", "_END"),
+        ),
     ]
 
 

@@ -123,6 +123,35 @@ the difference between a full-history scan and a bounded rollup read — see
 `SCALING.md`. The numbers here are reported as measured; the profile was not tuned
 to inflate the optimized win.
 
+## Rollup refresh: full rebuild vs dirty set
+
+The Phase-6 rollup recomputed every `(campaign_id, hour)` key on every refresh. Since
+Phase 18a the Dagster loader — the one writer of the serving tables — records the keys
+each day it loads touches (`rollup_dirty`, versioned by a data-derived stamp), and the
+refresh recomputes only the keys above a watermark it advances after the fact. The full
+rebuild stays as the equality ORACLE: `make rollup-bench` runs both and refuses to
+believe an incremental refresh that changed an answer.
+
+The block below is regenerated verbatim by that command. It states BOTH numbers — the
+write saving and the read cost — because only the first is a win at this profile's size.
+
+<!-- ROLLUP_BENCH_START -->
+
+_Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on a rollup of 340 `(campaign_id, hour)` keys of which the reconcile pass changed 19. Rows read/written are ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to merged steady state first._
+
+| measure | full rebuild | dirty-set refresh | |
+|---|---|---|---|
+| rows written | 340 | 19 | 17.9× fewer — **asserted** (direction only) |
+| rows read | 1,310 | 2,004 | MORE — printed, **not** asserted |
+
+**The write saving is the structural one.** Rewriting only the 19 changed keys instead of all 340 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
+
+**The read side gets worse here, and the reason is size:** `attributed_conversions` 115 rows in 2 marks; `exposures_landed` 360 rows in 2 marks. A granule is 8,192 rows, so both tables sit inside ONE — a dirty-key predicate has nothing to skip, while the predicate's own subquery reads `rollup_dirty` once per `exposures_landed` branch. A read-side win needs a multi-granule table (`bench_large`, ≈7 granules of exposures); that measurement is a BACKLOG row for 18b, which already runs that profile. Asserting a read win from this profile would be claiming scale we do not run.
+
+**Dirty-set gate:** changed vs dirty above the refresh watermark — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
+
+<!-- ROLLUP_BENCH_END -->
+
 ## Query cost levers
 
 Three ClickHouse-native cost levers, each a before/after on a scoped report query

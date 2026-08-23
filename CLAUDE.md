@@ -159,6 +159,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   bound to loopback 127.0.0.1:3000 (DAGSTER_HOME under gitignored `data/`). Not needed
   for `make reconcile-dagster`. A containerized/published webserver is a deployment
   lever, not built (Phase 12)
+- `make rollup-bench PROFILE=<p>` — full rollup rebuild vs the Phase-18a dirty-set
+  refresh on a populated stack: asserts the two leave `campaign_hourly` FINAL identical
+  (6dp) and that the incremental refresh WRITES fewer rows (direction only; rows read
+  are printed with the granule counts explaining why they do not fall at profile size),
+  and gates the loader↔rollup contract — every key whose rollup row changed is in the
+  dirty set above the refresh watermark (`changed ⊆ dirty`; equality is evidence, not
+  the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
+  `make run PROFILE=<p>` on a profile whose reconcile pass restates something
+  (`long_delay`)
 - `make eval` — attribution precision/recall vs truth for the given `PROFILE`
   (default `tiny`)
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
