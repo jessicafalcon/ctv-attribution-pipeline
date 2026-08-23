@@ -19,8 +19,8 @@ DDL = Path(__file__).parent / "ddl.sql"
 
 
 # The scratch table the rebuild copies into before the atomic EXCHANGE (`<table>_v2`).
-# Dropped at the START of every apply: after a post-exchange crash the leftover holds
-# the OLD table, whose rows are already in the live one.
+# Dropped only when the migration actually runs (an already-versioned table issues no
+# DROP at all) — see migrate_report_snapshots.
 def _scratch(table: str) -> str:
     return f"{table}_v2"
 
@@ -65,11 +65,19 @@ def migrate_report_snapshots(client: Client, table: str = "report_snapshots") ->
     ever competes with a twin of its OWN pass, never with a newer pass. (0 would
     flatten those twins back to "undefined", which is the bug being fixed.)
     """
-    scratch = _scratch(table)
-    client.command(f"drop table if exists {scratch}")
+    # Guard FIRST: an already-migrated stack issues no DROP at all. `apply_ddl()` runs
+    # per Dagster asset materialization, per reconcile pass and inside `make
+    # rollup-bench`, and a DROP on every one of those is both against CLAUDE.md's
+    # destructive-command rule and a concurrency hazard (one apply dropping another's
+    # in-flight scratch table between the copy and the exchange).
     engine = _engine_full(client, table)
     if not engine or "ReplacingMergeTree(" in engine:
         return False
+
+    scratch = _scratch(table)
+    # Only now: clear a leftover from a crashed earlier attempt. After a POST-exchange
+    # crash the leftover holds the OLD table, whose rows the live one already has.
+    client.command(f"drop table if exists {scratch}")
 
     client.command(
         f"alter table {table} "

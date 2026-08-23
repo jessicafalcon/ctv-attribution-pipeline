@@ -34,12 +34,12 @@ from clickhouse_connect.driver.client import Client
 # in later by widening this column, no schema change (BACKLOG / agent phase).
 PERIOD = "all"
 
-# The tables this module writes MONEY into. Single-sourced because
-# tests/test_rollup_decimal.py scans exactly these INSERTs for the Decimal path
-# (fix/snapshot-float-determinism): a new money-bearing table is covered by adding it
-# here, and is NOT covered if you forget — the tripwire has no per-INSERT escape
-# hatch. The module's other INSERTs (rollup_dirty, rollup_refresh_marker) carry no
-# money.
+# The tables this module writes MONEY into. tests/test_rollup_decimal.py scans exactly
+# these INSERTs for the Decimal path (fix/snapshot-float-determinism) — and DERIVES the
+# expected set from clickhouse/ddl.sql (every table with a money column), asserting it
+# equals this tuple. So a new money-bearing table fails the tripwire by omission
+# instead of slipping past it: fail-closed by construction, not by remembering. The
+# module's other INSERTs (rollup_dirty, rollup_refreshed) carry no money.
 MONEY_TABLES = ("campaign_hourly", "report_snapshots")
 
 

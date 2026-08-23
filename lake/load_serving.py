@@ -155,8 +155,38 @@ group by
 
 
 def record_dirty_exposure_keys(client: Client, day: str) -> None:
-    """Mark the rollup keys this day's exposures land in (spend/exposure counts)."""
+    """Mark the rollup keys this day's exposures land in (spend/exposure counts), at
+    the max of BOTH sides' stamps — the day's exposures and any conversions already
+    credited to them. The second half is what makes the recording independent of LOAD
+    ORDER: if a conversion's day was loaded first, its exposures were not there yet and
+    the conversion side recorded nothing, so this pass picks it up. Either order leaves
+    the same `rollup_dirty` FINAL (review gate)."""
     client.command(_DIRTY_FROM_EXPOSURES, parameters={"day": day})
+    client.command(_DIRTY_FROM_EXPOSURE_CREDITS, parameters={"day": day})
+
+
+_DIRTY_FROM_EXPOSURE_CREDITS = """
+insert into rollup_dirty
+select
+    e.campaign_id as campaign_id,
+    toStartOfHour(e.event_time) as hour,
+    max(a.processed_at) as version
+from attributed_conversions as a final
+inner join
+(
+    select
+        exposure_id,
+        campaign_id,
+        event_time
+    from exposures_landed final
+    where toDate(event_time) = {day:Date}
+) as e
+    on a.exposure_id = e.exposure_id
+where a.attributed = 1
+group by
+    campaign_id,
+    hour
+"""
 
 
 def record_dirty_attributed_keys(client: Client, day: str) -> None:

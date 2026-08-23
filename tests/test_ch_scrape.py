@@ -125,6 +125,6 @@ def test_the_written_registry_carries_no_wall_clock() -> None:
 def test_the_scraped_tables_are_named_not_discovered() -> None:
     # A stray table (a bench probe, a migration scratch) must not be able to appear
     # in a captured fixture and move a threshold.
-    assert "rollup_refresh_marker" not in ch_scrape.TABLES
+    assert "rollup_refreshed" not in ch_scrape.TABLES
     assert "system.parts" in ch_scrape._PARTS
     assert "{tables:Array(String)}" in ch_scrape._PARTS

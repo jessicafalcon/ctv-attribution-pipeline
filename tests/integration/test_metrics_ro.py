@@ -10,7 +10,7 @@ numbers, and writes nothing.
 import pytest
 
 from clickhouse.client import connect
-from observability.ch_scrape import connect_metrics, scrape
+from observability.ch_scrape import TABLES, connect_metrics, scrape
 
 ACCESS_DENIED = "ACCESS_DENIED"
 
@@ -21,7 +21,7 @@ FORBIDDEN = [
     "select * from report_snapshots limit 1",
     "insert into rollup_dirty values ('c', now(), now())",
     "alter table attributed_conversions delete where 1",
-    "drop table rollup_refresh_marker",
+    "drop table rollup_refreshed",
     "create table pwned (x Int8) engine = Memory",
 ]
 
@@ -63,8 +63,29 @@ def test_the_scrape_runs_end_to_end_as_metrics_ro(metrics_client) -> None:
     }
 
 
-def test_the_default_user_is_unchanged_by_this_phase() -> None:
-    # agent_ro's grants are not widened by adding a second principal; the pipeline's
-    # own user still writes. A one-line canary: if this fails, the users.d mount
-    # order or a grant edit broke an existing path.
+def test_agent_ro_grants_are_not_widened_by_this_phase() -> None:
+    # The claim this file used to make in a docstring while checking the DEFAULT
+    # user's liveness — it would have passed with agent_ro granted ALL (security
+    # review). Now it asserts the grant text itself, which is what fails if a later
+    # users.d file widens it.
+    grants = connect().query("show grants for agent_ro").result_rows
+    assert [r[0] for r in grants] == ["GRANT SELECT ON default.* TO agent_ro"]
+
+
+def test_metrics_ro_sees_only_the_tables_it_counts(metrics_client) -> None:
+    # SHOW is granted per table, not on default.*: a table this scraper does not count
+    # (eval_meta, rollup_refreshed, a future phase's table, the migration scratch) is
+    # not visible to this principal at all.
+    visible = {
+        r[0]
+        for r in metrics_client.query(
+            "select name from system.tables where database = 'default'"
+        ).result_rows
+    }
+    assert visible == set(TABLES), visible
+
+
+def test_the_pipelines_own_user_still_writes() -> None:
+    # Separate concern, kept as its own canary: the users.d mount order or a grant
+    # edit must not break the default principal the pipeline writes with.
     connect().command("select 1")

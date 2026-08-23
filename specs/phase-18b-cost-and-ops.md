@@ -159,11 +159,20 @@ fall in this half:
   a BACKLOG row. Done-when 6 and the `make test-alerts` bullet must say five rules,
   and 18a's synthetic fixture (`alerts_synthetic_test.yml`) is a second file the live
   firing path has to account for (Phase-18a amendment, 2026-08-22).
-- **"cost writer user" → reuses `metrics_ro`.** Phase 18a creates ONE SELECT-only
-  ClickHouse user, `metrics_ro` (`clickhouse/users.d/metrics-ro.xml`); this spec's
-  Scope line "`clickhouse/users` (cost writer user)" and the pinned decision
-  "The scraper and cost writer use a separate user" must be rewritten to reuse it —
-  no second user (Phase-18a amendment, 2026-08-22).
+- **"cost writer user" → a NEW `cost_rw`, not `metrics_ro` (superseding the earlier
+  "reuse it" instruction).** Phase 18a's `metrics_ro` is granted SELECT on
+  `system.parts` / `system.merges` plus SHOW TABLES on five named tables — it is a
+  read-only metadata principal, and Done-when 4 needs `SELECT ON system.query_log` AND
+  `INSERT INTO query_cost_daily`. Reusing it would widen a principal this phase pinned
+  as "a second principal, not a wider first one". 18b creates `cost_rw` with exactly
+  those two grants; `metrics_ro` stays read-only and unchanged. The earlier ruling was
+  right while both consumers were readers; a writer gets its own (Phase-18a review
+  gate, 2026-08-22).
+- **The header's dependency sentence is stale too.** Line 10-12 says 18a's "**two
+  alert rules** are part of what Done-when 6 fires live" — 18a ships ONE
+  (`PartCountHigh`); no merge-lag rule exists. Done-when 6 must say five rules, and it
+  must account for a SECOND fixture file (`alerts_synthetic_test.yml`) and for 18a's
+  new terminal registry (`observability/ch_scrape.py`) as a Pushgateway push source.
 
 
 The amendment also adds the three `specs/TEMPLATE.md` sections this spec predates:

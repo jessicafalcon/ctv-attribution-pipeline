@@ -25,7 +25,16 @@ ROUND = 6  # decimals for the metric-equality gate
 # before measuring, so read_rows reflects logical table size on every side (not
 # un-merged part-bloat) — the only apples-to-apples comparison, and the only
 # deterministic one.
-READ_TABLES = ("attributed_conversions", "exposures_landed", "campaign_hourly")
+READ_TABLES = (
+    "attributed_conversions",
+    "exposures_landed",
+    "campaign_hourly",
+    # Phase 18a: the incremental refresh reads the dirty-set bookkeeping too, so it is
+    # canonicalized like every other measured table — an un-merged rollup_dirty was
+    # counted as read-side cost and made the measurement drift between runs.
+    "rollup_dirty",
+    "rollup_refreshed",
+)
 
 
 def canonicalize(client: Client) -> None:

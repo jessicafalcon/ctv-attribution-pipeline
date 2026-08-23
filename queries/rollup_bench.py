@@ -328,8 +328,11 @@ def main(argv: list[str] | None = None) -> None:
     # refuse a database populated from a DIFFERENT profile (BACKLOG 43 marker).
     profile = validate_profile(args.profile)
     client = connect()
-    apply_ddl(client)
+    # Marker check BEFORE apply_ddl: applying runs the report_snapshots migration and
+    # this tool then INSERTs into campaign_hourly, so a wrong-profile invocation must
+    # refuse before it writes anything, not after (review gate).
     assert_profile_marker(db_profile_marker(client), profile)
+    apply_ddl(client)
     measured = run(client)
     write_results(render(measured))
     print(format_report(measured))

@@ -2124,3 +2124,68 @@ below, never deleted.
   moment `docs/RESULTS.md` gained a `make rollup-bench` mention, because the Makefile
   target did not exist yet — a docs-vs-source drift caught at edit time instead of at
   a review round, which is exactly what Phase 19 was for.
+
+**Phase 18a — review-gate round 1 (four agents, 2 blockers each side).**
+
+- **The refresh watermark is PER KEY, not one scalar.** The first cut wrote
+  `max(version)` over the whole dirty table and selected `version > watermark`; the
+  versions are per-key data timestamps, so any key whose own stamps lagged the highest
+  key's sat permanently below it — 321 of 340 keys on long_delay, reproduced as a
+  served rollup one full rebuild out of date while `attributed_conversions` held the
+  new data. Replaced by `rollup_refreshed (campaign_id, hour, version)`: a key is dirty
+  when its recorded version DIFFERS from the version it was last computed against, and
+  the refresh stamps exactly those versions afterwards. `!=` rather than `>` (a
+  deviation from the ruling's wording, taken with the reason stated): a key's version
+  can move DOWN — re-seed a profile after `lake-reset` and the same key's max
+  `ingest_time` may land earlier — and `>` would serve the previous seed's rollup
+  forever, which is the very scenario the gate reproduced. Rejected: a global marker
+  plus a per-key stamp (the stamp is this table by another name, with a second source
+  of truth to drift).
+- **The loader refreshes the keys it loaded, so the pipeline actually runs the
+  incremental path.** Before, `refresh_campaign_hourly` was called once per `make run`
+  (in `finalize`), on a stack whose marker was empty — so it was always a FULL refresh
+  and the 19-vs-340 saving existed only inside `make rollup-bench`, which seeded its
+  own marker to construct a scenario the pipeline never ran. Now
+  `orchestration.run.materialize_load` refreshes after every load (offset 0 hot,
+  `RECONCILE_DELTA_MS` on the reconcile reload), the reconcile pass's reload IS the
+  incremental second pass, and the bench measures the pipeline's own statement over the
+  pipeline's own key set. Still a batch step recomputing from source, never an
+  insert-triggered summing MV. Pinned live: served `campaign_hourly FINAL` == the
+  single-full-refresh oracle on all 340 keys. Rejected: keeping one refresh and
+  re-wording the records (true wording on a claim no pipeline run exercises is the
+  Phase-14 class again).
+- **The dirty recording is order-independent.** A conversion's rollup key is the hour
+  of the exposure it credits, so loading a conversion day BEFORE its exposure day found
+  no exposure to join and recorded nothing; the final dirty set depended on the order
+  Dagster materialized partitions in. The exposure day's load now records credits in
+  the reverse direction too, and `tests/integration/test_rollup_dirty.py::test_load_order_does_not_change_the_dirty_set`
+  pins forward == reverse in a throwaway database.
+- **The gate moved out of the bench into `make test-int-long-delay`.** A contract
+  proven only by a `make` target that neither CI nor `make test` runs is proven nowhere
+  it matters — the phase shipped with the dirty set untested, and mutation testing
+  confirmed `!=`→`>`, a dropped key filter and a skipped stamp were all silent. Twelve
+  offline pins and six live ones now fail on each.
+- **The scrape keeps a non-zero exit inside `make run` / `run-hot`.** Loud over
+  silently green: the rows are landed before it runs, so a failed scrape loses no data
+  and hides no result. The residual is stated rather than smoothed — a settle-cap
+  timeout on a busy CI runner turns an observability step into a red build (BACKLOG,
+  trigger "first CI red on UnsettledError").
+- **The migration's scratch table is still dropped in the happy path.** It holds the
+  OLD table, whose rows the live one already has, so keeping it would trade disk for a
+  copy nothing reads. What changed: the DROP now runs only when the migration actually
+  runs, so an already-versioned stack (every ordinary `make run`) issues no destructive
+  statement at all.
+- **`metrics_ro`'s SHOW grant is per table.** Five explicit grants matching the
+  scraper's own list, not `default.*`: `eval_meta`, `rollup_refreshed` and every table
+  a later phase adds stay invisible to it. What SHOW does confer is stated in the file
+  — names, and through `system.tables` the engine and sort key, plus `CHECK TABLE`'s
+  read amplification — because "table NAMES, never a row of data" was an over-claim.
+  `agent_ro`'s grant text is now asserted directly (`show grants for agent_ro`), where
+  the old test checked the DEFAULT user's liveness under a docstring making the
+  agent_ro claim.
+- **The money tripwire is fail-closed by derivation.** `tests/test_rollup_decimal.py`
+  derives the expected set from `clickhouse/ddl.sql` (tables with a money column) ∩ the
+  tables this module inserts into, and asserts it equals `rollup.MONEY_TABLES` — so
+  18b's `query_cost_daily` cannot slip past the Decimal-path scan by being forgotten.
+  The first cut's hand-maintained tuple would have let it.
+

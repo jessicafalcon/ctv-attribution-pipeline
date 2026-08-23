@@ -33,11 +33,18 @@ from clickhouse_connect import get_client
 from clickhouse_connect.driver.client import Client
 from prometheus_client import CollectorRegistry, Gauge, write_to_textfile
 
+# Every gauge lives in this module's OWN registry, never the process-default one: the
+# fixture generator scans every *.prom in a capture directory with last-writer-wins by
+# filename, so a stage that dumped the default registry after importing this module
+# would overwrite the real part counts with zeros (review gate).
+REGISTRY = CollectorRegistry()
+
 ACTIVE_PARTS = Gauge(
     "clickhouse_active_parts",
     "Active data parts per table. A FINAL scan physically reads every un-merged "
     "version-part, so this is the operating cost of FINAL (RUNBOOK incident #1).",
     ["table"],
+    registry=REGISTRY,
 )
 
 UNMERGED_PARTS = Gauge(
@@ -46,6 +53,7 @@ UNMERGED_PARTS = Gauge(
     "i.e. the collapse work still owed. State, not timing: deterministic for a "
     "given load, unlike the wall-clock of a merge in flight.",
     ["table"],
+    registry=REGISTRY,
 )
 
 MERGE_BACKLOG = Gauge(
@@ -55,6 +63,7 @@ MERGE_BACKLOG = Gauge(
     "point-in-time sample of in-flight work, not an accumulating backlog — at "
     "profile scale merges finish in microseconds, so a capture reads 0. The "
     "deterministic view of pending merge work is clickhouse_unmerged_parts.",
+    registry=REGISTRY,
 )
 
 # The scraper's own tables of interest: everything this pipeline writes. Named, not
@@ -173,12 +182,10 @@ def scrape(client: Client | None = None) -> dict[str, float]:
 
 
 def _registry() -> CollectorRegistry:
-    """A registry holding only this scrape's gauges — the .prom this writes is the
-    ClickHouse view, kept beside (never mixed into) the stage registries."""
-    registry = CollectorRegistry()
-    for gauge in (ACTIVE_PARTS, UNMERGED_PARTS, MERGE_BACKLOG):
-        registry.register(gauge)
-    return registry
+    """This scrape's registry — the .prom it writes is the ClickHouse view, kept beside
+    (never mixed into) the stage registries, and its gauges are not in the process
+    default registry at all."""
+    return REGISTRY
 
 
 def main(argv: list[str] | None = None) -> None:

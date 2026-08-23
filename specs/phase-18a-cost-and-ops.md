@@ -189,9 +189,12 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   rows it loaded (Phase-17 D6), so it is the only place that cannot disagree with what
   ClickHouse holds. Rejected: recording keys in the engine and the reconcile job
   separately (two writers, two chances to drift, and neither sees a re-load).
-- **Cleared by watermark, never by delete.** `rollup_refresh_marker` holds the
-  `processed_at` watermark the last refresh covered; the refresh reads keys above it
-  and writes the new marker afterwards. Rejected: deleting or mutating processed rows
+- **Cleared by a PER-KEY stamp, never by delete and never by a global watermark.**
+  `rollup_refreshed` holds one row per key: the version that key was last computed
+  against. The refresh recomputes the keys whose `rollup_dirty` version differs and
+  stamps exactly those versions afterwards. Rejected: one scalar watermark (shipped in
+  the first cut and caught at the review gate — it left 321 of 340 keys on long_delay
+  permanently below it, serving a stale rollup); deleting or mutating processed rows
   out of `rollup_dirty` (a ClickHouse mutation is asynchronous and unversioned — a
   crash between refresh and delete would silently skip keys, the one failure mode that
   is invisible to the full-refresh oracle).
@@ -221,7 +224,7 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
 
 - `lake/load_serving.py` — dirty-key recording on the ONE serving-table writer.
 - `reconcile/rollup.py` — marker-driven incremental refresh, `--full` oracle.
-- `clickhouse/ddl.sql` + migration — `rollup_dirty`, `rollup_refresh_marker`,
+- `clickhouse/ddl.sql` + migration — `rollup_dirty`, `rollup_refreshed`,
   `report_snapshots` version column; `clickhouse/users.d/metrics-ro.xml`.
 - `queries/bench_common.py` (new) — the graduated public `canonicalize` / `measure` /
   `round_row`, imported by `queries/bench.py`, `queries/measure_levers.py` and the new
@@ -338,7 +341,7 @@ items. What changed, and how:
   the header states the opposite.
 - **Dirty set owned by the loader**, with the mechanism pinned: `rollup_dirty` (RMT,
   key `(campaign_id, hour)`, data-derived version) plus a one-row
-  `rollup_refresh_marker` watermark, no deletes and no mutations.
+  per-key `rollup_refreshed` stamp, no deletes and no mutations.
 - **DONE command** gains `make lake-reset PROFILE=long_delay CONFIRM=yes` after `make
   down` and `PROFILE=long_delay` on `make run`; `make rollup-bench` takes the profile.
 - **The dirty-set gate** is promoted from a review note to Done-when 2, as exact set

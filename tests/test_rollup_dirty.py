@@ -186,10 +186,25 @@ def test_the_loader_records_both_sides_of_a_days_keys() -> None:
     assert "where a.attributed = 1" in attributed
 
 
+def test_a_days_load_records_credits_in_both_directions() -> None:
+    """Order independence. Loading a CONVERSION day whose exposure day is not in yet
+    records nothing on the conversion side (the join finds no exposure), so the
+    exposure day's load must pick those credits up — otherwise `rollup_dirty` FINAL
+    depends on the order Dagster materialized the partitions in, which nothing pins.
+    Pinned live by `tests/integration/test_rollup_dirty.py`."""
+    credits = " ".join(load_serving._DIRTY_FROM_EXPOSURE_CREDITS.split())
+    assert "insert into rollup_dirty" in credits
+    assert "max(a.processed_at) as version" in credits
+    # the DAY filter is on the EXPOSURE side here (the mirror of _DIRTY_FROM_ATTRIBUTED)
+    day_filter = "from exposures_landed final where toDate(event_time) = {day:Date}"
+    assert day_filter in credits
+
+
 def test_the_loaders_versions_are_data_derived_not_wall_clock() -> None:
     for sql in (
         load_serving._DIRTY_FROM_EXPOSURES,
         load_serving._DIRTY_FROM_ATTRIBUTED,
+        load_serving._DIRTY_FROM_EXPOSURE_CREDITS,
     ):
         assert not re.search(r"\bnow\(|\bnow64\(|\btoday\(", sql)
         assert "{day:Date}" in sql

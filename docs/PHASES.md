@@ -388,8 +388,10 @@ amendment (RECONCILED 2026-08-22).
 
 **Done when (as landed).** (1) The Dagster loader records the `(campaign_id, hour)`
 keys each day it loads touches in `rollup_dirty`; `refresh_campaign_hourly` recomputes
-only the keys above the `rollup_refresh_marker` watermark and writes the new watermark
-after, with `full=True` kept as the equality oracle. (2) The dirty set is gated:
+only the keys whose recorded version differs from their `rollup_refreshed` one and
+stamps them after, with `full=True` kept as the equality oracle; the loader then
+refreshes the keys each load touched, so the reconcile pass's reload is a genuinely
+incremental second pass. (2) The dirty set is gated:
 `changed ⊆ dirty` after a reconcile pass, `len(dirty) < total keys`, over-refresh
 reported. (3) Storage is measured (`clickhouse_active_parts`,
 `clickhouse_unmerged_parts`, `clickhouse_merge_backlog_seconds`) by a one-shot scrape

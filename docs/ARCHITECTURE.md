@@ -268,14 +268,20 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
   source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
   MV), never an insert-triggered summing MV, so corrections cannot double-count.
-  Since Phase 18a the refresh is **incremental**: the Dagster loader — the one
-  writer of the serving tables — records the `(campaign_id, hour)` keys each day it
-  loads touches in `rollup_dirty` (ReplacingMergeTree, version = a data-derived
-  stamp), and the refresh recomputes only the keys above the watermark in the
-  one-row `rollup_refresh_marker`, writing the new watermark afterwards. No deletes
-  and no mutations: a crash between the two re-refreshes the same keys rather than
-  skipping them. `refresh_campaign_hourly(full=True)` keeps the whole-table rebuild
-  as the equality ORACLE (`make rollup-bench`).
+  Since Phase 18a the refresh is **incremental and loader-driven**: the Dagster
+  loader — the one writer of the serving tables — records the `(campaign_id, hour)`
+  keys each day it loads touches in `rollup_dirty` (ReplacingMergeTree, version = a
+  data-derived stamp), then refreshes exactly those keys, at offset 0 for the hot
+  load and `RECONCILE_DELTA_MS` for the reconcile pass's reload. A key is recomputed
+  when its recorded version DIFFERS from the version it was last computed against
+  (`rollup_refreshed`, one row per key), and the refresh stamps those versions
+  afterwards. Per key, never against a global maximum: a single scalar watermark
+  left every key whose own timestamps lagged the highest key's permanently
+  unrefreshed (Phase-18a review gate — 321 of 340 keys, serving a stale rollup). No
+  deletes and no mutations, so a crash between the refresh and the stamp re-refreshes
+  the same keys rather than skipping them.
+  `refresh_campaign_hourly(full=True)` keeps the whole-table rebuild as the equality
+  ORACLE (`make rollup-bench`).
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
   `reported_at`, which makes restatements queryable. Versioned since Phase 18a by
   `snapshot_version` = `max(processed_at)` over the rows a snapshot summarized; the

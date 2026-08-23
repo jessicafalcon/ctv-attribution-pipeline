@@ -93,16 +93,20 @@ def test_snapshot_version_is_the_last_column_of_the_insert() -> None:
 
 
 def test_migration_is_a_no_op_once_the_table_is_versioned() -> None:
+    # An already-migrated stack issues NO statement at all — not even the scratch DROP.
+    # `apply_ddl()` runs per Dagster asset materialization, per reconcile pass and
+    # inside `make rollup-bench`; a DROP on every one of those is both against
+    # CLAUDE.md's destructive-command rule and a concurrency hazard (review gate).
     client = _Client("ReplacingMergeTree(snapshot_version) ORDER BY (reported_at)")
     assert migrate_report_snapshots(client) is False
-    # …and it still clears an orphan scratch table left by a post-exchange crash.
-    assert client.commands == ["drop table if exists report_snapshots_v2"]
+    assert client.commands == []
 
 
 def test_migration_copies_before_it_exchanges_and_never_drops_the_original() -> None:
     client = _Client("ReplacingMergeTree ORDER BY (reported_at)", counts=[6, 6])
     assert migrate_report_snapshots(client) is True
     seq = client.commands
+    # the scratch is cleared only on the path that actually migrates
     assert seq[0] == "drop table if exists report_snapshots_v2"
     order = [i for i, c in enumerate(seq) if c.startswith(("insert into", "exchange"))]
     assert seq[order[0]].startswith("insert into report_snapshots_v2")
