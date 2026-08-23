@@ -37,6 +37,9 @@ services:
       # The agent's SELECT-only principal (Phase-9 Ruling D); reconstructed from
       # source at container start, granted only SELECT on default.*.
       - ./clickhouse/users.d/agent-ro.xml:/etc/clickhouse-server/users.d/agent-ro.xml:ro
+      # The metrics scraper's principal (Phase 18a): SELECT on system.parts and
+      # system.merges ONLY — it cannot read a pipeline row. agent_ro is unchanged.
+      - ./clickhouse/users.d/metrics-ro.xml:/etc/clickhouse-server/users.d/metrics-ro.xml:ro
     ulimits:
       nofile:
         soft: 262144

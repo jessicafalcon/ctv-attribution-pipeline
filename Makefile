@@ -82,6 +82,7 @@ resolve:
 run:
 	uv run python -m streaming.dataflow --profile "$(PROFILE)"
 	uv run python -m reconcile.reconcile --profile "$(PROFILE)"
+	uv run python -m observability.ch_scrape
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -90,6 +91,7 @@ run:
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
 	uv run python -m streaming.dataflow --profile "$(PROFILE)"
+	uv run python -m observability.ch_scrape
 
 # Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
 # reconciled_conversions asset (exposures sourced from Iceberg via DuckDB,
@@ -182,6 +184,7 @@ metrics-capture:
 	mkdir -p data/out/$(PROFILE)/metrics
 	uv run python -m streaming.dataflow --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/engine.prom
 	uv run python -m reconcile.reconcile --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
+	uv run python -m observability.ch_scrape --metrics-out data/out/$(PROFILE)/metrics/clickhouse.prom
 
 # Attribution accuracy (household grain) vs the truth side file, for the given
 # PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;
