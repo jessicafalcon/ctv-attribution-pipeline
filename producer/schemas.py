@@ -4,14 +4,15 @@ Registry subjects follow the `<topic>-value` convention. Registration uses the
 registry's plain HTTP API (stdlib urllib) — the confluent-kafka schema-registry
 extra would pull extra dependencies for one POST per topic (see DECISIONS.md).
 
-Every subject is set to compatibility NONE before its schema is posted. The
-registry's global default is BACKWARD; under it, re-registering a *changed*
-model during dev (add/rename a field) is rejected with 409 and fails the seed
-or the engine. This is single-writer dev infra with no schema-evolution
-story yet, so per-subject NONE lets a model change re-register freely. Tighten
-per subject when schema evolution becomes a v1+ concern (ARCHITECTURE out-of-
-scope). Verified against Redpanda: PUT /config/<subject> works before the
-subject's first version exists.
+Every subject is set to compatibility BACKWARD before its schema is posted
+(Phase 18b), matching the registry's own global default and making the registry a
+real data contract: a consumer on the newest schema can read data written under any
+older one, so a producer may ADD an optional field but the registry 409s the removal
+or rename of a required one. (Phase 2 used per-subject NONE — register anything —
+because single-writer dev seeding had no evolution story yet; BACKWARD replaces it
+now that the contract is the point. `_compat_level` is the single place the mode is
+named.) Verified against Redpanda: PUT /config/<subject> works before the subject's
+first version exists.
 """
 
 import json
@@ -52,10 +53,24 @@ def _check_url(registry_url: str) -> None:
         raise ValueError(f"registry url must be http(s), got {registry_url!r}")
 
 
-def set_compatibility(registry_url: str, subject: str, level: str = "NONE") -> None:
-    """Set subject-level compatibility (dev default NONE — see module docstring)."""
+def _compat_level() -> str:
+    """The schema-registry compatibility mode set on every subject (Phase 18b).
+
+    BACKWARD: a consumer built on the LATEST schema can read data written under any
+    OLDER registered schema — so adding an optional field (or widening) is accepted,
+    while removing or renaming a required field is rejected at registration (409). The
+    single place the mode is named, so the data-contract decision lives in one line."""
+    return "BACKWARD"
+
+
+def set_compatibility(
+    registry_url: str, subject: str, level: str | None = None
+) -> None:
+    """Set subject-level compatibility (BACKWARD since Phase 18b — see module
+    docstring). `level` overrides `_compat_level()` for callers that need it."""
     _check_url(registry_url)
-    _request(f"{registry_url}/config/{subject}", {"compatibility": level}, method="PUT")
+    body = {"compatibility": level or _compat_level()}
+    _request(f"{registry_url}/config/{subject}", body, method="PUT")
 
 
 def register_subject(registry_url: str, subject: str, model: type[BaseModel]) -> int:
