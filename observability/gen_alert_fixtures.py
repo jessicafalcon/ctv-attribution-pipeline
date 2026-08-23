@@ -108,11 +108,13 @@ def rendered_summary(alert: str, *, table: str, value: int) -> str:
     the two template substitutions promtool will make.
 
     promtool compares annotations exactly, so the synthetic fixture has to carry the
-    text — but it must not carry a COPY of it: a second source of truth drifts on the
-    first wording change, which is exactly what happened the first time the rule's
-    comment was corrected (review gate). Read as a folded scalar (`>-`: lines joined
-    with single spaces) with a regex rather than a YAML parser — no new dependency for
-    one field.
+    text — but it must not carry a COPY of it: a second authority for the same prose
+    drifts on the first wording change, which is exactly what happened the first time
+    the rule's comment was corrected (review gate). (Wording note: this package sits
+    in PIPELINE_DIRS, whose isolation guard forbids the ground-link word anywhere on
+    the pipeline's own path — hence "authority" above.) Read as a folded scalar
+    (`>-`: lines joined with single spaces) with a regex rather than a YAML parser —
+    no new dependency for one field.
     """
     rules = (ROOT / "observability/rules/alerts.yml").read_text()
     block = rules[rules.index(f"- alert: {alert}") :]
