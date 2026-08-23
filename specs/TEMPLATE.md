@@ -97,14 +97,22 @@ Rules:
   mutation per line; operators are exactly `delete-call`, `constant-return:<v>`,
   `invert-guard`, `swap-sort-key` (CLAUDE.md Commands). Each line is applied to
   HEAD in a throwaway worktree and the offline suite must go red; a `SURVIVED`
-  line is a correctness finding (`/review-round` runs it before any agent).
+  line is a correctness finding (`/review-round` runs it before any agent; a spec
+  with no block is GATE RED there, by rule).
 
   ```mutations
-  lake/load_serving.py::record_dirty_exposure_keys   delete-call
-  reconcile/rollup.py::refresh_campaign_hourly        constant-return:0
-  clickhouse/apply.py::migrate_report_snapshots       invert-guard
-  reconcile/reconcile.py::pick_household              swap-sort-key
+  lake/load_serving.py::insert_attributed      delete-call
+  reconcile/rollup.py::refresh_campaign_hourly constant-return:None
+  reconcile/reconcile.py::pick_household       invert-guard
+  reconcile/reconcile.py::pick_household       swap-sort-key
   ```
+
+  (Every function above exists on `main`, so `make mutate SPEC=specs/TEMPLATE.md`
+  runs as a smoke test of the tool — and on main today two of the four SURVIVE:
+  the ClickHouse writers `insert_attributed` / `refresh_campaign_hourly` have no
+  offline test, the coverage gap PR #35 recorded for 18a's round 4. A third verdict, `ERROR`, means the operator
+  could not be applied — a wrong function name, no `if` to invert — and is a
+  spec/tooling defect to fix, not a coverage finding; it exits 1 like a survivor.)
 
 Worked example — Phase 18a's rollup versions (`specs/phase-18a-cost-and-ops.md`;
 DECISIONS Phase 18a). The first spec pinned the mechanism: a one-row watermark

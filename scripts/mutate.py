@@ -83,7 +83,8 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
     m = _BLOCK.search(section(spec_text, "Invariants"))
     if not m:
         raise Refused(
-            "refusing: the spec's Invariants section has no ```mutations block"
+            "refusing: the spec's Invariants section has no ```mutations block — "
+            "add `## Invariants` with one (shape: specs/TEMPLATE.md)"
         )
     out: list[Mutation] = []
     for ln in m.group(1).splitlines():
