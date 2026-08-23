@@ -518,6 +518,10 @@ never auto-fixed, ignored, or committed around.
   each phase exit, before the phase PR merges.
 - `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
   commit (suite, DONE command, determinism, fixtures), then stops.
+- `/review-round N` command — `.claude/commands/review-round.md`; prints round
+  N−1's diff range and the spec's Invariants list, runs code-reviewer +
+  functionality-tester scoped to that range with the "missed in round N−1"
+  labelling, applies the review cap, then stops. Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 
