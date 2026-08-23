@@ -122,7 +122,10 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make up` / `make down` — compose up with health checks / down with volumes
   (`down` plus the three paths in `lake/destructive.py` — `lake-reset`,
   `replay-serving`, `lake-maintain` — are the sanctioned destructive paths; one
-  process each: validate the profile, prompt on a tty, act)
+  process each: validate the profile, prompt on a tty, act; every PROFILE value
+  reaches Python unexpanded and single-quoted (`$(value)` + `_Q`) and the seven user
+  variables (incl. `CONFIRM`) are `unexport`ed, so a `PROFILE='$(shell …)'` runs no shell —
+  fix/make-quote-profile)
 - `make seed PROFILE=tiny|medium|<fault>` — run producer (deterministic per
   PRODUCER_SEED; writes truth to data/truth/<profile>/)
 - `make resolve PROFILE=tiny SOURCE=fixtures|out` — offline resolve replay
@@ -592,10 +595,11 @@ never auto-fixed, ignored, or committed around.
 
 **Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
 (spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
-`docs/review-invariants` (PR #34, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
-In review: `tooling/review-round` (PR #35). Next in order: 18b (its spec carries a
+`tooling/review-round` (PR #35, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
+In review: `fix/make-quote-profile` (PR #36, 2026-08-23 — closes the Phase-17
+`"$(PROFILE)"`-expansion residual). Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **35** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+DECISIONS "Process"). Open BACKLOG rows: **36** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

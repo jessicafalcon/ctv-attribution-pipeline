@@ -346,7 +346,8 @@ firing) — specs under `specs/`, reconciled against main before each branch ope
 **Tooling / process PRs** (not phases — no phase gate, no PHASES.md row; listed so the record is complete):
 - `docs/process-tightening` (PR #32, merged 08-22) — `specs/TEMPLATE.md` Evidence / Record updates / Threat model sections; spec finalized only after its predecessor merges; ≤ ~6 items per spec; the "Before reporting DONE" self-review.
 - `docs/review-invariants` (PR #34, merged 08-22) — Invariants-first specs, fix amendments, the two-round review cap, scoped re-review; agents gain the Invariants check and the Mutation step.
-- `tooling/review-round` (PR #35, in review) — `make review-gate`, `make mutate`, `/review-round N`; the judgment-free edges of the review loop as scripts, three judgments left human (DECISIONS "Process").
+- `tooling/review-round` (PR #35, merged 08-22) — `make review-gate`, `make mutate`, `/review-round N`; the judgment-free edges of the review loop as scripts, three judgments left human (DECISIONS "Process").
+- `fix/make-quote-profile` (PR #36, in review) — every recipe quotes user variables through `$(call _Q,$(value VAR))` and `unexport`s the seven of them (incl. `CONFIRM`), closing both the recipe-time and the make-startup `$(shell …)` expansion vectors on both origins (`make -n` shows only the first). Phase-17 residual, closed.
 
 ## Next steps — what was cut, and why
 

@@ -123,7 +123,7 @@ def test_make_replay_serving_is_one_process_and_gates_confirm() -> None:
     out = _dry_run("PROFILE=long_delay")
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert len(lines) == 1 and re.search(
-        r'lake\.destructive replay --profile "long_delay"\s*$', lines[0]
+        r"lake\.destructive replay --profile 'long_delay'\s*$", lines[0]
     )
     assert "--yes" not in out  # prompts unless CONFIRM=yes on the command line
     assert "--yes" in _dry_run("PROFILE=long_delay", "CONFIRM=yes")
