@@ -186,8 +186,9 @@ below, never deleted.
   approval. (3) **Review cap** — two consecutive rounds reporting correctness
   findings only in the previous round's fixes → stop fixing, write the invariant,
   re-implement against it once, one scoped pass. (4) **Scoped re-review** — round
-  N+1 reviews round N's diff plus the invariant list; a finding on older code is
-  labelled "missed in round N" (`/review-round N`). (5) The agents check what the
+  N reviews round N−1's diff plus the invariant list (`/review-round N`); a
+  finding on code not changed inside that range is labelled "missed in round
+  N−1", the ONE literal (CLAUDE.md Workflow rules). (5) The agents check what the
   checklist could not: functionality-tester runs a mandatory **Mutation** step over
   every new write path and guard and confirms every Evidence-row test exists;
   code-reviewer reads the Invariants section and flags any mechanism whose value
@@ -204,6 +205,99 @@ below, never deleted.
   `tests/integration/test_rollup_dirty.py::test_load_order_does_not_change_the_dirty_set`,
   which the branch did not contain — the reverse-order-load pin for the version
   invariant; the 18a session writes the test, the Evidence row stands.
+
+- **The review loop's judgment-free edges are scripts; the three judgments stay
+  human (2026-08-22).** The loop is a graph — implement → review → fix → re-review
+  → gate — and the Phase-18a rounds showed which edges carry no judgment and were
+  still done by hand, late, and inconsistently. Automated (PR #35, `scripts/review_gate.py`, `scripts/mutate.py`, `/review-round`):
+  **suite + lint + docs guard before any agent** (`make review-gate` — an agent
+  reviewing a red tree reviews noise); **Evidence rows exist** (a named test id is
+  a claim; `pytest --collect-only` settles it); **Record-updates list vs the diff**
+  (a list nobody diffs is prose); **deleted-symbol grep** (self-review item 1 was
+  the most-skipped item); **the mutation sweep** (`make mutate` — "delete this call,
+  does the suite notice" found the real 18a bugs and is a loop, not a judgment);
+  **the round's diff range** (`scripts/round_tag.py`: a local annotated
+  `review-round-N` tag carrying `round=N` and nothing else, ancestry-checked —
+  round N+1 reviews exactly what round N's fixes touched, no hand-picked SHA).
+  NOT automated, by decision: the cap — the two-round rule is the architect's
+  call, made by comparing round N's finding table to round N−1's; the command
+  prints the table and the reminder, never a verdict
+  (the written two-round rule: this round AND the previous one reported
+  correctness findings only inside the previous round's fixes → print CAP; the
+  first cut fired after one quiet round, and 18a is the evidence against that —
+  round 2 found the per-key watermark bug (F1) inside round 1's fixes, and round
+  3 found a BLOCKER inside round 2's). Human,
+  and why: **"is this finding real"** — a verdict needs the spec's intent, which
+  only the reader of the spec holds; **"is this fix a design change"** — the
+  Fix-amendments rule turns on what a change MEANS (a write path moved, not a line
+  count), which no diff classifier sees; **"is the phase done"** — the DONE
+  command proves the contract, the developer decides whether the contract was the
+  right one. Alternative not taken: one orchestrating agent that owns the whole
+  loop (runs the gate, reviews, fixes, re-reviews, decides) — rejected because
+  the cap can only be called from OUTSIDE the round: an agent inside the loop is
+  the thing generating the findings it would have to stop, and 18a's three rounds
+  were exactly a loop that could not see itself. The command therefore tags and
+  reports, and the scripts exit non-zero; the round's boundary is its ANNOTATED
+  local tag (`round=N`, the artifact the next round's range derivation reads,
+  ancestry-checked); `/review-round` is for phase branches only — tooling / fix / docs
+  PRs run the agents directly, as this one did; nothing in `scripts/review_gate.py` /
+  `scripts/mutate.py` edits, commits, or pushes; the command's writes are a local
+  tag and a temporary worktree, removed in `finally`. Two rulings from its review gate: `constant-return:<v>`
+  is `ast.literal_eval`'d — spec text is model-authored and never reaches exec —
+  and the Makefile passes `$(value SPEC|BASE|DELETED)` through the `_Q` quoter so
+  an env-origin `$(shell …)` reaches Python as text. That closes, for these three
+  NEW variables, the class Phase 17 recorded as a stated residual for PROFILE
+  ("an env-origin `PROFILE='$(shell …)'` is expanded on every reference"); the
+  difference is not a reversal — the fix was free here, and every `"$(PROFILE)"`
+  recipe (~15 of them, the three destructive ones first) gets the same
+  `_Q`/`$(value)` treatment in `fix/make-quote-profile` (BACKLOG row, with the two
+  PR-35 probe facts: it reaches the destructive recipes, and `make -n` is not a
+  safe inspection)
+  after PR #35 merges. Until then the PROFILE residual stands as written.
+
+- **Model-written text never reaches an oracle; the tag carries a round number
+  and nothing else (2026-08-23; PR #35 review cap, security track).** Rounds 2
+  and 3 each found a hole inside the guard the previous round had added
+  (`CTV_INT` on the sweep, then `./tests/x.py` through a `startswith("tests/")`
+  check) — the two-round cap fired on the tooling branch itself. The invariant it
+  was re-implemented against, once: *model-written text never reaches an oracle;
+  the tag carries a round number and nothing else.* Mechanisms that satisfy it:
+  `scripts/mutate.py::_repo_path` (one `posixpath.normpath`, rules on the
+  `Path.parts`, `tests` casefolded — pinned with `./tests/oracle.py`,
+  `tests/./oracle.py`, `lake/../tests/x.py`, `TESTS/oracle.py`); the
+  `review-round-N` tag is a RANGE BOUNDARY written and read by
+  `scripts/round_tag.py` — message exactly `round=N`, anchored parse, and
+  `git merge-base --is-ancestor` so another branch's round can never be this
+  branch's boundary (refuses to run from another checkout); the
+  functionality-tester's hand worktree uses the interpreter captured absolutely
+  in the main tree and runs the suite through `review_common.py exec` — the same
+  `suite_env` as `mutate.py`, argv to argv, no shell (an `env -i $(…)` form
+  word-split a HOME with a space into a different command) — and compares
+  `git worktree list` before/after as its last step (`mutate.py` does the same
+  inside its `finally`; a registry change is a latched outcome of its own, and
+  KILLED + SURVIVED + ERROR always equals the mutation count). **Cut, same
+  entry:** rounds 3–5 of PR #35 were spent hardening a cap PARSER — a `cap=`
+  field in the tag, a `correctness=` count the model wrote, a `cap N` subcommand
+  deciding CAP from them. Each round found the previous round's parser wrong
+  (unanchored values, git's own trailing newline rejected, round 1 undefined,
+  this round's bit retyped as argv, a repo-global name readable from another
+  branch). The design never needed it: the two-round cap is the architect's
+  call, made by comparing two finding tables, and a human does that better than
+  a parser of model-written fields — so the cap automation was deleted, the tag
+  kept only the round number, and `/review-round` prints the table and "Cap is
+  the architect's call: compare this table to round N−1's". Not taken: an extra
+  invariant clause scoping what the cap may read — it would have added a clause
+  to keep a mechanism that should not exist. Stated residuals, not fixes: the
+  backticked `` `make …` `` scraper checks the first target per span;
+  `make_targets` reads `define` bodies and column-0 continuations — both
+  mitigated by the `.PHONY` equality pin, which goes red on the first non-phony
+  rule BY DESIGN: that rule then gets an explicit entry.
+
+- **Dates in every record are LOCAL dates (the developer's machine, `git log
+  --format=%ci`), never GitHub's UTC merge timestamp (2026-08-22).** PR #34 merged at
+  04:27 UTC on the 23rd and was first recorded as 08-23 beside commits dated 08-22;
+  one event looked like two. README History, CLAUDE.md Current status, DECISIONS and
+  BACKLOG all use the local date.
 
 ## Appendix — by phase
 
@@ -1927,6 +2021,13 @@ below, never deleted.
   environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
   `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
   single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
+  *(Annotated in place, PR #35 coherence audit round 3, 2026-08-23: `$(value
+  PROFILE)` first appeared in Phase 17's gate-2 shell guard (`42acc39`) and left
+  with it at gate 3 (`e5cca5a`), when the destructive paths became one Python
+  process that validates the profile itself; #35 reintroduces `$(value)` beside
+  the new `_Q` single-quote escaping so the argument reaches Python as one
+  literal. The Phase-17 sentence was stale, not false. Every `"$(PROFILE)"`
+  recipe gets `_Q`/`$(value)` in `fix/make-quote-profile` — BACKLOG row.)*
   (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
   exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
   `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model

@@ -103,8 +103,13 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   rows. READ-ONLY ground truth after Phase 1.
 - `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
   RESULTS.md, RUNBOOK.md.
-- `scripts/` — `check_docs.py`, the one docs guard (`make check-docs`; was
-  `docs/check_runbook.py`, Phase 19).
+- `scripts/` — the offline guards, none a pytest file: `check_docs.py` (the one
+  docs guard, `make check-docs`; was `docs/check_runbook.py`, Phase 19),
+  `review_gate.py` (`make review-gate`), `mutate.py` (`make mutate`),
+  `round_tag.py` (the `review-round-N` boundary tag: write / read, message
+  `round=N` and nothing else, ancestry-checked), `review_common.py` (their shared
+  SPEC validator / section parser / reduced child env — `review_common.py exec
+  <tree> -- <cmd>` runs a command under it with no shell between).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -199,13 +204,16 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
   ROAS) and the other three stay silent (offline; needs the image, not the stack)
 - `make check-docs` — the one docs guard (`scripts/check_docs.py`, Phase 19; was
-  `check-runbook`): every link/anchor in README.md + docs/ resolves; each
-  `make`-generated block (`scale-curve`, `cost-levers`) is present under its
+  `check-runbook`), four checks: every link/anchor in README.md + docs/ resolves;
+  each `make`-generated block (`scale-curve`, `cost-levers`) is present under its
   generator's marker and the README first-screen copies of its numbers match it;
-  every guard/alert/`make` target the docs name exists in source as an EXACT token
-  (offline; a standalone script, not a pytest file, so a docs-only edit does not
-  re-trigger the full suite — `tests/test_check_docs.py` does run the trace/target
-  half under `make test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
+  every guard/alert/`make` target the docs name exists in source as an EXACT
+  token; and this file's "Open BACKLOG rows: **N**" equals BACKLOG.md's un-struck
+  rows (the sentence two branches rewrite — a wrong count fails at edit time, on
+  whichever branch merges second) (offline; a standalone script, not a pytest
+  file, so a docs-only edit does not re-trigger the full suite —
+  `tests/test_check_docs.py` does run the trace/target/count checks under `make
+  test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
   `tests/test_docs_accuracy_pins.py`
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
@@ -239,6 +247,38 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   writes the same reconciled rows. No API tokens; isolated for the same
   shared-conversion_id reason
 - `make lint` — ruff via pre-commit
+- `make review-gate [SPEC=specs/<file>.md] [BASE=main] [DELETED=a,b]` — the
+  offline review gate (`scripts/review_gate.py`): `make test` + `ruff check` +
+  `ruff format --check` (read-only — never `make lint`, whose ruff-format hook
+  rewrites files; a gate must not write to the tree it judges) + `make
+  check-docs`, then with SPEC every Evidence test id / `make` target exists
+  (`pytest --collect-only` under the reduced child env; targets are a set lookup
+  over the Makefile, never `make -n`) and every Record-updates file is in `git
+  diff BASE...HEAD` (a DECISIONS / BACKLOG / CLAUDE.md / README / `docs/` file in
+  the diff but off the list → WARN; `specs/` and the Makefile are not warned);
+  DELETED greps the tracked tree for each removed symbol as a literal (`git grep
+  -F -w`; struck / `<!-- historical -->` lines and the SPEC file itself exempt; a
+  git error is its own FAIL line, never a hit). One process, one line per check,
+  exit 1 on any FAIL, exit 2 on a refused SPEC. SPEC / BASE / DELETED reach
+  Python unexpanded and single-quoted (`$(value …)` + `_Q`); SPEC is validated
+  in-process as an existing file under `specs/`; nothing else is derived from
+  it. `/review-round N` runs it first
+- `make mutate SPEC=specs/<file>.md` — the mutation sweep (`scripts/mutate.py`):
+  each line of the spec's Invariants ```mutations block (`path.py::func op`; ops
+  exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`)
+  is applied to HEAD in a temporary `git worktree` — the checkout under the
+  system temp dir (no env knob), its registration under `.git/worktrees/`,
+  `git worktree list` asserted equal before/after (never this tree) — the offline suite runs there with the reduced
+  child env (PATH / HOME / PYTHONPATH / CTV_INT — never credentials), the worktree
+  is removed (`finally`; stale ones pruned at start). `constant-return:<v>` must
+  be a Python literal ≤ 64 chars (`ast.literal_eval`) or the whole run is refused
+  — spec text never reaches exec. One line per mutation: `KILLED`, `SURVIVED`
+  (a correctness finding), or `ERROR` (the operator could not be applied — a
+  spec/tooling defect) + file:line — the three always sum to the mutation count;
+  a worktree-registry change is a separate latched `REGISTRY` line, reported
+  once; exit 1 on any survivor, error or registry change, 2 on a refused SPEC. ~30 s per mutation at repo size. Same inbound-branch caveat as
+  the run-tests hook (Project tooling): it runs that branch's conftest.py —
+  review it before running on someone else's branch
 
 Canonical clean-state demos (a clean state is a clean lake too — the lake outlives
 `make down`, and a `run-hot` over a lake that already holds a reconcile pass's rows
@@ -415,11 +455,17 @@ standard way over the clever way.
 - Review cap: if two consecutive review rounds report correctness findings
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
-  fourth round of patches on patches.
-- Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
-  list (`/review-round N+1`). A finding on code unchanged since round N−1 is
-  labelled **"missed in round N"** so the review's own drift is visible
-  alongside the code's.
+  fourth round of patches on patches. This is a rule a HUMAN applies — the
+  architect compares round N's finding table to round N−1's; `/review-round`
+  prints the table and the reminder, never a verdict (PR #35 spent rounds 3–5
+  hardening a cap parser the design did not need; deleted — DECISIONS "Process").
+- `/review-round N` is the review gate: its deterministic half (`make
+  review-gate`, `make mutate`) runs before any agent is spawned, in every round.
+- Scoped re-review: round N reviews round N−1's diff plus the spec's invariant
+  list (`/review-round N`). A finding on code NOT changed inside that range —
+  code an earlier round already reviewed — is labelled **"missed in round N−1"**
+  (N−1 = the round whose fixes the range covers; the one literal form)
+  so the review's own drift is visible alongside the code's.
 
 ### Before reporting DONE
 
@@ -480,7 +526,14 @@ output (item by item, not "done"):
 
 Index only — hooks fire from the developer's local, gitignored
 `.claude/settings.local.json`; agents and commands self-describe in their
-own files. All agents are report-only by contract: none carry Write/Edit,
+own files. All agents are report-only by contract: none carry Write/Edit
+(one stated carve-out: functionality-tester may `git worktree add` a throwaway
+checkout under `mktemp -d`, mutate THERE or run a service-free record-rewriting
+DONE command THERE, and remove it — a write to the system temp dir plus a
+registration under `.git/worktrees/`, never an edit in the working tree; `git
+status --porcelain` AND `git worktree list` must match before and after; a
+command that needs the live stack or issues DDL on it is never run by an agent
+unasked),
 and their instructions forbid fixing, committing, or working around
 findings. A finding is fixed in the main session or explicitly accepted —
 never auto-fixed, ignored, or committed around.
@@ -488,9 +541,10 @@ never auto-fixed, ignored, or committed around.
 - `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
   from trial-signal-assistant); after any .py edit inside this repo, runs
   pytest and blocks on red; treats "no tests collected" as skip. Since Phase 17
-  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, which only the
-  `make test-int*` targets export — so the hook cannot seed the live broker or
-  re-stamp `eval_meta`. WIRING is
+  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, and the integration
+  suite RUNS only under the `make test-int*` targets (`review_gate`'s
+  `--collect-only` exports it too, but collects, never executes) — so the hook
+  cannot seed the live broker or re-stamp `eval_meta`. WIRING is
   local-only by design (a committed settings.json would auto-execute an
   inbound PR branch's hook + pytest + conftest.py for anyone opening it in
   Claude Code). One-time re-enable — copy into the gitignored
@@ -518,21 +572,31 @@ never auto-fixed, ignored, or committed around.
   each phase exit, before the phase PR merges.
 - `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
   commit (suite, DONE command, determinism, fixtures), then stops.
-- `/review-round N` command — `.claude/commands/review-round.md`; prints round
-  N−1's diff range and the spec's Invariants list, runs code-reviewer +
-  functionality-tester scoped to that range with the "missed in round N−1"
-  labelling, applies the review cap, then stops. Read-only, report-only.
+- `/review-round N` command — `.claude/commands/review-round.md`; phase branches
+  only (a `tooling/*` / `fix/*` / `docs/*` branch gets one line — run the agents
+  directly, the PR-#35 precedent). Refuses an existing `review-round-N` tag, runs
+  `make review-gate` + `make mutate` first (red → no agents spawned), derives the
+  range (round 1 `main...HEAD`; round N `review-round-(N−1)..HEAD`, the tag
+  verified by `scripts/round_tag.py read` — message exactly `round=N−1`, an
+  ancestor of HEAD, else STOP), prints the spec's Invariants list, runs
+  code-reviewer + functionality-tester scoped to the range with the "missed in
+  round N−1" labelling (+ security-reviewer in round 1 when CI / compose /
+  ClickHouse users / .env / agent are touched), prints the consolidated finding
+  table, tags HEAD with `round_tag.py write N` (local, never pushed; the tag
+  carries the round number and nothing else), and prints "Cap is the
+  architect's call: compare this table to round N−1's". Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 
 ## Current status
 
-**Current phase: 19 (docs reshape) — built, in review** on `phase-19-docs-reshape`
-(spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
-(PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
-reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
-"Process"). Open BACKLOG rows: **32** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
-reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
+**Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
+(spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
+`docs/review-invariants` (PR #34, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
+In review: `tooling/review-round` (PR #35). Next in order: 18b (its spec carries a
+"Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
+DECISIONS "Process"). Open BACKLOG rows: **35** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
 

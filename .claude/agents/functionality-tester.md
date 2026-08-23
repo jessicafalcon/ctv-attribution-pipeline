@@ -17,10 +17,21 @@ in the main session where it can be reviewed.
 When invoked:
 1. State in one line the intended behavior (from the spec in `specs/` or from
    what was asked) and how you will prove it.
-2. Run the suite: `uv run pytest -q` (fall back to `.venv/bin/pytest -q`).
+2. Run the suite: `make test` (= `uv run pytest --ignore=tests/integration`,
+   read-only in effect: `.pytest_cache/` is ignored; `uv run` may touch the
+   tracked `uv.lock` only if the lock is stale, which `git status` will show and
+   is your finding). Fall back to `.venv/bin/pytest -q --ignore=tests/integration`.
    Unit tests need no services and no network.
 3. If the change implements a spec, run that spec's DONE command and report
-   its real output — the DONE command is the only definition of done here.
+   its real output — the DONE command is the only definition of done here. A
+   DONE command that REWRITES a tracked record file and needs NO services
+   (`make scale-curve` → `docs/SCALING.md`) runs with its no-write mode
+   (`--no-write`) or in a throwaway worktree like the hand mutation below —
+   never in the main tree. A DONE command that needs the live stack or issues
+   DDL on it (`make cost-levers`, `make bench`, anything `run`/`run-hot`) is
+   NEVER run by an agent unasked: check `docker compose ps`, report "needs the
+   live stack — developer's call", and stop there. The worktree isolates the
+   file, not the database.
 4. Exercise the changed module read-only via existing entry points or a quick
    `uv run python -c` against `fixtures/tiny/` data. Do NOT bring the compose
    stack up or down yourself; if the DONE command needs services, check
@@ -48,24 +59,38 @@ When invoked:
 
 A passing suite proves only that the tests agree with the code as written. To
 prove the tests would NOTICE the code being wrong, break it on purpose and watch.
-For EACH new or changed write path (anything that lands rows, stamps a version,
-records a key, appends to the lake) and EACH new guard (a tripwire, an assert, a
-validation, a `confirm_or_abort`-style gate), apply ONE mutation from this list
-(pick the one the code shape admits; use more than one only when the first is
-inapplicable):
+`make mutate SPEC=specs/<phase>.md` does the mechanical sweep: every line of the
+spec's Invariants ```mutations block (`path.py::function operator`, operators
+exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`) is
+applied to HEAD in a throwaway git worktree, the offline suite runs there, and
+each line prints `KILLED`, `SURVIVED` or `ERROR`. Under `/review-round` it has
+already run and its lines are in your prompt — do not repeat them. Your job is
+what the four operators cannot express:
 
-1. **Delete the call** — remove the write / the guard invocation entirely.
-2. **Replace a computed value with a constant** — a version, a key set, a
-   count, a `max(...)` becomes a literal.
-3. **Invert the predicate** — `if dirty` → `if not dirty`; `<` → `>=`.
-4. **Swap two equal-looking sort keys** — reorder a tuple key, a sort
-   expression, a `(day, bucket)`.
-
-Apply the mutation with a scratch edit under `git stash` discipline — `sed -i`
-or a here-doc patch, then run the OFFLINE suite (`uv run pytest -q`, no
-services), then `git checkout -- <file>` so the tree is exactly as you found it
-(confirm with `git status --porcelain`; a dirty tree at the end of your run is
-your own finding). Never commit a mutation; never mutate `fixtures/`.
+1. **Read the block against the diff.** For EACH new or changed write path
+   (anything that lands rows, stamps a version, records a key, appends to the
+   lake) and EACH new guard (a tripwire, an assert, a validation, a
+   `confirm_or_abort`-style gate) that has NO line in the block, that absence is
+   a finding ("no mutation listed for `<file>::<func>`") — name the operator that
+   fits.
+2. **Hand-mutate only what the operators can't reach** — a swapped argument
+   pair, an off-by-one on a window edge, a dropped `FINAL`, a boundary value —
+   and only in a worktree, never this tree. Capture the interpreter ABSOLUTELY
+   before leaving the main tree — `PY="$PWD/.venv/bin/python"` (the worktree has
+   no `.venv`; it is gitignored) — then `D=$(mktemp -d)`; `git worktree list`
+   (keep the output); `git worktree add --detach "$D/ft" HEAD`; edit THERE; run
+   the suite under the SAME reduced environment `scripts/mutate.py` uses — one
+   env builder, and no shell between it and the command:
+   `"$PY" scripts/review_common.py exec "$D/ft" -- "$PY" -m pytest -q -x -p
+   no:cacheprovider --ignore=tests/integration` (PATH, HOME, PYTHONPATH,
+   CTV_INT=0 — never credentials; never `uv run` in the worktree: it would
+   resolve a second environment per mutation, and `uv sync` is `make setup`'s
+   job); then `git worktree remove --force "$D/ft"`, `git worktree prune`,
+   `rmdir "$D"`, and `git worktree list` must equal what you kept — `git
+   status` cannot see `.git/worktrees/`.
+   `git status --porcelain` in the main tree must be identical before and after;
+   a dirty main tree at the end of your run is your own finding. Never commit a
+   mutation; never mutate `fixtures/`.
 
 Report EVERY mutation that survives (the suite stays green) as a finding,
 severity **correctness**, in this shape:

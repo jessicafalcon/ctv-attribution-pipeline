@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -343,3 +343,30 @@ check-docs:
 
 lint:
 	uv run pre-commit run --all-files
+
+# The offline review gate (scripts/review_gate.py): make test + ruff check/format
+# --check (read-only, never make lint) + check-docs,
+# then — with SPEC — the spec's Evidence ids exist and its Record-updates files
+# are in the diff; DELETED=a,b greps for removed symbols. ONE process validates
+# SPEC (an existing file under specs/, nothing derived from it) before anything
+# runs; the value is single-quoted for sh (`_Q`); nothing here edits, commits, or fixes. `/review-round N` runs it first.
+# _Q: single-quote a value for sh — the ONLY character that needs escaping inside
+# '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument (a
+# "$(VAR)" interpolation ran the echo — this branch's threat-model probe). Callers
+# pass `$(value VAR)`, the UNEXPANDED text: make expands a variable before _Q ever
+# sees it, so `SPEC='$(shell …)'` would otherwise run at recipe time, even under
+# -n (security review, PR #35 round 1). Every "$(PROFILE)" recipe (~15, the three
+# destructive ones first) still interpolates the expanded value and keeps Phase
+# 17's stated residual until fix/make-quote-profile (BACKLOG row).
+_Q = '$(subst ','\'',$(1))'
+review-gate:
+	uv run python scripts/review_gate.py $(if $(value SPEC),--spec $(call _Q,$(value SPEC)),) --base $(call _Q,$(if $(value BASE),$(value BASE),main)) $(if $(value DELETED),--deleted $(call _Q,$(value DELETED)),)
+
+# The mutation sweep (scripts/mutate.py): each line of the spec's ```mutations
+# block is applied to HEAD in a temporary git worktree (never this tree), the
+# offline suite runs there under a reduced env, the worktree is removed
+# (try/finally, which also compares `git worktree list` before/after). One verdict per
+# mutation, KILLED / SURVIVED / ERROR, summing to the count; a registry change is a
+# separate latched REGISTRY line; exit 1 on any of them. SPEC validated in-process.
+mutate:
+	uv run python scripts/mutate.py --spec $(call _Q,$(value SPEC))

@@ -226,3 +226,32 @@ def test_lake_reset_removes_exactly_the_profile_lake(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "data" / "lake" / "tiny").exists()
     assert (tmp_path / "data" / "x").exists()
+
+
+@pytest.mark.parametrize("target", ["review-gate", "mutate"])
+def test_review_tool_spec_value_is_one_literal_argument(target: str) -> None:
+    # The first cut interpolated "$(SPEC)"; the threat-model probe
+    # `SPEC='x"; echo PWNED; "'` RAN the echo. `_Q` single-quotes the value, so
+    # the whole string reaches Python as one argument and is refused there.
+    hostile = 'x"; echo PWNED; "'
+    (line,) = [ln for ln in _dry_run(target, f"SPEC={hostile}") if "scripts/" in ln]
+    assert "--spec 'x\"; echo PWNED; \"'" in line, line
+    assert line.count("echo") == 1  # inside the quoted argument only
+    (line,) = [ln for ln in _dry_run(target, "SPEC=it's") if "scripts/" in ln]
+    assert "--spec 'it'\\''s'" in line, line
+
+
+@pytest.mark.parametrize("target", ["review-gate", "mutate"])
+def test_review_tool_spec_is_not_expanded_by_make(tmp_path: Path, target: str) -> None:
+    # `$(value SPEC)`: an env-origin `SPEC='$(shell touch marker)'` used to run the
+    # shell at recipe-expansion time, even under -n (security review, PR #35).
+    marker = tmp_path / "expanded"
+    out = subprocess.run(
+        ["make", "-n", target],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(SPEC=f"$(shell touch {marker})"),
+    ).stdout
+    assert not marker.exists()
+    assert "--spec '$(shell touch" in out, out

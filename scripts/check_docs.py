@@ -4,7 +4,7 @@
 Standalone, no pytest, no services — run via `make check-docs` (the lint job runs
 it too). Not a pytest file so a docs-only edit does not re-trigger the full suite.
 
-Three checks over README.md and every docs/*.md:
+Four checks (1-3 over README.md and every docs/*.md; 4 over CLAUDE.md/BACKLOG.md):
   1. Links/anchors — every relative markdown link points at a real file, and a
      `#anchor` resolves to a heading in that file (GitHub-style slug).
   2. Generated blocks — each `make`-regenerated block (`scale-curve`,
@@ -13,6 +13,8 @@ Three checks over README.md and every docs/*.md:
   3. Traces — every guard / alert / make target / source phrase the docs name by
      identity exists in source, matched as an exact token (a partial rename such
      as `_canonicalize` → `_canonicalize_tables` FAILS; BACKLOG 37).
+  4. BACKLOG count — CLAUDE.md's "Open BACKLOG rows: **N**" equals the un-struck
+     rows in BACKLOG.md (the sentence two branches rewrite; PR #35 audit r1-D8).
 Accuracy TABLE cells are guarded separately by tests/test_docs_accuracy_pins.py.
 """
 
@@ -310,6 +312,13 @@ TRACES: list[tuple[str, str]] = [
     (".claude/commands/review-round.md", "missed in round"),
     (".claude/agents/functionality-tester.md", "Mutation"),
     ("specs/TEMPLATE.md", "Invariants"),
+    ("scripts/review_gate.py", "check_evidence"),
+    ("scripts/mutate.py", "swap-sort-key"),
+    ("specs/TEMPLATE.md", "```mutations"),
+    (".claude/commands/review-round.md", "review-round-"),
+    ("scripts/round_tag.py", "is-ancestor"),
+    ("tests/test_review_tools.py", "test_round_tag_requires_ancestry"),
+    ("scripts/review_common.py", "exec_under_suite_env"),
 ]
 
 
@@ -357,11 +366,32 @@ def check_traces(errors: list[str]) -> int:
     return n
 
 
+# ----------------------------------------------------------- 4. backlog count
+
+
+def check_backlog_count(errors: list[str]) -> int:
+    """CLAUDE.md's stated open-row count == the un-struck rows in BACKLOG.md. Two
+    branches that both add rows and both rewrite the sentence land a wrong count
+    on whichever merges second (PR #35 audit r1-D8); here it is an edit-time
+    failure."""
+    backlog = (ROOT / "BACKLOG.md").read_text().splitlines()
+    actual = sum(1 for ln in backlog if ln.startswith("| **"))
+    m = re.search(r"Open BACKLOG rows: \*\*(\d+)\*\*", (ROOT / "CLAUDE.md").read_text())
+    if not m:
+        errors.append("CLAUDE.md: no 'Open BACKLOG rows: **N**' sentence")
+    elif int(m.group(1)) != actual:
+        errors.append(
+            f"CLAUDE.md says {m.group(1)} open BACKLOG rows; BACKLOG.md has {actual}"
+        )
+    return 1
+
+
 def main() -> int:
     errors: list[str] = []
     links = check_links(errors)
     blocks = check_generated(errors)
     traces = check_traces(errors)
+    check_backlog_count(errors)
     if errors:
         print("check-docs FAILED:")
         for e in errors:
@@ -369,7 +399,7 @@ def main() -> int:
         return 1
     print(
         f"check-docs OK: {links} links/anchors, {blocks} generated-block checks, "
-        f"{traces} exact-token traces resolve"
+        f"{traces} exact-token traces resolve, BACKLOG count matches"
     )
     return 0
 

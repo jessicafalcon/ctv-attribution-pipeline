@@ -92,6 +92,27 @@ Rules:
 - **A fix that changes a data structure, a write path, or who-writes-what is a
   design change**: it gets a one-paragraph amendment to this section naming the
   invariant it restores (CLAUDE.md Workflow rules, "Fix amendments").
+- **Every invariant's upholding code gets a mutation line.** `make mutate SPEC=…`
+  reads ONE fenced block in this section, `path.py::function  operator`, one
+  mutation per line; operators are exactly `delete-call`, `constant-return:<v>`,
+  `invert-guard`, `swap-sort-key` (CLAUDE.md Commands). Each line is applied to
+  HEAD in a throwaway worktree and the offline suite must go red; a `SURVIVED`
+  line is a correctness finding (`/review-round` runs it before any agent; a spec
+  with no block is GATE RED there, by rule).
+
+  ```mutations
+  lake/load_serving.py::insert_attributed      delete-call
+  reconcile/rollup.py::refresh_campaign_hourly constant-return:None
+  reconcile/reconcile.py::pick_household       invert-guard
+  reconcile/reconcile.py::pick_household       swap-sort-key
+  ```
+
+  (Every function above exists on `main`, so `make mutate SPEC=specs/TEMPLATE.md`
+  runs as a smoke test of the tool — and on main today two of the four SURVIVE:
+  the ClickHouse writers `insert_attributed` / `refresh_campaign_hourly` have no
+  offline test — the BACKLOG row "18a coverage gaps the mutation sweep and the round-3 functionality-tester surfaced". A third verdict, `ERROR`, means the operator
+  could not be applied — a wrong function name, no `if` to invert — and is a
+  spec/tooling defect to fix, not a coverage finding; it exits 1 like a survivor.)
 
 Worked example — Phase 18a's rollup versions (`specs/phase-18a-cost-and-ops.md`;
 DECISIONS Phase 18a). The first spec pinned the mechanism: a one-row watermark
