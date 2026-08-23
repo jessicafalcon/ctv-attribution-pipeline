@@ -40,28 +40,42 @@ down:
 # root from it (no path argument exists to escape with), prompt on a tty, then
 # act. Make never interpolates a user value into a guard and never splits guard
 # and action across shells (rounds 2 and 3 of the Phase-17 review each found a
-# hole in a Make-level guard; `make -i` cannot step inside a process). CONFIRM
-# counts only from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes'
-# is a stated residual — these guards are for mistakes, not for a user who
+# hole in a Make-level guard; `make -i` cannot step inside a process). The profile
+# reaches that process single-quoted and UNEXPANDED (`$(call _Q,$(value PROFILE))`,
+# below), so an env-origin `PROFILE='$(shell …)'` no longer runs at recipe time —
+# closed in fix/make-quote-profile (was a Phase-17 residual). CONFIRM counts only
+# from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes' is a
+# separate stated residual — these guards are for mistakes, not for a user who
 # controls the environment (DECISIONS Phase 17).
 _YES = $(if $(filter command line,$(origin CONFIRM)),$(if $(filter yes,$(CONFIRM)),--yes,),)
+
+# _Q: single-quote a value for sh — the ONLY character that needs escaping inside
+# '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument (a
+# bare "$(VAR)" interpolation would run the echo). Callers pass `$(value VAR)`, the
+# UNEXPANDED text: make expands a variable before _Q ever sees it, so a
+# `VAR='$(shell …)'` from the environment would otherwise run at recipe-expansion
+# time — even under `make -n`, which is NOT a dry run of a variable's value (the
+# value's own functions still expand). PROFILE / SOURCE / PARTITION and SPEC /
+# BASE / DELETED all go through it, so no user value reaches sh expanded
+# (fix/make-quote-profile; security review, PR #35 round 1).
+_Q = '$(subst ','\'',$(1))'
 
 # Delete this PROFILE's lake of record, data/lake/<profile> (spec D9). The
 # clean-stack test-int-* targets pass CONFIRM=yes: a "clean stack" for a profile
 # means a clean lake too, since the lake outlives `make down` and the serving
 # tables are loaded from it.
 lake-reset:
-	uv run python -m lake.destructive reset --profile "$(PROFILE)" $(_YES)
+	uv run python -m lake.destructive reset --profile $(call _Q,$(value PROFILE)) $(_YES)
 
 # Deterministic per PRODUCER_SEED (default: profile's seed).
 seed:
-	uv run python -m producer.seed --profile "$(PROFILE)"
+	uv run python -m producer.seed --profile $(call _Q,$(value PROFILE))
 
 # Offline resolve replay (service-free): device→household, IP fallback, fan-out.
 # Writes data/out/<profile>/conversions_resolved.jsonl. The unit proof of the
 # resolve step the engine runs in-process (Phase 16).
 resolve:
-	uv run python -m resolve.replay --profile "$(PROFILE)" --source "$(SOURCE)"
+	uv run python -m resolve.replay --profile $(call _Q,$(value PROFILE)) --source $(call _Q,$(value SOURCE))
 
 # Phase 17: the lake is the record. One lake per PROFILE (profiles share
 # conversion_id space — the same isolation `make down` gives ClickHouse, without a
@@ -80,8 +94,8 @@ resolve:
 # reload → rollup refresh + pre/post report snapshots). Run after `make up &&
 # make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
 run:
-	uv run python -m streaming.dataflow --profile "$(PROFILE)"
-	uv run python -m reconcile.reconcile --profile "$(PROFILE)"
+	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
+	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -89,7 +103,7 @@ run:
 # reconciliation pass would over-credit their long-tail organics and shift those
 # pins. Reconciliation is proven on its own profile (`make test-int-long-delay`).
 run-hot:
-	uv run python -m streaming.dataflow --profile "$(PROFILE)"
+	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
 
 # Phase 12/17: orchestrated reconciliation. Materialize the day-partitioned
 # reconciled_conversions asset (exposures sourced from Iceberg via DuckDB,
@@ -98,7 +112,7 @@ run-hot:
 # instance). PROFILE selects the lake; PARTITION=<YYYY-MM-DD> materializes a
 # single day. Run after make run-hot.
 reconcile-dagster:
-	uv run python -m orchestration.run reconcile --profile "$(PROFILE)" $(if $(PARTITION),--partition $(PARTITION),)
+	uv run python -m orchestration.run reconcile --profile $(call _Q,$(value PROFILE)) $(if $(value PARTITION),--partition $(call _Q,$(value PARTITION)),)
 
 # Phase 17: replay the serving layer FROM THE LAKE — no Kafka involvement. Drops
 # the rows of exposures_landed + attributed_conversions + eval_meta (TRUNCATE — destructive,
@@ -107,7 +121,7 @@ reconcile-dagster:
 # line — `make -i` cannot re-stamp after a refusal); `make eval` then reproduces the
 # pins. The backfill story: Kafka retention is hours, the lake is forever.
 replay-serving:
-	uv run python -m lake.destructive replay --profile "$(PROFILE)" $(_YES)
+	uv run python -m lake.destructive replay --profile $(call _Q,$(value PROFILE)) $(_YES)
 
 # Phase 17 (spec D10): lake hygiene as a Dagster job — expire snapshots older
 # than LAKE_SNAPSHOT_MAX_AGE_DAYS (default 7) and rewrite each day partition
@@ -116,7 +130,7 @@ replay-serving:
 # mutation of the record, so it prompts like the other two; asserted offline on
 # both raw tables). Expiry is metadata-only on pyiceberg 0.11.1 (BACKLOG 45).
 lake-maintain:
-	uv run python -m lake.destructive maintain --profile "$(PROFILE)" $(_YES)
+	uv run python -m lake.destructive maintain --profile $(call _Q,$(value PROFILE)) $(_YES)
 
 # Phase 12/17 (optional, dev only): the Dagster asset-graph viewer; materialize
 # works for the ONE profile bound by DAGSTER_PROFILE (= PROFILE — there is no
@@ -127,7 +141,7 @@ lake-maintain:
 # A containerized/published webserver is a deployment lever, not built.
 dagster-ui:
 	mkdir -p data/dagster_home
-	DAGSTER_PROFILE=$(PROFILE) DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
+	DAGSTER_PROFILE=$(call _Q,$(value PROFILE)) DAGSTER_HOME=$(PWD)/data/dagster_home uv run dagster dev -m orchestration.definitions -h 127.0.0.1 -p 3000
 
 # Measured scaling curve (offline, no compose): drain the engine over tiered event
 # counts (1k/10k/100k exposures resident in the hot window), report the STRUCTURAL
@@ -166,16 +180,16 @@ cost-levers:
 # are the lake's CURRENT rows, so a second capture sees zero and the numbers
 # differ. The fixtures are recaptured in Phase 18 (alert rules).
 metrics-capture:
-	mkdir -p data/out/$(PROFILE)/metrics
-	uv run python -m streaming.dataflow --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/engine.prom
-	uv run python -m reconcile.reconcile --profile "$(PROFILE)" --metrics-out data/out/$(PROFILE)/metrics/reconcile.prom
+	mkdir -p data/out/$(call _Q,$(value PROFILE))/metrics
+	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE)) --metrics-out data/out/$(call _Q,$(value PROFILE))/metrics/engine.prom
+	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE)) --metrics-out data/out/$(call _Q,$(value PROFILE))/metrics/reconcile.prom
 
 # Attribution accuracy (household grain) vs the truth side file, for the given
 # PROFILE (default tiny). Reads attributed_conversions FINAL from ClickHouse;
 # truth never enters the DB (N1, DECISIONS Phase 4). Refuses a profile/DB
 # mismatch via the eval_meta marker the populate path writes (BACKLOG 43).
 eval:
-	uv run python -m accuracy.run --profile "$(PROFILE)"
+	uv run python -m accuracy.run --profile $(call _Q,$(value PROFILE))
 
 # The four advertiser metrics per campaign, from the raw serving tables.
 report:
@@ -191,7 +205,7 @@ restate:
 # is populated and pydantic-valid. Serving layer only (N1); the causal side file is
 # never read. Run after `make run`. The agent loop that reasons over it is Phase 9.
 context:
-	uv run python -m agent.run_context --profile "$(PROFILE)"
+	uv run python -m agent.run_context --profile $(call _Q,$(value PROFILE))
 
 # Run the attribution-integrity agent once, end to end, against the live stack
 # (Phase 9). This is the ONLY path that calls the LLM — it costs API tokens, so ask
@@ -200,7 +214,7 @@ context:
 # `make run` populated the serving tables. Pass PROFILE explicitly (like context/eval);
 # the Phase-9 Done-when uses PROFILE=shared_ip_spike.
 agent-run:
-	uv run $(AGENT_ENV) python -m agent.run_agent --profile "$(PROFILE)"
+	uv run $(AGENT_ENV) python -m agent.run_agent --profile $(call _Q,$(value PROFILE))
 
 # Phase-10 fault->diagnosis sweep: every fault profile + the no-fault baseline, run
 # EVAL_REPS times, scored against the pure rubric, both tables written to
@@ -349,16 +363,8 @@ lint:
 # then — with SPEC — the spec's Evidence ids exist and its Record-updates files
 # are in the diff; DELETED=a,b greps for removed symbols. ONE process validates
 # SPEC (an existing file under specs/, nothing derived from it) before anything
-# runs; the value is single-quoted for sh (`_Q`); nothing here edits, commits, or fixes. `/review-round N` runs it first.
-# _Q: single-quote a value for sh — the ONLY character that needs escaping inside
-# '…' is ' itself, so `'"; echo x; "'` reaches Python as one literal argument (a
-# "$(VAR)" interpolation ran the echo — this branch's threat-model probe). Callers
-# pass `$(value VAR)`, the UNEXPANDED text: make expands a variable before _Q ever
-# sees it, so `SPEC='$(shell …)'` would otherwise run at recipe time, even under
-# -n (security review, PR #35 round 1). Every "$(PROFILE)" recipe (~15, the three
-# destructive ones first) still interpolates the expanded value and keeps Phase
-# 17's stated residual until fix/make-quote-profile (BACKLOG row).
-_Q = '$(subst ','\'',$(1))'
+# runs; the value is single-quoted for sh (`_Q`, defined beside `_YES`); nothing
+# here edits, commits, or fixes. `/review-round N` runs it first.
 review-gate:
 	uv run python scripts/review_gate.py $(if $(value SPEC),--spec $(call _Q,$(value SPEC)),) --base $(call _Q,$(if $(value BASE),$(value BASE),main)) $(if $(value DELETED),--deleted $(call _Q,$(value DELETED)),)
 
