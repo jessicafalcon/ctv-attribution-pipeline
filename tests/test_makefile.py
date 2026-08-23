@@ -13,13 +13,15 @@ under `-n`, so each `test-int-*` dry run really spawns child makes; they are
 harmless only because `-n` propagates through MAKEFLAGS, so the children also
 dry-run and `docker compose down -v` never executes. No services, no network.
 
-Since fix/make-quote-profile every recipe interpolates the UNEXPANDED PROFILE /
-SOURCE / PARTITION through `$(call _Q,$(value VAR))`, closing the Phase-17
-residual where an env- or command-line-origin `PROFILE='$(shell …)'` ran the
-shell at recipe-expansion time — even under `make -n`, which is NOT a dry run of a
-variable's value. `test_profile_recipe_target_set_is_complete` pins the target set
-so a new `$(PROFILE)` recipe cannot appear unquoted; the marker probes prove no
-`$(shell …)` expands and the value reaches Python as one single-quoted argument.
+Since fix/make-quote-profile a `PROFILE='$(shell …)'` never runs the shell, on
+either of its two vectors: (1) every recipe interpolates the UNEXPANDED value
+through `$(call _Q,$(value VAR))`, so it is not expanded at recipe time (even under
+`make -n`, which is NOT a dry run of a variable's value); (2) the six user
+variables are `unexport`ed, so make does not expand a command-line value at STARTUP
+to export it to recipe environments — the vector $(value)/_Q cannot reach, and one
+`make -n` cannot show. `test_profile_recipe_target_set_is_complete` pins the target
+set so a new `$(PROFILE)` recipe cannot appear unquoted; the marker probes prove
+neither vector expands and the value reaches Python as one single-quoted argument.
 """
 
 import re
@@ -403,31 +405,51 @@ def test_profile_apostrophe_is_escaped(target: str) -> None:
 
 
 @pytest.mark.parametrize("target", ["lake-reset", "replay-serving", "lake-maintain"])
-def test_destructive_shell_profile_is_refused_and_lake_untouched(
+def test_destructive_shell_profile_refused_and_never_expands(
     tmp_path: Path, target: str
 ) -> None:
-    # The REAL recipe (not -n) under `make -i` with a $(shell …) PROFILE: `$(value
-    # PROFILE)` keeps it unexpanded and `_Q` single-quotes it, so
-    # lake/destructive.py's [a-z0-9_]+ validation refuses it — the destructive
-    # action never runs, the lake is untouched. The make-expansion vector,
-    # complementing test_hostile_profile_refused_even_under_make_i (PROFILE=../x).
-    #
-    # NOTE: this does NOT assert the $(shell …) marker is uncreated. A
-    # command-line-origin PROFILE is expanded by make at STARTUP to export it to
-    # recipe environments — independent of the recipe or $(value) — so the touch
-    # runs before Python ever validates. Closing THAT needs `unexport PROFILE …`;
-    # it is an open design question (see the phase report). What is guaranteed
-    # here is the load-bearing invariant: the value is refused and nothing
-    # destructive happens.
+    # The REAL recipe (not -n) under `make -i` with a $(shell …) PROFILE from the
+    # command line. Two guards combine: `unexport PROFILE …` stops make expanding
+    # the value at STARTUP to export it (the vector $(value)/_Q cannot reach — it
+    # guards the recipe text, not the export), so the `$(shell touch marker)` never
+    # runs; and `$(value PROFILE)` + `_Q` hand the literal to lake/destructive.py,
+    # whose [a-z0-9_]+ validation refuses it, so the destructive action never runs
+    # and the lake is untouched. The make-expansion vector, complementing
+    # test_hostile_profile_refused_even_under_make_i (PROFILE=../x).
+    marker = tmp_path / "expanded"
     res = _make_in_sandbox(
-        tmp_path,
-        "-i",
-        target,
-        f"PROFILE=$(shell touch {tmp_path / 'expanded'})",
-        "CONFIRM=yes",
+        tmp_path, "-i", target, f"PROFILE=$(shell touch {marker})", "CONFIRM=yes"
     )
     out = res.stdout + res.stderr
     assert "refusing" in out, out
+    assert not marker.exists(), "make expanded the $(shell …) at startup"
     assert "marker set" not in out and "removed" not in out
     assert (tmp_path / "data" / "x").exists()
     assert (tmp_path / "data" / "lake" / "tiny").exists()
+
+
+# The six variables `unexport`ed so a command-line `$(shell …)` cannot run at make
+# startup (fix/make-quote-profile). Kept in sync with the Makefile line.
+UNEXPORTED_VARS = ["PROFILE", "SOURCE", "PARTITION", "SPEC", "BASE", "DELETED"]
+
+
+def test_the_six_user_variables_are_unexported() -> None:
+    assert re.search(
+        r"^unexport " + " ".join(UNEXPORTED_VARS) + r"\s*$",
+        MAKEFILE.read_text(),
+        re.M,
+    ), "the `unexport <six vars>` line is missing or reworded"
+
+
+def test_unexported_vars_are_never_read_as_shell_variables() -> None:
+    # `unexport` is behaviour-preserving ONLY because no recipe reads these from
+    # the shell environment ($$VAR / $${VAR}) — every use is a make value via
+    # `$(call _Q,$(value VAR))`. The moment a recipe reads $$PROFILE, unexport
+    # silently feeds it empty; this names that regression at edit time.
+    offenders: list[tuple[str, str, str]] = []
+    for target, lines in _recipe_lines_by_target().items():
+        for ln in lines:
+            for var in UNEXPORTED_VARS:
+                if re.search(r"\$\$\{?" + var + r"\b", ln):
+                    offenders.append((target, var, ln))
+    assert offenders == [], offenders

@@ -8,6 +8,19 @@ PROFILE ?= tiny
 # of the value, which turned `--source "fixtures  "` into an argparse error.
 SOURCE ?= fixtures
 
+# make expands a COMMAND-LINE variable once at startup to export it to every
+# recipe's environment, so `PROFILE='$(shell touch x)' make lake-reset` runs the
+# `$(shell …)` before any recipe or Python guard — the $(value)/_Q quoting below
+# cannot stop that (it guards the recipe TEXT, not the export), and `make -n`
+# never shows it (it sets up no recipe environment). `unexport` removes make's
+# reason to expand these: no recipe reads any of them as a shell variable ($$VAR),
+# only as a make value via `$(call _Q,$(value VAR))`, so unexporting is
+# behaviour-preserving and closes the startup vector. Command-line values still
+# reach recipes and sub-makes (MAKEFLAGS is unaffected). (fix/make-quote-profile;
+# tests/test_makefile.py.) MAKEFLAGS/MAKEOVERRIDES from the environment stay a
+# stated residual — mistakes, not adversaries (DECISIONS Phase 17).
+unexport PROFILE SOURCE PARTITION SPEC BASE DELETED
+
 # Load ANTHROPIC_API_KEY from .env for the token targets ONLY (agent-run,
 # agent-eval). `uv run --env-file` injects into the child process it spawns, not
 # the interactive shell, and uv's precedence keeps an already-exported key (CI, a
@@ -42,8 +55,10 @@ down:
 # and action across shells (rounds 2 and 3 of the Phase-17 review each found a
 # hole in a Make-level guard; `make -i` cannot step inside a process). The profile
 # reaches that process single-quoted and UNEXPANDED (`$(call _Q,$(value PROFILE))`,
-# below), so an env-origin `PROFILE='$(shell …)'` no longer runs at recipe time —
-# closed in fix/make-quote-profile (was a Phase-17 residual). CONFIRM counts only
+# below), and PROFILE is `unexport`ed (top), so a `PROFILE='$(shell …)'` from the
+# command line or environment never runs the shell — at recipe time OR make
+# startup. Both were Phase-17 residuals, closed in fix/make-quote-profile. CONFIRM
+# counts only
 # from the command line (`$(origin CONFIRM)`); MAKEFLAGS='CONFIRM=yes' is a
 # separate stated residual — these guards are for mistakes, not for a user who
 # controls the environment (DECISIONS Phase 17).
