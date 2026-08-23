@@ -64,9 +64,12 @@ what the four operators cannot express:
    fits.
 2. **Hand-mutate only what the operators can't reach** — a swapped argument
    pair, an off-by-one on a window edge, a dropped `FINAL`, a boundary value —
-   and only in a worktree, never this tree: `git worktree add --detach
-   <tmpdir>/ft-1 HEAD`, edit THERE, `uv run pytest -q --ignore=tests/integration`
-   with `cwd` = the worktree, then `git worktree remove --force <tmpdir>/ft-1`.
+   and only in a worktree, never this tree: `D=$(mktemp -d)`; `git worktree add
+   --detach "$D/ft" HEAD`; edit THERE; run the suite the way `scripts/mutate.py`
+   does — `.venv/bin/python -m pytest -q -x -p no:cacheprovider
+   --ignore=tests/integration` with `cwd="$D/ft"`, `PYTHONPATH="$D/ft"`, `CTV_INT=0`
+   (never `uv run` in the worktree: it would provision a venv there); then
+   `git worktree remove --force "$D/ft"` and `rmdir "$D"`.
    `git status --porcelain` in the main tree must be identical before and after;
    a dirty main tree at the end of your run is your own finding. Never commit a
    mutation; never mutate `fixtures/`.

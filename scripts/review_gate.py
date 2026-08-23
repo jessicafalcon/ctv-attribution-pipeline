@@ -42,7 +42,7 @@ from review_common import (  # noqa: E402
 )
 
 _TEST_ID = re.compile(r"(tests/[\w./-]+\.py)?::(test_\w+)")
-_MAKE = re.compile(r"\bmake ([a-z][a-z0-9-]*)")
+_MAKE = re.compile(r"`make ([a-z][a-z0-9-]*)[^`]*`")  # backticked form ONLY
 _RECORD_LINE = re.compile(r"^\s*- \[[ xX]\]\s*(.*)$")
 _TICK = re.compile(r"`([^`]+)`")
 RECORD_FILES = re.compile(
@@ -110,7 +110,7 @@ def collected_ids(root: Path) -> set[str]:
             "no:cacheprovider",
         ],
         root,
-        env=suite_env(root),
+        env=suite_env(root, ctv_int="1"),
     )
     ids: set[str] = set()
     for ln in out.splitlines():
@@ -122,18 +122,21 @@ def collected_ids(root: Path) -> set[str]:
 
 
 def make_targets(root: Path) -> set[str]:
-    """Target names declared in the Makefile (`name:` at column 0). A set lookup,
-    never `make -n <name>`: `-n` still recurses through `$(MAKE)` lines (the
-    test-int-* recipes run `$(MAKE) down` / `lake-reset CONFIRM=yes`), so
-    existence-checking a name scraped from spec prose must not invoke make."""
+    """Target names declared in the Makefile: every whitespace-separated name left
+    of the first `:` on a column-0 rule line (`a b:` declares two; `name:=v` and
+    `name :=` are assignments, not rules). A set lookup, never `make -n <name>`:
+    `-n` still recurses through `$(MAKE)` lines (the test-int-* recipes run
+    `$(MAKE) down` / `lake-reset CONFIRM=yes`), so existence-checking a name
+    scraped from spec text must not invoke make. The derivation is pinned
+    against the `.PHONY` line (tests/test_review_tools.py), not trusted."""
     targets: set[str] = set()
     mk = root / "Makefile"
     if not mk.exists():
         return targets
     for line in mk.read_text().splitlines():
-        m = re.match(r"^([a-z][a-z0-9-]*):", line)
-        if m:
-            targets.add(m.group(1))
+        m = re.match(r"^([A-Za-z0-9_.%/ -]+?)\s*:(?!=)", line)
+        if m and not line.startswith((" ", "\t", "#", ".PHONY")):
+            targets.update(n for n in m.group(1).split() if not n.startswith("."))
     return targets
 
 
@@ -216,6 +219,14 @@ def check_records(spec_text: str, root: Path, base: str) -> bool:
 # --------------------------------------------------------------------- e
 
 
+def _historical(hit: str) -> bool:
+    """The two sanctioned history forms (check_docs._living) exempt a hit ONLY in
+    a markdown file: `~~` is a prose convention, never a reason to skip a line of
+    Python (`~~x` is legal) — security review, PR #35 round 2."""
+    path = hit.split(":", 1)[0]
+    return path.endswith(".md") and ("~~" in hit or "<!-- historical -->" in hit)
+
+
 def check_deleted(symbols: list[str], root: Path, spec: Path | None) -> bool:
     """`git grep -F -w`: the symbol is a literal, never a regex (a `[` used to
     produce "1 hits" whose one hit was git's own `fatal: brackets not balanced`).
@@ -235,8 +246,7 @@ def check_deleted(symbols: list[str], root: Path, spec: Path | None) -> bool:
             for ln in out.splitlines()
             if ln.strip()
             and not (spec and ln.startswith(str(spec.relative_to(root)) + ":"))
-            and "~~" not in ln  # the two sanctioned history forms (check_docs._living)
-            and "<!-- historical -->" not in ln
+            and not _historical(ln)
         ]
         if hits:
             print(f"FAIL deleted symbol still referenced: {sym} ({len(hits)} hits)")

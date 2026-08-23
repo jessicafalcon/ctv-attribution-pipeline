@@ -50,17 +50,19 @@ def run(
     return res.returncode, res.stdout + res.stderr
 
 
-def suite_env(tree: Path) -> dict[str, str]:
-    """The ONE environment a child pytest gets (mutate's suite, the gate's
-    --collect-only): PATH, HOME, PYTHONPATH=tree, CTV_INT=1 (collect-only never
-    executes; the sweep's suite ignores tests/integration). Never the parent's full
-    environment — credentials do not reach code a spec's text shaped (security
-    review, PR #35: one path was reduced, the other inherited everything)."""
+def suite_env(tree: Path, ctv_int: str = "0") -> dict[str, str]:
+    """The ONE environment a SPEC-SHAPED child pytest gets — mutate's suite and the
+    gate's --collect-only; `make test` / ruff children inherit the parent env on
+    purpose, same trust as typing them. PATH, HOME, PYTHONPATH=tree, and CTV_INT:
+    "0" by default (the sweep EXECUTES tests — integration stays skipped by the
+    marker AND by `--ignore=tests/integration`, two independent pinned guards);
+    the gate passes "1" so --collect-only can list integration ids (collects,
+    never executes). Never credentials (security review, PR #35, rounds 1-2)."""
     return {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": os.environ.get("HOME", str(Path.home())),
         "PYTHONPATH": str(tree),
-        "CTV_INT": "1",
+        "CTV_INT": ctv_int,
     }
 
 

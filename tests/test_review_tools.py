@@ -234,12 +234,80 @@ def test_suite_env_is_reduced(tmp_path: Path) -> None:
     assert env["PYTHONPATH"] == str(tmp_path)
 
 
-def test_prose_make_sure_is_not_a_target_and_no_make_runs(repo: Path, capsys) -> None:
-    (repo / "Makefile").write_text("lint:\n\ttrue\n")
-    spec = "## Evidence\n| 1 | make sure `make lint` is green |\n"
-    assert gate.check_evidence(spec, repo) is False
+def test_the_sweep_has_two_independent_guards_against_the_live_stack(tmp_path):
+    # Guard 1: the marker — the sweep's pytest EXECUTES, so it gets CTV_INT=0 and
+    # tests/conftest.py skips integration; only the gate's collect-only gets 1.
+    assert common.suite_env(tmp_path)["CTV_INT"] == "0"
+    assert common.suite_env(tmp_path, ctv_int="1")["CTV_INT"] == "1"
+    # Guard 2: the ignore flag — one unpinned literal is not a guard.
+    assert "--ignore=tests/integration" in mutate.SUITE
+
+
+def test_make_targets_derivation_equals_the_phony_line() -> None:
+    # Assert the derivation, never trust the parser (check_docs reads marker
+    # constants out of the generators the same way).
+    root = Path(__file__).parent.parent
+    phony = next(
+        ln
+        for ln in (root / "Makefile").read_text().splitlines()
+        if ln.startswith(".PHONY:")
+    )
+    assert gate.make_targets(root) == set(phony.split(":", 1)[1].split())
+
+
+def test_make_targets_handles_multi_name_rules_and_skips_assignments(tmp_path):
+    (tmp_path / "Makefile").write_text("a b:\n\ttrue\nname:=v\nx :=1\nc_d:\n\ttrue\n")
+    assert gate.make_targets(tmp_path) == {"a", "b", "c_d"}
+
+
+def test_mutation_targets_under_tests_are_refused_for_every_operator() -> None:
+    for op in ("delete-call", "constant-return:0", "invert-guard", "swap-sort-key"):
+        text = f"## Invariants\n```mutations\ntests/conftest.py::f   {op}\n```\n"
+        with pytest.raises(common.Refused, match="under tests/"):
+            mutate.parse_mutations(text)
+
+
+def test_untracked_target_is_one_error_line_and_the_sweep_continues(
+    repo: Path, tmp_path: Path, capsys
+) -> None:
+    (repo / "pkg" / "loose.py").write_text("def f():\n    if 1:\n        return 2\n")
+    spec = (
+        "## Invariants\n```mutations\npkg/loose.py::f   invert-guard\n"
+        "pkg/nope.py::f   invert-guard\npkg/mod.py::guarded   invert-guard\n```\n"
+    )
+    scratch = tmp_path / "s"
+    scratch.mkdir()
+    code = mutate.sweep(mutate.parse_mutations(spec), repo, scratch, SUITE)
     out = capsys.readouterr().out
-    assert "named make target does not exist: make sure" in out
+    assert code == 1
+    assert (
+        "ERROR    pkg/loose.py::f invert-guard: refusing: pkg/loose.py is not a" in out
+    )
+    assert "ERROR    pkg/nope.py::f invert-guard:" in out
+    assert "KILLED   pkg/mod.py::guarded invert-guard" in out  # the sweep went on
+    assert "mutate FAIL: 1/3 killed, 0 survived, 2 errors" in out
+
+
+def test_history_exemption_applies_to_markdown_only(repo: Path, capsys) -> None:
+    (repo / "pkg" / "mod.py").write_text(MOD + "\nx = ~~old_symbol  # not history\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "py")
+    assert gate.check_deleted(["old_symbol"], repo, None) is False
+    assert "pkg/mod.py" in capsys.readouterr().out
+
+
+def test_backticked_make_only(repo: Path, capsys) -> None:
+    (repo / "Makefile").write_text("lint:\n\ttrue\n")
+    assert gate.check_evidence(
+        "## Evidence\n| 1 | make sure `make lint` is green |\n", repo
+    )
+    assert "PASS evidence" in capsys.readouterr().out
+
+
+def test_an_unknown_backticked_target_fails_without_running_make(repo: Path, capsys):
+    (repo / "Makefile").write_text("lint:\n\ttrue\n")
+    assert gate.check_evidence("## Evidence\n| 1 | `make nope` |\n", repo) is False
+    assert "named make target does not exist: make nope" in capsys.readouterr().out
     assert gate.make_targets(repo) == {"lint"}
 
 

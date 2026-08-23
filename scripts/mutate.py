@@ -112,6 +112,11 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
             raise Refused(
                 f"refusing: mutation target must be a repo-relative .py path: {file!r}"
             )
+        if file.startswith("tests/"):
+            raise Refused(
+                f"refusing: {file!r} is under tests/ — the sweep never mutates the "
+                "oracle it judges by (every operator, not only delete-call)"
+            )
         out.append(Mutation(file, func, op, arg))
     if not out:
         raise Refused("refusing: the mutations block is empty")
@@ -215,6 +220,9 @@ def apply(m: Mutation, tree: Path) -> str:
                 f"refusing: no statement-level call to {m.func}() outside tests/"
             )
         return ",".join(sorted(hits))
+    code, _ = run(["git", "ls-files", "--error-unmatch", "--", m.file], tree)
+    if code != 0:
+        raise Refused(f"refusing: {m.file} is not a tracked file")
     src = Source(tree / m.file, tree)
     fn = src.function(m.func)
     if m.op == "constant-return":
@@ -277,6 +285,7 @@ def sweep(
 ) -> int:
     """Run every mutation; print one line each; return the exit code."""
     survivors = 0
+    errors = 0
     run(["git", "worktree", "prune"], root)  # a SIGKILLed earlier sweep leaves one
     for i, m in enumerate(mutations, 1):
         tree = scratch / f"mut-{i}"
@@ -289,13 +298,13 @@ def sweep(
                     f"ERROR    {m}: git worktree add failed: "
                     f"{out.strip().splitlines()[-1]}"
                 )
-                survivors += 1
+                errors += 1
                 continue
             try:
                 where = apply(m, tree)
-            except (Refused, SyntaxError) as e:
+            except (Refused, SyntaxError, OSError) as e:
                 print(f"ERROR    {m}: {e}")
-                survivors += 1
+                errors += 1
                 continue
             code, _ = run(suite, tree, env=suite_env(tree))
             verdict = "KILLED  " if code != 0 else "SURVIVED"
@@ -304,11 +313,12 @@ def sweep(
         finally:
             run(["git", "worktree", "remove", "--force", str(tree)], root)
             run(["git", "worktree", "prune"], root)
+    bad = survivors + errors
     print(
-        f"mutate {'FAIL' if survivors else 'OK'}: "
-        f"{len(mutations) - survivors}/{len(mutations)} killed"
+        f"mutate {'FAIL' if bad else 'OK'}: {len(mutations) - bad}/{len(mutations)} "
+        f"killed, {survivors} survived, {errors} errors"
     )
-    return 1 if survivors else 0
+    return 1 if bad else 0
 
 
 def main(argv: list[str] | None = None) -> int:
