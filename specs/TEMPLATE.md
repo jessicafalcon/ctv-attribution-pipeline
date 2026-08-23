@@ -9,10 +9,14 @@ dependencies", or the package and why; any pinned-version feature the phase reli
 on is a STOP-and-ask if it turns out unsupported.>
 
 The section order below is the existing spec shape (`specs/phase-15-runbook.md`,
-`specs/phase-17-lake-of-record.md`). The three sections marked REQUIRED were added
+`specs/phase-17-lake-of-record.md`). Three of the sections marked REQUIRED were added
 after the Phase-16/17 retrospective: ~60 % of review-gate findings were record files
-lagging code, ~15 % were spec clauses written before the predecessor landed. Every
-spec carries all three; a spec without them is not approvable. A spec carries at
+lagging code, ~15 % were spec clauses written before the predecessor landed. The
+fourth, **Invariants**, was added after the Phase-18a review gate (DECISIONS
+"Process", 2026-08-22): three rounds each found correctness bugs in the previous
+round's fixes because the spec pinned a mechanism instead of the property the
+mechanism had to keep. Every spec carries all four; a spec without them is not
+approvable. A spec carries at
 most ~6 pinned decisions / Done-when items (CLAUDE.md Workflow rules) — split larger
 scope into sub-phases (18a/18b), each with its own spec from this template.
 
@@ -48,6 +52,8 @@ is corrected at exit — the spec and DECISIONS are authoritative.)
 
 Every Done-when item names the test or command output that proves it. **An item
 without evidence is not a Done-when item** — either find its proof or cut it.
+The functionality-tester confirms every named test exists and exercises the
+claim; a named-but-missing test is a blocker.
 
 | Done-when | Proof (test file / `make` target / command output) |
 |---|---|
@@ -57,9 +63,61 @@ without evidence is not a Done-when item** — either find its proof or cut it.
 The same table, filled with the actual run's output, is item 2 of the "Before
 reporting DONE" checklist (CLAUDE.md Workflow rules).
 
+## Invariants (REQUIRED)
+
+Properties, not mechanisms — written BEFORE any pinned decision names how the
+code works. Each is a universally quantified sentence ("for all X, Y holds")
+paired with the scenario test that would falsify it. The test is named here first;
+the mechanism comes later and must satisfy the invariant, never the reverse.
+Reviewers read this list (code-reviewer "Invariants" check; `/review-round`),
+the functionality-tester mutates the code that upholds each one, and the
+coherence auditor greps the records against it.
+
+| Invariant ("for all …, … holds") | Falsified by (scenario test) |
+|---|---|
+| For all <X>, <Y>. | `tests/test_<x>.py::test_<scenario>` — <the scenario in one clause> |
+| … | … |
+
+Rules:
+
+- **A mechanism is not an invariant.** "A one-row watermark records the last
+  refresh" is a mechanism; the invariant it was standing in for is "for every
+  versioned row, the version is a function of the row's content, never of the
+  caller or the clock". State the second; let the Pinned decisions name the first,
+  and only by reference ("satisfies invariant 2").
+- **Every invariant names its falsifying test before any code exists.** A test
+  that reproduces the scenario under the invariant's quantifier (reverse-order
+  loads, a replay, equal sort keys, a non-UTC machine) — not a test of the
+  mechanism's happy path.
+- **A fix that changes a data structure, a write path, or who-writes-what is a
+  design change**: it gets a one-paragraph amendment to this section naming the
+  invariant it restores (CLAUDE.md Workflow rules, "Fix amendments").
+
+Worked example — Phase 18a's rollup versions (`specs/phase-18a-cost-and-ops.md`;
+DECISIONS Phase 18a). The first spec pinned the mechanism: a one-row watermark
+table records the last refresh, and the refresh recomputes the keys dirtied since
+it. Three review rounds each found a correctness bug in the previous round's fix
+(the watermark advanced on a no-op; a replay left it ahead of the data; a
+re-computation could lose to an older row under the ReplacingMergeTree). The
+invariant that should have been written first:
+
+| Invariant | Falsified by |
+|---|---|
+| For every versioned row (`campaign_hourly`, `rollup_dirty`, `report_snapshots`), its version = `max(processed_at)` over the rows it summarizes — a function of the data, never of the caller or the clock. | `tests/integration/test_rollup_dirty.py::test_every_rows_version_equals_the_max_stamp_of_what_it_summarizes`. Replay: `::test_a_replayed_refresh_cannot_lose_to_an_earlier_one`; offline `tests/test_rollup_dirty.py::test_the_rollup_row_version_is_data_derived_not_caller_supplied`, `::test_a_reload_of_the_same_day_records_the_same_versions`. Reverse-order load (day 2 then day 1 == day 1 then day 2): the 18a Evidence table names `::test_load_order_does_not_change_the_dirty_set`, which the branch does not contain — the named-but-missing case the functionality-tester now treats as a blocker. |
+| For every key whose served rollup row changed, that key was in the set the refresh recomputed (`changed ⊆ dirty`); the served rollup equals a full rebuild. | `tests/integration/test_rollup_dirty.py::test_every_changed_key_was_refreshed`, `::test_the_served_rollup_equals_a_full_rebuild`; reported by `make rollup-bench`. |
+
+The pinned decision then reads "rollup versions are data-derived (`max(stamp)`)
+— satisfies invariant 1; the watermark table is gone because no mechanism that
+stores a caller-supplied marker can satisfy it".
+
 ## Pinned decisions (do not re-litigate)
 
-- **<Decision.>** <Why; the alternative rejected in one clause.>
+Each decision may name a mechanism only by reference to the invariant it
+satisfies ("… — satisfies invariant N"). A decision that pins a mechanism no
+invariant requires is a smell: either write the invariant or drop the pin.
+
+- **<Decision.>** <Why; the alternative rejected in one clause; "satisfies
+  invariant N".>
 - … (≤ ~6)
 
 ## Scope (files)
