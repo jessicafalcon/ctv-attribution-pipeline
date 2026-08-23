@@ -627,6 +627,23 @@ handled.*
   `event_time >= … and household_id = …` predicate reported `Total Files Read: 1`
   of 24 — it prunes on BOTH the day and the bucket transform, which is what makes
   the 90-day reconcile join partition-local instead of a scan.
+- **`make` expands a command-line variable at STARTUP to export it to recipe
+  environments, so `make -n` is not a dry run of a variable's value.** A recipe
+  argument built from `"$(PROFILE)"` runs `$(shell …)` at recipe-expansion time —
+  even under `-n` — and, separately, make expands a COMMAND-LINE-origin variable
+  once at startup to place it in every recipe's environment, so
+  `PROFILE='$(shell touch x)' make lake-reset` runs the shell before any recipe or
+  the Python guard, for ANY target. Neither is a real "dry run": `-n` shows the
+  recipe-time expansion but hides the startup one. Fix (fix/make-quote-profile):
+  every recipe interpolates `$(call _Q,$(value VAR))` — `$(value)` hands over the
+  UNEXPANDED text, `_Q` single-quotes it for sh — so the value reaches Python as one
+  literal, refused there; and the six user variables (`PROFILE SOURCE PARTITION SPEC
+  BASE DELETED`) are `unexport`ed, so make has no reason to expand them at startup.
+  Behaviour-preserving because no recipe reads them as a shell variable (`$$VAR`),
+  only as a make value. Residual, stated: `MAKEFLAGS`/`MAKEOVERRIDES` from the
+  environment — mistakes, not adversaries (DECISIONS Phase 17). Rule: never treat
+  `make -n` as proof a variable value is inert; quote user values through
+  `$(value)`+`_Q` and `unexport` them.
 
 ---
 

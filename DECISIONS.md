@@ -115,7 +115,11 @@ below, never deleted.
 - **The three destructive paths are one Python process each
   (`lake/destructive.py`: reset | replay | maintain) — validate the profile, derive
   the root, prompt on a tty, act; one recipe line; the threat model is mistakes, not a
-  hostile environment.** `make down` never touches the lake. ([Phase 17](#phase-17))
+  hostile environment.** `make down` never touches the lake. Every PROFILE reaches
+  that process single-quoted and UNEXPANDED (`$(call _Q,$(value PROFILE))`), and the
+  six user variables are `unexport`ed, so a `PROFILE='$(shell …)'` from the command
+  line or environment runs no shell — at recipe time or make startup
+  (fix/make-quote-profile). ([Phase 17](#phase-17))
 
 **Agent**
 
@@ -253,7 +257,36 @@ below, never deleted.
   `_Q`/`$(value)` treatment in `fix/make-quote-profile` (BACKLOG row, with the two
   PR-35 probe facts: it reaches the destructive recipes, and `make -n` is not a
   safe inspection)
-  after PR #35 merges. Until then the PROFILE residual stands as written.
+  after PR #35 merges. *(Closed in `fix/make-quote-profile`, PR #36 — see the
+  `unexport` entry below.)*
+
+- **`make -n` is not a dry run of a variable's value; `$(value)`+`_Q` closes the
+  recipe-time vector, `unexport` closes the startup one (2026-08-23;
+  fix/make-quote-profile).** Every recipe now interpolates
+  `$(call _Q,$(value VAR))` so a `PROFILE='$(shell …)'` is not expanded at
+  recipe-expansion time — the vector PR-35's probes hit under `make -n`. But that
+  was only half of it: implementing the fix and testing the REAL `make -i` path
+  (`tests/test_makefile.py::test_destructive_shell_profile_refused_and_never_expands`)
+  surfaced a second vector `$(value)`/`_Q` cannot reach — **make expands a
+  command-line-origin variable once at STARTUP to export it into every recipe's
+  environment**, so `PROFILE='$(shell touch x)' make lake-reset` ran the shell
+  before any recipe or the Python guard, for any target, and `make -n` never showed
+  it (it builds no recipe environment). The one-line fix is
+  `unexport PROFILE SOURCE PARTITION SPEC BASE DELETED`: make has no reason to
+  expand what it will not export. Behaviour-preserving — no recipe reads any of the
+  six as a shell variable (`$$VAR`), only as a make value, and `MAKEFLAGS` still
+  carries command-line values to recipes and sub-makes (the `test-int-*` children
+  bind their literal profile; pinned). This is the invariant-over-mechanism rule
+  working: the amendment pinned "the marker is never created", the implementer
+  found the mechanism (`unexport`) that a `-n` inspection could not — a one-line
+  fix amendment, no data structure or write path, committed with the test restored.
+  Not taken: leaving it as a stated residual "same class as `MAKEFLAGS='CONFIRM=yes'`"
+  — true that both are environment-controls, but that one has no one-line fix and
+  this one does; a residual you can close for a line is a bug left in. Surviving
+  residual, stated and unchanged since Phase 17: `MAKEFLAGS`/`MAKEOVERRIDES` set in
+  the environment (a user who controls the environment can run `rm -rf` directly —
+  mistakes, not adversaries). ([ARCHITECTURE §8](docs/ARCHITECTURE.md#8-gotchas)
+  gotcha "`make` expands a command-line variable at STARTUP"; BACKLOG row struck.)
 
 - **Model-written text never reaches an oracle; the tag carries a round number
   and nothing else (2026-08-23; PR #35 review cap, security track).** Rounds 2
@@ -2028,6 +2061,12 @@ below, never deleted.
   the new `_Q` single-quote escaping so the argument reaches Python as one
   literal. The Phase-17 sentence was stale, not false. Every `"$(PROFILE)"`
   recipe gets `_Q`/`$(value)` in `fix/make-quote-profile` — BACKLOG row.)*
+  *(Closed, fix/make-quote-profile, PR #36, 2026-08-23: "no single recipe can
+  close it" was right — but a Makefile DIRECTIVE can. The sharp vector is the
+  COMMAND-LINE origin, which make expands at STARTUP to export; env-origin is not
+  re-expanded. `unexport PROFILE SOURCE PARTITION SPEC BASE DELETED` removes the
+  export, `$(value)`/`_Q` the recipe-time expansion — both vectors closed, pinned
+  by the real `make -i` test. See the `unexport` entry under "Process".)*
   (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
   exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
   `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model
