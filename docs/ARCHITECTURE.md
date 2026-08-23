@@ -96,7 +96,8 @@ ICEBERG LAKE (system of record)   raw.exposures · raw.attributed_conversions
 CLICKHOUSE (derived serving projection, loaded from the lake; replayable with no Kafka)
                    attributed_conversions  (ReplacingMergeTree, key conversion_id, version processed_at)
                    exposures_landed        (raw exposures, for the naive benchmark + reconcile parity)
-                   campaign_hourly         (rollups, refreshed on schedule; not insert-triggered)
+                   campaign_hourly         (rollups, incremental refresh of the keys a load
+                                            touched; not insert-triggered)
                    report_snapshots        (reported_at × period → metrics; enables restatements)
                                        ^
 RECONCILIATION JOB (periodic, reads the LAKE, no broker)

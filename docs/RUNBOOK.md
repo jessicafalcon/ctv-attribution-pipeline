@@ -63,7 +63,8 @@ ReplacingMergeTree that hasn't been canonicalized is measuring merge timing, not
 data.
 
 **Would catch it next time.** The guard is code-level and deterministic: the
-`canonicalize` OPTIMIZE plus the direction assert in `queries/bench.py`, enforced
+`canonicalize` OPTIMIZE (`queries/bench_common.py` since Phase 18a) plus the
+direction assert in `queries/bench.py`, enforced
 every time `make bench` runs (including in CI).
 
 Since Phase 18a the *condition* behind this incident is measured:
@@ -302,7 +303,7 @@ exercised here:
   The seeded duplicate is timestamp-identical to its original, so a TTL has nothing
   to measure against here; TTL'd eviction is the continuous-follow story only.
 
-Two of the four alerts carry the same batch-mode honesty in their own comments:
+Two of the five alerts carry the same batch-mode honesty in their own comments:
 `ConsumerLag` is a backlog **proxy**, not live consumer-group lag, and
 `WatermarkStall` is a peak event→ingest lateness **proxy**, not a true
 watermark-advance stall — because a batch drain has no advancing watermark to

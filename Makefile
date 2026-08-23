@@ -340,7 +340,8 @@ test-int-lakehouse:
 	$(MAKE) run-hot PROFILE=long_delay
 	uv run pytest tests/integration/test_lakehouse.py
 
-# Prove the four alert rules fire on REAL captured metric values (fix #4: promtool
+# Prove the five alert rules behave on REAL captured metric values (plus the one
+# labelled-synthetic input that fires PartCountHigh — see alerts.yml) (fix #4: promtool
 # from the digest-pinned prometheus image, never a floating tag). `check rules`
 # validates syntax; `test rules` asserts each alert fires on long_delay's captured
 # numbers and that on tiny's only RestatementMagnitude fires (the Phase-16 deferral

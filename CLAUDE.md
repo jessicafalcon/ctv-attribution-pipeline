@@ -40,7 +40,7 @@ ICEBERG LAKE (system of record, Phase 17)  raw.exposures · raw.attributed_conve
             day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
                                        ▼ Dagster load (touched days)
 CLICKHOUSE  (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
-            exposures_landed · campaign_hourly (scheduled refresh) · report_snapshots
+            exposures_landed · campaign_hourly (incremental refresh, dirty keys) · report_snapshots
                                        ▲
 RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
                                state-miss → bucket-local join vs raw.exposures [day−90d, day];
@@ -531,8 +531,8 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-18a-cost-and-ops.md`, RECONCILED 2026-08-22 — the branch's commit 1).
 **Last merged: Phase 19 (PR #33, 2026-08-22).** Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **35** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
-reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
+DECISIONS "Process"). Open BACKLOG rows: **34** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–19 incl. 18a + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
 

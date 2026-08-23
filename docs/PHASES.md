@@ -233,9 +233,10 @@ lake of record, cost/ops levers, and a docs reshape. Each has a spec under
 `specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
 how it was approved (a spec reconciled against main before its branch opened —
 Phase 19 on — is titled "(RECONCILED)"), and none opens a branch until approved.
-Status: **12–17 merged**, **19 built, in review** (`phase-19-docs-reshape`;
-reordered before 18a/18b — DECISIONS "Process"), **18a/18b specs written, not
-reconciled** (each branch's commit 1 is its reconciliation amendment). Phase 12
+Status: **12–17 and 19 merged** (19 reordered before 18a/18b — DECISIONS
+"Process"), **18a built, in review** (`phase-18a-cost-and-ops`; its spec RECONCILED
+by the branch's commit 1), **18b spec written, not reconciled** (its branch's commit 1
+is that amendment). Phase 12
 additionally needed dependency sign-off and an ARCHITECTURE §3.5 scope reversal.
 The per-phase results table lives in `README.md` → History.
 

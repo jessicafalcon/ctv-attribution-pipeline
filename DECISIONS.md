@@ -64,7 +64,8 @@ below, never deleted.
 **Serving (ClickHouse, derived)**
 
 - **ReplacingMergeTree on both landed tables, `FINAL`/`argMax` at read; the rollup is
-  a versioned-replace refreshed on schedule, never an insert-triggered summing MV;
+  a versioned-replace refreshed by the loader over the keys each load touched (Phase
+  18a; a full rebuild is kept as the oracle), never an insert-triggered summing MV;
   `report_snapshots` carries a server-side `reported_at`.** Replays and corrections
   are safe by construction; a correction cannot double-count; restatements are
   queryable. ([Phase 3](#phase-3), [Phase 6](#phase-6))

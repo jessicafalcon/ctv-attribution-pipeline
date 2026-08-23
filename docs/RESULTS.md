@@ -221,12 +221,25 @@ _Honesty boundary: these are `bench_large` numbers; the mechanisms are the claim
 
 ## Observability — alert rules
 
-Four Alertmanager rules cover the deterministic conditions, each proven by
+Five Alertmanager rules cover the deterministic conditions, each proven by
 `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
-Prometheus image against **real captured registries** (`make metrics-capture` dumps
-each stage's terminal Prometheus registry from a knobbed run;
+Prometheus image. Four are WORKLOAD rules: a producer knob moves them, so both sides
+are proven against **real captured registries** (`make metrics-capture` dumps each
+stage's terminal Prometheus registry from a knobbed run;
 `observability/gen_alert_fixtures.py` bakes those numbers into the test fixture, so
-the threshold-crossing values come from a real stage run, never hand-authored):
+their threshold-crossing values come from a real stage run, never hand-authored).
+
+`PartCountHigh` (Phase 18a) is the one exception, and it is labelled as such rather
+than smoothed over: its threshold is ClickHouse's OWN `parts_to_delay_insert` default
+(150), because no threshold between our profiles exists — the real captures read 5
+active parts on both tiny and long_delay, part count following insert batching and
+merge timing rather than event volume. Its SILENCE is proven by both real captures;
+its FIRING by a synthetic input in a file whose name says so
+(`observability/rules/tests/alerts_synthetic_test.yml`, `active_parts=151`). A
+merge-lag rule is deliberately absent: every settled capture reads
+`clickhouse_merge_backlog_seconds = 0`, so it could only be proven by an invented
+number. The metric ships anyway (BACKLOG) — measuring without alerting is true,
+alerting without a fireable measurement is not.
 
 | alert | expr | fires when |
 |---|---|---|
@@ -234,6 +247,7 @@ the threshold-crossing values come from a real stage run, never hand-authored):
 | `WatermarkStall` | `engine_watermark_lag_seconds > 14400` | peak arrival lateness > 4h |
 | `MatchRateOutOfBand` | match rate outside band | share of conversions attributed jumps/drops |
 | `RestatementMagnitude` | `reconcile_restatement_roas_abs_delta > 1.0` | reconciliation moves a period's ROAS materially |
+| `PartCountHigh` | `clickhouse_active_parts > 150` | a table nears ClickHouse's own insert-throttle point (`parts_to_delay_insert`); un-merged parts are the operating cost of `FINAL` |
 
 Two honesty boundaries on what this proves:
 
