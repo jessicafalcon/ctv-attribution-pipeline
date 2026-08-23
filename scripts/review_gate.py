@@ -99,11 +99,20 @@ def evidence_ids(text: str) -> tuple[list[str], list[str]]:
 
 
 def collected_ids(root: Path) -> set[str]:
+    # `-o addopts=` clears the repo's `addopts = "-q"` (pyproject) so exactly ONE
+    # `-q` reaches pytest. Two `-q` (pyproject's + ours) is quiet level 2, and under
+    # pytest 9 `--collect-only -qq` prints a terse `path: count` summary with no
+    # `::` node ids — so the parser below collected NOTHING and every Evidence id
+    # looked missing (fix/review-gate-pytest9). One `-q` prints node ids on 8 and 9.
+    # Safe to clear: repo addopts carries only `-q`; testpaths / pythonpath are
+    # separate ini keys, and this call already passes `-p no:cacheprovider` itself.
     code, out = run(
         [
             sys.executable,
             "-m",
             "pytest",
+            "-o",
+            "addopts=",
             "--collect-only",
             "-q",
             "-p",
@@ -150,6 +159,17 @@ def check_evidence(spec_text: str, root: Path) -> bool:
     ids = collected_ids(root)
     known = make_targets(root)
     ok = True
+    if tests and not ids:
+        # Collection produced no ids at all while the spec names test ids. That is a
+        # GATE defect (e.g. a pytest --collect-only format drift), not an evidence
+        # defect — reporting every named id as "missing" here would be the mirror of
+        # the vacuous-green pattern this repo keeps finding: vacuous-RED that hides
+        # the real cause. Fail loud on the cause instead (fix/review-gate-pytest9).
+        print(
+            "FAIL evidence: collection produced no ids — gate defect, not evidence "
+            "defect (check `pytest --collect-only` output format)"
+        )
+        return False
     for t in tests:
         if t not in ids:
             print(f"FAIL evidence: named test does not exist: {t}")
