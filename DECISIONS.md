@@ -296,6 +296,31 @@ below, never deleted.
   ([ARCHITECTURE §8](docs/ARCHITECTURE.md#8-gotchas) gotcha "`make` expands a
   command-line variable at STARTUP"; BACKLOG row struck.)
 
+- **The review gate collects Evidence ids with `-o addopts=`; a collection that
+  yields nothing FAILs as a gate defect, not as "every id missing" (2026-08-23;
+  fix/review-gate-pytest9).** `review_gate.collected_ids` ran `pytest
+  --collect-only -q`, and the repo's `addopts = "-q"` (pyproject) made it `-qq`;
+  under pytest 9 `--collect-only -qq` prints a terse `path: count` summary with no
+  `::` node ids, so it collected ZERO ids and `check_evidence` reported every named
+  test "does not exist" — a real spec could never pass. It stayed hidden because CI
+  never runs `make review-gate` and the only test was the NEGATIVE case
+  (`test_gate_fails_on_a_missing_evidence_test_id`), which passes vacuously when
+  collection returns nothing — the vacuous-green pattern, mirrored. Fix:
+  `-o addopts=` clears the inherited `-q` so exactly one reaches pytest and node ids
+  print (safe — repo addopts carries only `-q`); the fixture repo now mirrors that
+  config; and the check FAILs loud on zero ids (a GATE defect) instead of blaming
+  the evidence. The zero-ids message names its cause: a nonzero pytest exit → the
+  collection ERRORED (a broken test module), zero → the format drift — a guard whose
+  message asserts the wrong cause is the same confident-and-wrong class the gate
+  exists to catch (review-round r1). That `-o addopts=` changes only verbosity, not
+  WHAT collects, is pinned as count parity (node-id count == the summed `path: count`
+  of a plain run), so a future addopts smuggling in `-m`/`--ignore`/`-p` fails loud —
+  not as a string-match on "addopts is only -q". Lesson, recorded because this repo
+  keeps re-finding it: a guard that can only report the negative is a guard that can
+  pass on nothing — pin the positive AND the "collected > 0" precondition. First
+  surfaced by 18a, the first phase to run the Evidence check under pytest 9.
+  (BACKLOG: the CI gap.)
+
 - **Model-written text never reaches an oracle; the tag carries a round number
   and nothing else (2026-08-23; PR #35 review cap, security track).** Rounds 2
   and 3 each found a hole inside the guard the previous round had added

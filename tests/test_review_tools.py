@@ -4,6 +4,7 @@ the whole module runs in a few seconds (three short pytest subprocesses)."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +82,12 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     (root / "pkg").mkdir(parents=True)
     (root / "pkg" / "__init__.py").write_text("")
     (root / "pkg" / "mod.py").write_text(MOD)
+    # Mirror the real repo's pytest config: `addopts = "-q"`. The gate adds its own
+    # `-q`, so this is what makes `--collect-only` doubly quiet — the exact
+    # condition that hid the pytest-9 `path: count` bug (fix/review-gate-pytest9).
+    # Without it the fixture never reproduced the real repo and the evidence tests
+    # were vacuous.
+    (root / "pyproject.toml").write_text('[tool.pytest.ini_options]\naddopts = "-q"\n')
     (root / "tests").mkdir()
     (root / "tests" / "test_mod.py").write_text(TEST)
     (root / "specs").mkdir()
@@ -106,6 +113,85 @@ def test_gate_fails_on_a_missing_evidence_test_id(repo: Path, capsys) -> None:
         in out
     )
     assert "test_guarded" not in out  # the existing id is not reported
+
+
+def test_gate_collects_ids_and_passes_on_an_existing_id(repo: Path, capsys) -> None:
+    # The positive path the negative test above could never prove: collection must
+    # yield ids (nonzero) and a spec naming ONLY a real id must PASS. Under the real
+    # repo's `addopts = "-q"` + the gate's own `-q`, pytest 9's `--collect-only -qq`
+    # printed `path: count` and collection returned NOTHING — every id looked
+    # missing. `-o addopts=` in collected_ids restores node ids (the fix).
+    assert gate.collected_ids(repo), "collection produced no ids (the pytest-9 bug)"
+    only_real = SPEC.replace("| 2 | `tests/test_mod.py::test_missing` |\n", "")
+    ok = gate.check_evidence(only_real, repo)
+    out = capsys.readouterr().out
+    assert ok is True
+    assert "PASS evidence" in out
+
+
+def test_gate_fails_loud_when_collection_yields_no_ids(
+    repo: Path, capsys, monkeypatch
+) -> None:
+    # Zero ids with a CLEAN exit is a format-drift GATE defect, not an evidence
+    # defect. The guard must say so once — never report every named id as missing,
+    # the vacuous-RED mirror of the vacuous-green pattern.
+    monkeypatch.setattr(gate, "_collect", lambda root: (0, "", set()))
+    ok = gate.check_evidence(SPEC, repo)
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "collection produced no ids — gate defect, not evidence defect" in out
+    assert "test_guarded" not in out and "test_missing" not in out  # no per-id noise
+
+
+def test_gate_reports_a_collection_error_distinctly(
+    repo: Path, capsys, monkeypatch
+) -> None:
+    # Zero ids with a NONZERO exit means collection ERRORED (a broken test module),
+    # not the format drift — the message must name that cause, not the other, so it
+    # is confident-and-right (review-round r1-#1).
+    err = "E   ImportError: cannot import name 'gone' from 'pkg.mod'"
+    monkeypatch.setattr(
+        gate, "_collect", lambda root: (2, f"collecting...\n{err}", set())
+    )
+    ok = gate.check_evidence(SPEC, repo)
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "collection errored (pytest exit 2)" in out
+    assert "ImportError" in out  # the stderr tail is surfaced
+    assert "gate defect" not in out  # NOT the format-drift message
+
+
+def test_addopts_clear_does_not_change_what_collects() -> None:
+    # `-o addopts=` must change only pytest's VERBOSITY, not WHAT collects. Pin it as
+    # count parity: the node-id count from the gate's `-o addopts=` run equals the
+    # summed `path: count` total from a plain `--collect-only` run (doubled `-q` via
+    # the repo's addopts). A future addopts smuggling in `-m` / `--ignore` / a `-p`
+    # filter would change the set and fail HERE — where a string-pin on "addopts is
+    # only -q" would not (review-round r1-#2). Runs against the real repo.
+    root = Path(__file__).parent.parent
+    env = common.suite_env(root, ctv_int="1")
+    py = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    ]
+    # node-id form (the gate's run: `-o addopts=` → single -q → one line per node)
+    _, node_out = common.run([*py, "-o", "addopts="], root, env=env)
+    node_count = sum(
+        1 for ln in node_out.splitlines() if "::" in ln and not ln.startswith(" ")
+    )
+    # terse form (inherits the repo's addopts `-q` → doubled -q → `path: count`)
+    _, terse_out = common.run(py, root, env=env)
+    total = sum(
+        int(m.group(1))
+        for ln in terse_out.splitlines()
+        if (m := re.match(r"^\S+: (\d+)$", ln))
+    )
+    assert node_count == total > 0, (node_count, total)
 
 
 def test_gate_fails_on_a_record_file_absent_from_the_diff(repo: Path, capsys) -> None:
