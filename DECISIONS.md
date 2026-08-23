@@ -205,6 +205,32 @@ below, never deleted.
   which the branch did not contain — the reverse-order-load pin for the version
   invariant; the 18a session writes the test, the Evidence row stands.
 
+- **The review loop's judgment-free edges are scripts; the three judgments stay
+  human (2026-08-23).** The loop is a graph — implement → review → fix → re-review
+  → gate — and the Phase-18a rounds showed which edges carry no judgment and were
+  still done by hand, late, and inconsistently. Automated (`tooling/review-round`):
+  **suite + lint + docs guard before any agent** (`make review-gate` — an agent
+  reviewing a red tree reviews noise); **Evidence rows exist** (a named test id is
+  a claim; `pytest --collect-only` settles it); **Record-updates list vs the diff**
+  (a list nobody diffs is prose); **deleted-symbol grep** (self-review item 1 was
+  the most-skipped item); **the mutation sweep** (`make mutate` — "delete this call,
+  does the suite notice" found the real 18a bugs and is a loop, not a judgment);
+  **the round's diff range** (a local `review-round-N` tag — round N+1 reviews
+  exactly what round N's fixes touched, no hand-picked SHA); **the cap arithmetic**
+  (every correctness finding inside the previous round's range → print CAP). Human,
+  and why: **"is this finding real"** — a verdict needs the spec's intent, which
+  only the reader of the spec holds; **"is this fix a design change"** — the
+  Fix-amendments rule turns on what a change MEANS (a write path moved, not a line
+  count), which no diff classifier sees; **"is the phase done"** — the DONE
+  command proves the contract, the developer decides whether the contract was the
+  right one. Alternative not taken: one orchestrating agent that owns the whole
+  loop (runs the gate, reviews, fixes, re-reviews, decides) — rejected because
+  the cap can only be called from OUTSIDE the round: an agent inside the loop is
+  the thing generating the findings it would have to stop, and 18a's three rounds
+  were exactly a loop that could not see itself. The command therefore tags and
+  reports, and the scripts exit non-zero; nothing in `tooling/` edits, commits, or
+  pushes.
+
 ## Appendix — by phase
 
 ### Phase 0

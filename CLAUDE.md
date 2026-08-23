@@ -239,6 +239,22 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   writes the same reconciled rows. No API tokens; isolated for the same
   shared-conversion_id reason
 - `make lint` — ruff via pre-commit
+- `make review-gate [SPEC=specs/<file>.md] [BASE=main] [DELETED=a,b]` — the
+  offline review gate (`scripts/review_gate.py`): `make test` + `make lint` +
+  `make check-docs`, then with SPEC every Evidence test id / `make` target exists
+  (`pytest --collect-only`, `make -n`) and every Record-updates file is in `git
+  diff BASE..HEAD` (record files in the diff but off the list → WARN); DELETED
+  greps the tracked tree for each removed symbol (struck / `<!-- historical -->`
+  lines exempt). One process, one line per check, exit 1 on any FAIL. SPEC is
+  validated in-process as an existing file under `specs/`; nothing else is
+  derived from it. `/review-round N` runs it first
+- `make mutate SPEC=specs/<file>.md` — the mutation sweep (`scripts/mutate.py`):
+  each line of the spec's Invariants ```mutations block (`path.py::func op`; ops
+  exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`)
+  is applied to HEAD in a temporary `git worktree` (never this tree), the offline
+  suite runs there, the worktree is removed (`finally`). One line per mutation,
+  `KILLED` or `SURVIVED` + file:line; exit 1 on any survivor. ~30 s per mutation
+  at repo size
 
 Canonical clean-state demos (a clean state is a clean lake too — the lake outlives
 `make down`, and a `run-hot` over a lake that already holds a reconcile pass's rows
@@ -416,6 +432,7 @@ standard way over the clever way.
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
   fourth round of patches on patches.
+- `/review-round N` is the review gate; round 1 before the first agent run.
 - Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
   list (`/review-round N+1`). A finding on code unchanged since round N−1 is
   labelled **"missed in round N"** so the review's own drift is visible
@@ -518,10 +535,14 @@ never auto-fixed, ignored, or committed around.
   each phase exit, before the phase PR merges.
 - `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
   commit (suite, DONE command, determinism, fixtures), then stops.
-- `/review-round N` command — `.claude/commands/review-round.md`; prints round
-  N−1's diff range and the spec's Invariants list, runs code-reviewer +
-  functionality-tester scoped to that range with the "missed in round N−1"
-  labelling, applies the review cap, then stops. Read-only, report-only.
+- `/review-round N` command — `.claude/commands/review-round.md`; runs `make
+  review-gate` + `make mutate` first (red → no agents spawned), derives the range
+  (round 1 `main..HEAD`; round N the local tag `review-round-(N−1)..HEAD`, tagged
+  at the end, never pushed), prints the spec's Invariants list, runs
+  code-reviewer + functionality-tester scoped to the range with the "missed in
+  round N−1" labelling (+ security-reviewer in round 1 when CI / compose /
+  ClickHouse users / .env / agent are touched), prints the consolidated finding
+  table and the CAP line, then stops. Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 
@@ -531,7 +552,7 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
 (PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
 reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
-"Process"). Open BACKLOG rows: **32** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+"Process"). Open BACKLOG rows: **33** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
