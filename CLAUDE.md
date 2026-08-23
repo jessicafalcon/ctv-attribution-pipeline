@@ -264,8 +264,9 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
 - `make mutate SPEC=specs/<file>.md` — the mutation sweep (`scripts/mutate.py`):
   each line of the spec's Invariants ```mutations block (`path.py::func op`; ops
   exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`)
-  is applied to HEAD in a temporary `git worktree` under the system temp dir
-  (never this tree; no env knob), the offline suite runs there with the reduced
+  is applied to HEAD in a temporary `git worktree` — the checkout under the
+  system temp dir (no env knob), its registration under `.git/worktrees/`,
+  `git worktree list` asserted equal before/after (never this tree) — the offline suite runs there with the reduced
   child env (PATH / HOME / PYTHONPATH / CTV_INT — never credentials), the worktree
   is removed (`finally`; stale ones pruned at start). `constant-return:<v>` must
   be a Python literal ≤ 64 chars (`ast.literal_eval`) or the whole run is refused
@@ -458,7 +459,8 @@ standard way over the clever way.
   review-gate`, `make mutate`) runs before any agent is spawned, in every round.
 - Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
   list (`/review-round N+1`). A finding on code NOT changed inside that range —
-  code an earlier round already reviewed — is labelled **"missed in round N"**
+  code an earlier round already reviewed — is labelled **"missed in round N−1"**
+  (N−1 = the round whose fixes the range covers; the one literal form)
   so the review's own drift is visible alongside the code's.
 
 ### Before reporting DONE
@@ -522,9 +524,10 @@ Index only — hooks fire from the developer's local, gitignored
 `.claude/settings.local.json`; agents and commands self-describe in their
 own files. All agents are report-only by contract: none carry Write/Edit
 (one stated carve-out: functionality-tester may `git worktree add` a throwaway
-checkout under `mktemp -d`, mutate THERE, and remove it — a filesystem write
-outside the working tree, never an edit in it; `git status --porcelain` must
-match before and after),
+checkout under `mktemp -d`, mutate THERE, and remove it — a write to the system
+temp dir plus a registration under `.git/worktrees/`, never an edit in the
+working tree; `git status --porcelain` AND `git worktree list` must match before
+and after),
 and their instructions forbid fixing, committing, or working around
 findings. A finding is fixed in the main session or explicitly accepted —
 never auto-fixed, ignored, or committed around.
@@ -571,8 +574,8 @@ never auto-fixed, ignored, or committed around.
   prints the spec's Invariants list, runs code-reviewer + functionality-tester
   scoped to the range with the "missed in round N−1" labelling (+
   security-reviewer in round 1 when CI / compose / ClickHouse users / .env /
-  agent are touched), then writes the round's ANNOTATED local tag (range, agents,
-  correctness count, the cap bit — never pushed) BEFORE the cap check, prints the
+  agent are touched), then writes the round's ANNOTATED local tag (six `key=value`
+  lines: round, range, agents, correctness, cap, gate — never pushed) BEFORE the cap check, prints the
   consolidated finding table and the CAP / "cap watch" / "no cap" line, then
   stops. The cap reads round N−1's bit from its tag and fails closed (missing or
   unparsable → "no"). Read-only, report-only.

@@ -1,5 +1,5 @@
 ---
-description: Review round N — run make review-gate + make mutate (stop on red), derive the round's diff range (round 1 main...HEAD; round N the review-round-(N−1) tag), print the spec's Invariants, spawn code-reviewer + functionality-tester (+ security-reviewer in round 1 when the surface is touched) scoped to the range with "missed in round N−1" labelling, tag HEAD review-round-N, print the consolidated table and the two-round cap check. Read-only, report-only, then STOP.
+description: Review round N on a phase branch (tooling/fix/docs branches get one line — run the agents directly). Step 1 derives the range (round 1 main...HEAD; round N the review-round-(N−1) tag) and refuses an existing review-round-N tag; step 2 runs make review-gate + make mutate (red → no agents); step 3 prints the spec's Invariants; step 4 spawns code-reviewer + functionality-tester (+ security-reviewer in round 1 when the surface is touched) scoped to the range with "missed in round N−1" labelling; step 5 writes the ANNOTATED local tag (six key=value lines, never pushed), then the consolidated table and the two-round cap check — fail-closed, parsed anchored — printing CAP / cap watch / no cap. Read-only, report-only, then STOP.
 ---
 
 Run review round **$ARGUMENTS** (an integer N ≥ 1) on the current phase branch.
@@ -14,7 +14,7 @@ worktrees `make mutate` registers and removes under `.git/worktrees/`.
 - Scope: phase branches only. If the branch is not `phase-*` (a `tooling/*`,
   `fix/*`, `docs/*` branch) print ONE line and STOP:
   `no phase spec for <branch> — tooling/fix branches run the agents directly
-  (CLAUDE.md Git workflow)`. Never die on a missing `--spec`; never invent a spec
+  (CLAUDE.md Project tooling)`. Never die on a missing `--spec`; never invent a spec
   so the sweep has something to mutate.
 - Spec: the one `specs/phase-*.md` whose slug matches the branch name
   (`phase-18a-cost-and-ops` → `specs/phase-18a-cost-and-ops.md`). If none

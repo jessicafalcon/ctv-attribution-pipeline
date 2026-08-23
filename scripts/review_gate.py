@@ -65,7 +65,7 @@ def check_make(target: str, root: Path) -> bool:
 def check_lint(root: Path) -> bool:
     """Read-only lint. NOT `make lint`: pre-commit's ruff-format hook rewrites
     files in place — in exactly the failing case — and a gate must not share a
-    medium with the tree it judges (coherence audit B7, PR #35)."""
+    medium with the tree it judges (PR #35 coherence audit r1-B7)."""
     ok = True
     for name, cmd in (
         ("ruff check", ["uv", "run", "ruff", "check", "."]),

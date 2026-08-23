@@ -216,7 +216,11 @@ below, never deleted.
   the most-skipped item); **the mutation sweep** (`make mutate` — "delete this call,
   does the suite notice" found the real 18a bugs and is a loop, not a judgment);
   **the round's diff range** (a local `review-round-N` tag — round N+1 reviews
-  exactly what round N's fixes touched, no hand-picked SHA); **the cap arithmetic**
+  exactly what round N's fixes touched, no hand-picked SHA); **the cap arithmetic** — a
+  PROCEDURE the command follows, not an automated edge: the gate and the sweep are
+  scripts with exit codes, while the range, the tag and the cap are steps the model
+  executes from the command text (the tag persists their state; nothing verifies the
+  count the model writes). It is a procedure until it is a script line
   (the written two-round rule: this round AND the previous one reported
   correctness findings only inside the previous round's fixes → print CAP; the
   first cut fired after one quiet round, and 18a is the evidence against that —
@@ -232,13 +236,13 @@ below, never deleted.
   the thing generating the findings it would have to stop, and 18a's three rounds
   were exactly a loop that could not see itself. The command therefore tags and
   reports, and the scripts exit non-zero; the round's state is its ANNOTATED local
-  tag (range, agents, correctness count, the cap bit — the artifact the next
+  tag (six `key=value` lines: round, range, agents, correctness, cap, gate — the artifact the next
   round's range derivation already reads; `data/` is disposable by design, so a
   cap reading state from there would silently revert to one-round), read
   fail-closed; `/review-round` is for phase branches only — tooling / fix / docs
   PRs run the agents directly, as this one did; nothing in `scripts/review_gate.py` /
-  `scripts/mutate.py` edits, commits, or pushes, and the command's only write is a
-  local `review-round-N` tag. Two rulings from its review gate: `constant-return:<v>`
+  `scripts/mutate.py` edits, commits, or pushes; the command's writes are a local
+  tag and a temporary worktree, removed in `finally`. Two rulings from its review gate: `constant-return:<v>`
   is `ast.literal_eval`'d — spec text is model-authored and never reaches exec —
   and the Makefile passes `$(value SPEC|BASE|DELETED)` through the `_Q` quoter so
   an env-origin `$(shell …)` reaches Python as text. That closes, for these three
@@ -2006,12 +2010,13 @@ below, never deleted.
   environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
   `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
   single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
-  *(Corrected in place, PR #35 coherence audit, 2026-08-22: `$(value)` was never
-  in `lake-reset` or any recipe of this phase — the actual guard is the
-  one-process design: `lake/destructive.py` validates, prompts, acts, and Make
-  never interpolates into a guard. `$(value)` + `_Q` first appear in PR #35's
-  `review-gate` / `mutate` recipes; every `"$(PROFILE)"` recipe gets them in
-  `fix/make-quote-profile` — BACKLOG row.)*
+  *(Annotated in place, PR #35 coherence audit round 3, 2026-08-23: `$(value
+  PROFILE)` first appeared in Phase 17's gate-2 shell guard (`42acc39`) and left
+  with it at gate 3 (`e5cca5a`), when the destructive paths became one Python
+  process that validates the profile itself; #35 reintroduces `$(value)` beside
+  the new `_Q` single-quote escaping so the argument reaches Python as one
+  literal. The Phase-17 sentence was stale, not false. Every `"$(PROFILE)"`
+  recipe gets `_Q`/`$(value)` in `fix/make-quote-profile` — BACKLOG row.)*
   (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
   exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
   `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model

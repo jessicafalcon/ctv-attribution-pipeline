@@ -14,7 +14,7 @@ Four checks (1-3 over README.md and every docs/*.md; 4 over CLAUDE.md/BACKLOG.md
      identity exists in source, matched as an exact token (a partial rename such
      as `_canonicalize` → `_canonicalize_tables` FAILS; BACKLOG 37).
   4. BACKLOG count — CLAUDE.md's "Open BACKLOG rows: **N**" equals the un-struck
-     rows in BACKLOG.md (the sentence two branches rewrite; PR #35 audit D8).
+     rows in BACKLOG.md (the sentence two branches rewrite; PR #35 audit r1-D8).
 Accuracy TABLE cells are guarded separately by tests/test_docs_accuracy_pins.py.
 """
 
@@ -369,7 +369,8 @@ def check_traces(errors: list[str]) -> int:
 def check_backlog_count(errors: list[str]) -> int:
     """CLAUDE.md's stated open-row count == the un-struck rows in BACKLOG.md. Two
     branches that both add rows and both rewrite the sentence land a wrong count
-    on whichever merges second (PR #35 audit D8); here it is an edit-time failure."""
+    on whichever merges second (PR #35 audit r1-D8); here it is an edit-time
+    failure."""
     backlog = (ROOT / "BACKLOG.md").read_text().splitlines()
     actual = sum(1 for ln in backlog if ln.startswith("| **"))
     m = re.search(r"Open BACKLOG rows: \*\*(\d+)\*\*", (ROOT / "CLAUDE.md").read_text())
