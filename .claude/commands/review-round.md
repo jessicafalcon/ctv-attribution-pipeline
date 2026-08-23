@@ -96,25 +96,33 @@ round's record (`git tag -l --format='%(contents)' 'review-round-*'` is the
 audit trail):
 
 ```
-git tag -a review-round-N HEAD -m "round: N
-range: <RANGE>
-agents: code-reviewer, functionality-tester[, security-reviewer]
-correctness-findings: <count>
-correctness-only-in-previous-fixes: yes|no
-gate: review-gate OK, mutate <killed>/<total>"
+git tag -a review-round-N HEAD -m "round=N
+range=<RANGE>
+agents=code-reviewer,functionality-tester[,security-reviewer]
+correctness=<count>
+cap=<yes|no|n/a>
+gate=review-gate:OK mutate:<killed>/<survived>/<errors>"
 ```
+
+The message is EXACTLY these six `key=value` lines and nothing else — never a
+finding title, never free text (DECISIONS "Process": model-authored text never
+reaches a control decision). `cap` is `yes` when every correctness finding in
+this round's table falls inside `review-round-(N−1)..HEAD`, `no` otherwise,
+`n/a` in round 1 (no previous fixes). `gate` keeps ERROR as a third state,
+never folded into survived.
 
 Local; never pushed — `git push` sends no tag unless asked, and this command
 never pushes.
 
 Cap check (CLAUDE.md Workflow rules, "Review cap" — two consecutive rounds).
-Let THIS = "every correctness finding in this table falls inside
-`review-round-(N−1)..HEAD`" (the previous round's fixes). Let PREV = the
-`correctness-only-in-previous-fixes` line of the `review-round-(N−1)` tag's
-message — read it with `git tag -l --format='%(contents)' review-round-(N−1)`.
-**Fail closed:** a missing tag, a message without that line, or any value other
-than the literal `yes` means PREV = no (the cap is a ship decision; its default
-is "don't"). If N ≥ 3 and THIS and PREV, print:
+THIS = this round's `cap` value above. PREV = the `cap` line of the
+`review-round-(N−1)` tag, read with `git tag -l --format='%(contents)'
+review-round-(N−1)` and parsed ANCHORED: the line must match `^cap=(yes|no|n/a)$`
+exactly, every line of the message must match `^(round|range|agents|
+correctness|cap|gate)=.*$`, and each key appears once — anything else is a
+**parse error** that stops the command ("tag review-round-(N−1) is not a round
+record"), never a default. A missing tag stops the same way. If N ≥ 3 and
+THIS=yes and PREV=yes, print:
 
 ```
 CAP: fixes are generating findings — write the invariant, re-implement once
@@ -122,7 +130,7 @@ CAP: fixes are generating findings — write the invariant, re-implement once
 
 and STOP; the next step is a fix amendment, then ONE scoped pass (the round
 after this one, against the tag just written), not another round of patches.
-Otherwise print **"no cap"** — and, when N ≥ 2 and THIS alone holds, **"cap
+Otherwise print **"no cap"** — and, when N ≥ 2 and THIS=yes alone, **"cap
 watch: one more such round trips the cap"** (CLAUDE.md Workflow rules).
 
 Close with the one line the developer decides on per finding: **fix

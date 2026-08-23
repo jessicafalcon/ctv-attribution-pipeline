@@ -64,12 +64,17 @@ what the four operators cannot express:
    fits.
 2. **Hand-mutate only what the operators can't reach** — a swapped argument
    pair, an off-by-one on a window edge, a dropped `FINAL`, a boundary value —
-   and only in a worktree, never this tree: `D=$(mktemp -d)`; `git worktree add
-   --detach "$D/ft" HEAD`; edit THERE; run the suite the way `scripts/mutate.py`
-   does — `.venv/bin/python -m pytest -q -x -p no:cacheprovider
-   --ignore=tests/integration` with `cwd="$D/ft"`, `PYTHONPATH="$D/ft"`, `CTV_INT=0`
-   (never `uv run` in the worktree: it would provision a venv there); then
-   `git worktree remove --force "$D/ft"` and `rmdir "$D"`.
+   and only in a worktree, never this tree. Capture the interpreter ABSOLUTELY
+   before leaving the main tree — `PY="$PWD/.venv/bin/python"` (the worktree has
+   no `.venv`; it is gitignored) — then `D=$(mktemp -d)`; `git worktree list`
+   (keep the output); `git worktree add --detach "$D/ft" HEAD`; edit THERE; run
+   the suite the way `scripts/mutate.py` does: `"$PY" -m pytest -q -x -p
+   no:cacheprovider --ignore=tests/integration` with `cwd="$D/ft"`,
+   `PYTHONPATH="$D/ft"`, `CTV_INT=0` (never `uv run` in the worktree: it would
+   resolve a second environment per mutation; `uv sync` is `make setup`'s job);
+   then `git worktree remove --force "$D/ft"`, `git worktree prune`, `rmdir "$D"`,
+   and `git worktree list` must equal what you kept — `git status` cannot see
+   `.git/worktrees/`.
    `git status --porcelain` in the main tree must be identical before and after;
    a dirty main tree at the end of your run is your own finding. Never commit a
    mutation; never mutate `fixtures/`.

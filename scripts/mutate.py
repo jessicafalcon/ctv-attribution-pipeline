@@ -34,11 +34,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_common import (  # noqa: E402
@@ -104,23 +105,30 @@ def parse_mutations(spec_text: str) -> list[Mutation]:
             )
         if arg:
             _literal_or_refuse(arg)
-        if (
-            Path(file).is_absolute()
-            or ".." in Path(file).parts
-            or not file.endswith(".py")
-        ):
-            raise Refused(
-                f"refusing: mutation target must be a repo-relative .py path: {file!r}"
-            )
-        if file.startswith("tests/"):
-            raise Refused(
-                f"refusing: {file!r} is under tests/ — the sweep never mutates the "
-                "oracle it judges by (every operator, not only delete-call)"
-            )
-        out.append(Mutation(file, func, op, arg))
+        out.append(Mutation(_repo_path(file), func, op, arg))
     if not out:
         raise Refused("refusing: the mutations block is empty")
     return out
+
+
+def _repo_path(file: str) -> str:
+    """A mutation target, resolved ONCE and gated on `Path.parts`, never on a
+    string prefix (DECISIONS "Process", the model-text invariant): `./tests/x.py`,
+    `tests/../lake/x.py` and `lake/./x.py` all normalize first, then the rules —
+    relative, no `..`, `.py`, not under tests/ — apply to the parts."""
+    parts = PurePosixPath(os.path.normpath(file)).parts
+    if not parts or Path(file).is_absolute() or ".." in parts or parts[0] == "..":
+        raise Refused(
+            f"refusing: mutation target must be a repo-relative path: {file!r}"
+        )
+    if not parts[-1].endswith(".py"):
+        raise Refused(f"refusing: mutation target must be a .py file: {file!r}")
+    if parts[0] == "tests":
+        raise Refused(
+            f"refusing: {file!r} is under tests/ — the sweep never mutates the "
+            "oracle it judges by (every operator, not only delete-call)"
+        )
+    return "/".join(parts)
 
 
 def _literal_or_refuse(arg: str) -> None:
@@ -287,6 +295,7 @@ def sweep(
     survivors = 0
     errors = 0
     run(["git", "worktree", "prune"], root)  # a SIGKILLed earlier sweep leaves one
+    _, before = run(["git", "worktree", "list"], root)
     for i, m in enumerate(mutations, 1):
         tree = scratch / f"mut-{i}"
         try:
@@ -313,6 +322,10 @@ def sweep(
         finally:
             run(["git", "worktree", "remove", "--force", str(tree)], root)
             run(["git", "worktree", "prune"], root)
+            _, after = run(["git", "worktree", "list"], root)
+            if after != before:  # `git status` cannot see .git/worktrees; this can
+                print(f"ERROR    worktree registry changed after {m}:\n{after}")
+                errors += 1
     bad = survivors + errors
     print(
         f"mutate {'FAIL' if bad else 'OK'}: {len(mutations) - bad}/{len(mutations)} "

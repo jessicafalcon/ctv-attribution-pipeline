@@ -251,6 +251,33 @@ below, never deleted.
   safe inspection)
   after PR #35 merges. Until then the PROFILE residual stands as written.
 
+- **Model-authored text never reaches an oracle or a control decision
+  (2026-08-23; PR #35 review cap, security track).** Rounds 2 and 3 each found a
+  hole inside the guard the previous round had added (`CTV_INT` on the sweep, then
+  `./tests/x.py` through a `startswith("tests/")` check) — the two-round cap fired
+  on the tooling branch itself, and this is the invariant it was re-implemented
+  against, once: *Model-authored text never reaches an oracle or a control
+  decision. The mutations block names where to mutate; the operators, the suite,
+  and the kill verdict are code. A prior round's tag message carries state only
+  in fixed-position fields that the parser anchors (`^key=value$`, exactly these
+  keys, anything else → parse error, never a default); finding text is never in
+  the tag. Paths from the spec are resolved once and gated on `Path.parts`, never
+  on string prefix.* Mechanisms that satisfy it: `scripts/mutate.py::_repo_path`
+  (one `normpath`, rules on the parts — pinned with `./tests/oracle.py`,
+  `tests/./oracle.py`, `lake/../tests/x.py`); the `review-round-N` tag message is
+  exactly six `key=value` lines, `cap=yes|no|n/a` (round 1 writes `n/a`), read
+  line-anchored, any deviation a parse error that stops the command; `gate=`
+  keeps ERROR as a third state, never folded into survived; the functionality-
+  tester's hand worktree uses the interpreter captured absolutely in the main tree
+  (not taken: `uv run` inside the worktree — a second environment per mutation,
+  and `uv sync` is `make setup`'s job) and asserts `git worktree list` equal
+  before/after inside the same try/finally (`git status` cannot see
+  `.git/worktrees/`). Stated residuals, not fixes: the backticked `` `make …` ``
+  scraper checks the first target per span; `make_targets` reads `define` bodies
+  and column-0 continuations — both mitigated by the `.PHONY` equality pin, which
+  goes red on the first non-phony rule BY DESIGN: that rule then gets an explicit
+  entry.
+
 - **Dates in every record are LOCAL dates (the developer's machine, `git log
   --format=%ci`), never GitHub's UTC merge timestamp (2026-08-22).** PR #34 merged at
   04:27 UTC on the 23rd and was first recorded as 08-23 beside commits dated 08-22;

@@ -202,6 +202,7 @@ def test_mutate_reports_survived_and_killed_and_leaves_the_tree_untouched(
     assert (repo / "pkg" / "mod.py").read_text() == MOD
     assert list(scratch.iterdir()) == []  # every worktree removed
     assert "mut-" not in _git(repo, "worktree", "list")
+    assert "worktree registry changed" not in out  # asserted inside the finally
 
 
 @pytest.mark.parametrize(
@@ -260,11 +261,34 @@ def test_make_targets_handles_multi_name_rules_and_skips_assignments(tmp_path):
     assert gate.make_targets(tmp_path) == {"a", "b", "c_d"}
 
 
-def test_mutation_targets_under_tests_are_refused_for_every_operator() -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/conftest.py",
+        "./tests/oracle.py",
+        "tests/./oracle.py",
+        "lake/../tests/x.py",
+    ],
+)
+def test_mutation_targets_under_tests_are_refused_for_every_operator(path: str):
+    # Resolved once, gated on Path.parts — never a string prefix (r3 security 1:
+    # `./tests/oracle.py` walked through `startswith("tests/")`).
     for op in ("delete-call", "constant-return:0", "invert-guard", "swap-sort-key"):
-        text = f"## Invariants\n```mutations\ntests/conftest.py::f   {op}\n```\n"
+        text = f"## Invariants\n```mutations\n{path}::f   {op}\n```\n"
         with pytest.raises(common.Refused, match="under tests/"):
             mutate.parse_mutations(text)
+
+
+def test_mutation_target_escaping_the_repo_is_refused() -> None:
+    for path in ("tests/../../x.py", "../lake/x.py", "/abs/x.py", "lake/x.txt"):
+        text = f"## Invariants\n```mutations\n{path}::f   invert-guard\n```\n"
+        with pytest.raises(common.Refused, match="refusing"):
+            mutate.parse_mutations(text)
+
+
+def test_mutation_target_is_normalized_once() -> None:
+    text = "## Invariants\n```mutations\nlake/./sub/../x.py::f   invert-guard\n```\n"
+    assert mutate.parse_mutations(text)[0].file == "lake/x.py"
 
 
 def test_untracked_target_is_one_error_line_and_the_sweep_continues(
