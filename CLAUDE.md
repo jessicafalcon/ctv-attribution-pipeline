@@ -621,10 +621,12 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
-(spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22 — the branch's commit 1;
-`main` merged in 2026-08-23 to bring it current before its PR). **Last merged:
-`fix/review-gate-pytest9` (PR #37, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
+**Current phase: 18a (cost and ops levers) — in review (PR #38)** on
+`phase-18a-cost-and-ops` (spec `specs/phase-18a-cost-and-ops.md`, reconciled
+2026-08-22 — the branch's commit 1; `main` merged in 2026-08-23 to bring it current;
+`## Invariants` added review-round 1; round-1 + coherence fixes applied, gate 5/5,
+mutate 7/7, coherence-auditor clear). **Last merged: `fix/review-gate-pytest9`
+(PR #37, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
 Next in order: 18b (its spec carries a "Pre-branch reconciliation required" banner;
 its branch's commit 1 is that amendment — DECISIONS "Process").
 Open BACKLOG rows: **42** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
