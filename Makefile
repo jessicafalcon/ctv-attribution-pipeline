@@ -345,6 +345,7 @@ test-int-lakehouse:
 test-alerts:
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) check rules /rules/alerts.yml
 	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_test.yml
+	docker run --rm -v "$(PWD)/observability/rules:/rules:ro" --entrypoint promtool $(PROM_IMAGE) test rules /rules/tests/alerts_synthetic_test.yml
 
 # The one docs guard (Phase 19; was check-runbook, Phase 15): every link/anchor in
 # README.md + docs/ resolves, every `make`-generated block is present under its

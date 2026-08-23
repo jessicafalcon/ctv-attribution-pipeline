@@ -5,6 +5,7 @@ capture is reproducible — are `tests/integration/test_metrics_ro.py` and the
 two-capture diff in the phase gate.
 """
 
+import pytest
 from prometheus_client.exposition import generate_latest
 from prometheus_client.parser import text_string_to_metric_families
 
@@ -77,16 +78,18 @@ def test_settle_does_not_accept_a_sample_taken_mid_merge() -> None:
     assert (counts, backlog) == (stable, 0.0)
 
 
-def test_settle_gives_up_rather_than_hanging_a_pipeline_run(monkeypatch) -> None:
-    # A scrape is the LAST thing `make run` does; it must never be able to hold the
-    # run open. On timeout it reports the last sample — an unsettled capture shows up
-    # as a difference from the next one, which is what the gate's two-capture diff
-    # and the committed fixtures catch.
+def test_a_state_that_never_settles_fails_loudly_instead_of_capturing(
+    monkeypatch,
+) -> None:
+    # The cap bounds how long a scrape may hold `make run` open; it is NOT a
+    # fallback value. Returning the last moving sample would put an irreproducible
+    # number into a committed promtool fixture — the one thing captures exist to
+    # prevent.
     monkeypatch.setattr(ch_scrape, "_SETTLE_TIMEOUT_S", 0.2)
     monkeypatch.setattr(ch_scrape, "_SETTLE_INTERVAL_S", 0.01)
     never = [({"a": (n, n)}, 0.0) for n in range(1, 500)]
-    counts, _, waited = ch_scrape.settle(_Client(never), "default")
-    assert counts and waited < 5
+    with pytest.raises(ch_scrape.UnsettledError, match="would not reproduce"):
+        ch_scrape.settle(_Client(never), "default")
 
 
 def test_scrape_reports_a_zero_for_a_table_that_has_no_parts() -> None:

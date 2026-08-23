@@ -2067,4 +2067,57 @@ below, never deleted.
   reconcile pass may restate nothing, which makes the gate vacuous, and it adds a
   second seed + run to the DONE chain). The read side is a BACKLOG row for 18b, which
   already runs `bench_large`.
+- **The storage scrape is a one-shot function reading a SETTLED state, not a daemon
+  and not a snapshot.** `observability/ch_scrape.py` runs at the end of `make run` /
+  `run-hot` / `metrics-capture`, like the terminal registry dumps beside it (every
+  stage here is a finite drain, so a pull-scrape has nothing to reach after exit; the
+  live path is 18b's Pushgateway). It samples until no merge is running AND the part
+  counts are unchanged across two reads, because a capture taken mid-decay does not
+  reproduce: a clean tiny run ended at 13 active parts and was at 9 a few seconds
+  later. The wait is bounded and RAISES on the cap — a moving number must never reach
+  a committed fixture — and how long it waited is printed, never exported. Evidence:
+  two full clean-stack tiny cycles produced BYTE-IDENTICAL `clickhouse.prom` (13
+  active / 11 unmerged). Rejected: a compose exporter (a new always-on surface for a
+  number that only matters at the end of a pass); returning the last sample on
+  timeout (that is how an invented number gets into a fixture).
+- **`metrics_ro` needs `SHOW TABLES ON default.*` on top of its two system-table
+  grants, and that is not a widening.** ClickHouse filters `system.parts` /
+  `system.merges` rows to tables the user may see, so the first cut — SELECT on those
+  two tables and nothing else — reported "0 active parts": green, wrong, silent
+  (ARCHITECTURE §8). SHOW makes table NAMES visible and no row of data readable;
+  every SELECT / INSERT / ALTER / DROP / CREATE against a pipeline table is still
+  ACCESS_DENIED, pinned by `tests/integration/test_metrics_ro.py` (the mirror of
+  agent_ro's SN2 proof). `agent_ro`'s grants are untouched — a second principal, not
+  a wider first one. Rejected: granting `SELECT ON default.*` (the scraper would gain
+  read access to every attribution row to count parts).
+- **ONE alert rule ships, `PartCountHigh > 150`, and its threshold is the SERVER's
+  number — the documented exception to "fixtures come from real captures".** No
+  threshold between our profiles exists: the clean captures read 5 active parts max on
+  BOTH tiny and long_delay, because part count follows insert batching and merge
+  timing rather than event volume (tiny even has MORE `rollup_dirty` parts than
+  long_delay). 150 is ClickHouse's own `parts_to_delay_insert` default — the point
+  where the server throttles writers — cited in the rule's annotation. Its silence is
+  proven by both real captures; its firing by a synthetic promtool input in a file
+  whose name and header say synthetic (`alerts_synthetic_test.yml`, 151 parts).
+  Rejected: capturing `bench_large` to find a "real" high-part number (what it would
+  pin is merge SCHEDULING, which this repo explicitly carves out of its determinism
+  guarantee — an expensive invented number); lowering the threshold until a capture
+  fires it (inventing the number outright, the Phase-11 false-claim class).
+- **No merge-lag rule ships.** Every settled capture reads
+  `clickhouse_merge_backlog_seconds = 0` (merges over 300-row tables finish in
+  microseconds), so the rule could only be proven by an invented input. The METRIC
+  ships, with the caveat in its HELP text and a test pinning that caveat: measuring
+  without alerting is true; alerting without a fireable measurement is not. BACKLOG
+  row carries the trigger. `clickhouse_unmerged_parts` (level-0 parts) is the
+  deterministic view of pending collapse work and ships beside it.
+- **RUNBOOK incident #1's alert cell says what the new rule would NOT have caught.**
+  The un-merged-part condition is now measured and alerted at the throttle threshold,
+  but this incident's counts were single-digit, so `PartCountHigh` would have stayed
+  silent through it; the guard remains the benchmark's `canonicalize` OPTIMIZE plus
+  the direction assert. Rejected: the reassuring version ("now covered by an alert"),
+  which is the kind of sentence the runbook exists to prevent.
+- **The Phase-19 docs guard paid for itself here.** `make check-docs` failed the
+  moment `docs/RESULTS.md` gained a `make rollup-bench` mention, because the Makefile
+  target did not exist yet — a docs-vs-source drift caught at edit time instead of at
+  a review round, which is exactly what Phase 19 was for.
 

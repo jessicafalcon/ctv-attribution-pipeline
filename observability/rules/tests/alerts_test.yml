@@ -17,7 +17,17 @@ tests:
       - series: 'engine_watermark_lag_seconds'
         values: '17930.763+0x15'
       - series: 'reconcile_restatement_roas_abs_delta'
-        values: '41.42086752637753+0x15'
+        values: '41.4208675263775+0x15'
+      - series: 'clickhouse_active_parts{table="attributed_conversions"}'
+        values: '4+0x15'
+      - series: 'clickhouse_active_parts{table="campaign_hourly"}'
+        values: '1+0x15'
+      - series: 'clickhouse_active_parts{table="exposures_landed"}'
+        values: '5+0x15'
+      - series: 'clickhouse_active_parts{table="report_snapshots"}'
+        values: '2+0x15'
+      - series: 'clickhouse_active_parts{table="rollup_dirty"}'
+        values: '4+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag
@@ -39,6 +49,9 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+      - eval_time: 10m
+        alertname: PartCountHigh
+        exp_alerts: []
   # tiny: fires RestatementMagnitude (real captured values, held across the window)
   - interval: 1m
     input_series:
@@ -51,7 +64,17 @@ tests:
       - series: 'engine_watermark_lag_seconds'
         values: '10367.277+0x15'
       - series: 'reconcile_restatement_roas_abs_delta'
-        values: '12.864678899082577+0x15'
+        values: '12.86467889908257+0x15'
+      - series: 'clickhouse_active_parts{table="attributed_conversions"}'
+        values: '1+0x15'
+      - series: 'clickhouse_active_parts{table="campaign_hourly"}'
+        values: '1+0x15'
+      - series: 'clickhouse_active_parts{table="exposures_landed"}'
+        values: '4+0x15'
+      - series: 'clickhouse_active_parts{table="report_snapshots"}'
+        values: '2+0x15'
+      - series: 'clickhouse_active_parts{table="rollup_dirty"}'
+        values: '5+0x15'
     alert_rule_test:
       - eval_time: 10m
         alertname: ConsumerLag
@@ -67,3 +90,6 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+      - eval_time: 10m
+        alertname: PartCountHigh
+        exp_alerts: []

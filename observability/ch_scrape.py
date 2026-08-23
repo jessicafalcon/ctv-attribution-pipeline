@@ -121,12 +121,19 @@ def _sample(client: Client, db: str) -> tuple[dict[str, tuple[int, int]], float]
     return counts, backlog
 
 
+class UnsettledError(RuntimeError):
+    """The storage state never stopped moving inside the cap. Loud on purpose: a
+    capture taken mid-decay is not reproducible, and the promtool fixtures are baked
+    from captures — a silently unsettled .prom would put an invented number in a
+    committed fixture. The cap is a backstop against hanging a run, not a fallback
+    value."""
+
+
 def settle(client: Client, db: str) -> tuple[dict[str, tuple[int, int]], float, float]:
-    """Sample until the storage state stops moving; return (counts, backlog, waited).
-    On timeout it returns the last sample rather than failing: a scrape must not be
-    able to break a pipeline run, and an unsettled capture announces itself by
-    differing from the next one — which `tests/test_ch_scrape.py` and the gate's
-    two-capture diff are there to catch."""
+    """Sample until the storage STATE stops moving — no merge running and the part
+    counts unchanged across two consecutive reads — and return (counts, backlog,
+    waited). The condition is state, not elapsed time; the cap only bounds how long a
+    scrape may hold a pipeline run open, and reaching it raises."""
     deadline = time.monotonic() + _SETTLE_TIMEOUT_S
     start = time.monotonic()
     previous, backlog = _sample(client, db)
@@ -136,7 +143,11 @@ def settle(client: Client, db: str) -> tuple[dict[str, tuple[int, int]], float, 
         if counts == previous and backlog == 0.0:
             return counts, backlog, time.monotonic() - start
         previous = counts
-    return previous, backlog, time.monotonic() - start
+    raise UnsettledError(
+        f"ClickHouse storage state still moving after {_SETTLE_TIMEOUT_S:.0f}s "
+        f"(last sample {previous}, merge backlog {backlog}s) — a capture taken now "
+        "would not reproduce. Re-run the scrape once the stack is idle."
+    )
 
 
 def scrape(client: Client | None = None) -> dict[str, float]:

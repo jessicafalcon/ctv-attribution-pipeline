@@ -104,17 +104,27 @@ through it).
    new version whether or not their aggregate moved, so the dirty set is a lawful
    superset; on `long_delay` the two sets are in fact equal (19 of 340 keys, 0
    over-refresh) and the run reports which held. *Evidence: Evidence row 2.*
-3. **Part-count and merge-lag are first-class.** A one-shot scraper function
-   (`observability/ch_scrape.py`, no daemon and no new compose service) reads
-   `system.parts` / `system.merges` through a new SELECT-only ClickHouse user
+3. **Storage is measured; ONE rule ships, on the server's own threshold.** A one-shot
+   scraper function (`observability/ch_scrape.py`, no daemon and no new compose service)
+   reads `system.parts` / `system.merges` through a new SELECT-only ClickHouse user
    (`metrics_ro`) at the END of `make run`, `make run-hot` and `make metrics-capture`,
-   and exports `clickhouse_active_parts{table}` and `clickhouse_merge_backlog_seconds`
-   into that stage's terminal registry. Two new alert rules, `PartCountHigh` and
-   `MergeBacklog`, with promtool fixtures recaptured from a real clean-stack run. RUNBOOK
-   incident #1 ("the benchmark that lied") is re-framed: un-merged parts are the operating
-   cost of `FINAL`; its "Would catch it next time" cell changes from **No alert covers
-   this** to the new rules (the un-merged-part *condition* is now alerted; the benchmark
-   harness's own `read_rows` still is not — the cell says which is which).
+   waits for the storage state to settle (no merge running, counts stable across two
+   reads; raises on the cap rather than capturing a moving number) and exports
+   `clickhouse_active_parts{table}`, `clickhouse_unmerged_parts{table}` and
+   `clickhouse_merge_backlog_seconds`. **One** alert rule, `PartCountHigh`
+   (`clickhouse_active_parts > 150`): the threshold is ClickHouse's own
+   `parts_to_delay_insert` default, cited in the rule's annotation, because no
+   threshold "between the profiles" exists — the real captures read 5 active parts max
+   on BOTH tiny and long_delay (part count follows insert batching and merge timing,
+   not event volume). Its SILENCE is proven by the two real captures and its FIRING by
+   a synthetic promtool input (`alerts_synthetic_test.yml`, `active_parts=151` — the
+   file name and header say synthetic). A merge-lag rule is NOT shipped: every settled
+   capture reads `clickhouse_merge_backlog_seconds = 0`, so it could only be proven by
+   an invented number (BACKLOG row; the metric ships regardless — measuring without
+   alerting is true, alerting without a fireable measurement is not). RUNBOOK incident
+   #1 is re-framed: the un-merged-part condition is now measured, and its "Would catch
+   it next time" cell says plainly that `PartCountHigh` would NOT have caught this
+   incident's 4 parts — the benchmark's `canonicalize` OPTIMIZE remains the guard.
    `make check-docs` still passes. *Evidence: Evidence rows 3a–3c.*
 4. **`report_snapshots` has a defined version column.** A migration adds
    `snapshot_version` = `max(processed_at)` over the rows the snapshot summarized —
@@ -146,9 +156,9 @@ Every Done-when item names the test or command output that proves it.
 | 1c (incremental == full) | `make rollup-bench PROFILE=long_delay` output line "campaign_hourly FINAL rows identical (6dp): N keys" |
 | 1d (incremental is cheaper) | same command, "rows read incremental < full" direction assert (magnitude printed, never pinned) |
 | 2 (the gate) | `make rollup-bench PROFILE=long_delay` output line "dirty set == changed set (N keys)"; live pin `tests/integration/test_rollup_dirty.py::test_dirty_set_equals_the_changed_key_set` under `make test-int-long-delay` |
-| 3a (metrics exist, from a real run) | `data/out/long_delay/metrics/*.prom` after `make metrics-capture PROFILE=long_delay` contains `clickhouse_active_parts` and `clickhouse_merge_backlog_seconds`; `tests/test_metrics.py::test_clickhouse_scrape_metrics_are_registered` |
-| 3b (the rules fire and stay silent) | `make test-alerts` — promtool `test rules` over `observability/rules/tests/alerts_test.yml`: `PartCountHigh` + `MergeBacklog` fire on the long_delay fixture, silent on tiny |
-| 3c (RUNBOOK re-frame traced) | `make check-docs` green with the two new alert names in `scripts/check_docs.py` `TRACES`; `tests/test_check_docs.py` |
+| 3a (metrics from a real run, reproducibly) | `data/out/<p>/metrics/clickhouse.prom` after `make metrics-capture`; TWO full clean-stack tiny cycles produce byte-identical files (13 active / 11 unmerged); `tests/test_ch_scrape.py` (8 offline pins incl. the settle contract and "no wall clock in the registry") |
+| 3b (the rule is silent on real captures, fires on the server's threshold) | `make test-alerts` — promtool over `alerts_test.yml` (both real captures: `PartCountHigh` silent) and `alerts_synthetic_test.yml` (`active_parts=151`: fires, annotation matched) |
+| 3c (the principal is scoped, the re-frame traced) | `tests/integration/test_metrics_ro.py` — 7 ACCESS_DENIED cases + the scrape running end-to-end as `metrics_ro`; `make check-docs` green with `PartCountHigh` and both gauge names in `scripts/check_docs.py` `TRACES` |
 | 4a (a real re-run: equal versions, equal rows) | existing `tests/integration/test_reconcile.py::test_second_pass_twins_are_byte_identical` still passes on the migrated table; `make restate` still shows both the pre- and post-reconciliation rows through `FINAL` |
 | 4b (the later version wins a merge) | `tests/integration/test_snapshot_version.py::test_forced_optimize_keeps_the_later_snapshot_version` — insert two rows with an IDENTICAL sort key, different `snapshot_version` and different `revenue`, into a probe created `as report_snapshots` (structure AND engine copied, asserted via `engine_full`, so the DDL property is proven without touching a row the restatement pins read); `OPTIMIZE TABLE … FINAL`; assert the higher-version row survived. The shape is not reachable through the pipeline (a re-run is byte-identical) — the docstring says so, so nobody later reads it as a live failure mode |
 | threat model | `tests/test_makefile.py` — the `rollup-bench` rows of the table below |

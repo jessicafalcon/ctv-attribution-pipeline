@@ -204,9 +204,14 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   populated lake the reconcile candidates are the lake's current rows and a second
   capture differs; recaptured in Phase 18a)
 - `make test-alerts` — `promtool check rules` + `test rules` from the digest-pinned
-  prometheus image: the four alert rules fire on long_delay's captured values;
-  on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
-  ROAS) and the other three stay silent (offline; needs the image, not the stack)
+  prometheus image, over TWO fixtures: `alerts_test.yml` (REAL captured values — the
+  four workload rules fire on long_delay; on tiny only RestatementMagnitude fires, the
+  Phase-16 deferral landing restates ROAS, and `PartCountHigh` is silent on both) and
+  `alerts_synthetic_test.yml` (the one synthetic input in the repo, and the file name
+  says so: `clickhouse_active_parts=151` crosses ClickHouse's own
+  `parts_to_delay_insert` default, proving PartCountHigh's firing side — no profile
+  here leaves a table near that threshold, so no capture can). Offline; needs the
+  image, not the stack
 - `make check-docs` — the one docs guard (`scripts/check_docs.py`, Phase 19; was
   `check-runbook`): every link/anchor in README.md + docs/ resolves; each
   `make`-generated block (`scale-curve`, `cost-levers`) is present under its
@@ -352,7 +357,8 @@ AI sits at the edge; the pipeline is deterministic.
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
-  reconcile_, agent_.
+  reconcile_, agent_, clickhouse_ (the storage scrape, `observability/ch_scrape.py` —
+  how ClickHouse stores the data, never what the data says).
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
 - Engine features (dedup, lateness, eviction) are added one at a time, each
@@ -518,7 +524,7 @@ never auto-fixed, ignored, or committed around.
 (spec `specs/phase-18a-cost-and-ops.md`, RECONCILED 2026-08-22 — the branch's commit 1).
 **Last merged: Phase 19 (PR #33, 2026-08-22).** Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **33** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+DECISIONS "Process"). Open BACKLOG rows: **35** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

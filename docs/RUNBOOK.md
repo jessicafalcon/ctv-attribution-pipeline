@@ -7,9 +7,10 @@ a [`DECISIONS.md`](../DECISIONS.md) entry, or a [`RESULTS.md`](RESULTS.md) numbe
 nothing is invented. If a symptom you hit isn't below, add it in the same format;
 don't guess at a cause.
 
-The four alerts referenced here live in
+The five alerts referenced here live in
 [`observability/rules/alerts.yml`](../observability/rules/alerts.yml):
-`ConsumerLag`, `WatermarkStall`, `MatchRateOutOfBand`, `RestatementMagnitude`.
+`ConsumerLag`, `WatermarkStall`, `MatchRateOutOfBand`, `RestatementMagnitude` and
+`PartCountHigh` (Phase 18a — the storage one).
 Where an incident is **not** covered by any of them, this runbook says so — an
 un-alerted failure mode is worse when you think it's alerted.
 
@@ -63,12 +64,23 @@ data.
 
 **Would catch it next time.** The guard is code-level and deterministic: the
 `canonicalize` OPTIMIZE plus the direction assert in `queries/bench.py`, enforced
-every time `make bench` runs (including in CI). **No alert covers this.** All four
-rules in `alerts.yml` watch live pipeline metrics (`resolve_input_backlog`,
-`engine_watermark_lag_seconds`, the hot match-rate, `reconcile_restatement_roas_abs_delta`);
-none observes the benchmark harness's `read_rows`, which is an offline measurement,
-not a scraped metric. If the OPTIMIZE step is ever removed, nothing in monitoring
-would flag it — only the direction assert would, and only when `make bench` is run.
+every time `make bench` runs (including in CI).
+
+Since Phase 18a the *condition* behind this incident is measured:
+`clickhouse_active_parts{table}` and `clickhouse_unmerged_parts{table}`
+(`observability/ch_scrape.py`, scraped at the end of every `make run` / `run-hot` /
+`metrics-capture`), and `PartCountHigh` alerts when a table passes 150 active parts —
+ClickHouse's own `parts_to_delay_insert` default, the point where the server starts
+throttling writers.
+
+**That alert would NOT have caught incident #1.** This incident's part counts were in
+the single digits (a real capture reads 5 active parts at most on any profile here);
+`PartCountHigh` is about a table heading for insert throttling, not about a benchmark
+measuring un-merged parts. The guard for THIS failure remains the harness's own
+`canonicalize` OPTIMIZE plus the direction assert, and only when `make bench` runs.
+No alert watches the benchmark's `read_rows`, which is an offline measurement rather
+than a scraped metric. What changed is that the un-merged parts are now visible in a
+registry instead of being folklore; what did not change is what would have caught this.
 
 ---
 

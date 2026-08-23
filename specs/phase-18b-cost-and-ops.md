@@ -153,6 +153,12 @@ fall in this half:
   down && make up && make seed PROFILE=long_delay && make run`) it no longer runs:
   it needs `make lake-reset PROFILE=long_delay CONFIRM=yes` after `make down` and
   `PROFILE=long_delay` on `make run` (the engine binds its lake from `--profile`).
+- **"the four existing rules plus the two new ones" → plus the ONE new one.** Phase
+  18a ships `PartCountHigh` only; the merge-lag rule was not shippable from a real
+  capture (every settled capture reads `clickhouse_merge_backlog_seconds = 0`) and is
+  a BACKLOG row. Done-when 6 and the `make test-alerts` bullet must say five rules,
+  and 18a's synthetic fixture (`alerts_synthetic_test.yml`) is a second file the live
+  firing path has to account for (Phase-18a amendment, 2026-08-22).
 - **"cost writer user" → reuses `metrics_ro`.** Phase 18a creates ONE SELECT-only
   ClickHouse user, `metrics_ro` (`clickhouse/users.d/metrics-ro.xml`); this spec's
   Scope line "`clickhouse/users` (cost writer user)" and the pinned decision

@@ -642,6 +642,24 @@ handled.*
   serving table `make replay-serving` does NOT rebuild from the lake
   (`orchestration/replay.py` `SERVING_TABLES`), so a drop-and-recreate migration
   would be unrecoverable data loss (BACKLOG).
+- **`system.parts` and `system.merges` rows are FILTERED by what the user may see, so
+  a SELECT grant on the system table alone reports an empty stack** (Phase 18a, found
+  live). `metrics_ro` was granted `SELECT ON system.parts` + `SELECT ON system.merges`
+  and nothing else; the scrape returned zero rows and printed "0 active parts" —
+  green, wrong, and silent. ClickHouse restricts those rows to tables the user has
+  some privilege on. `GRANT SHOW TABLES ON default.*` is the narrowest fix: it makes
+  table NAMES visible and no data row readable (every SELECT / INSERT / ALTER / DROP /
+  CREATE against a pipeline table is still `ACCESS_DENIED` —
+  `tests/integration/test_metrics_ro.py`). Generalization: a read-only principal that
+  reports ZERO is indistinguishable from a healthy empty system — assert a
+  non-zero somewhere in the test, which is what caught this.
+- **Part counts right after a load are in flux, so a capture must wait for the state
+  to settle** (Phase 18a). A clean `tiny` run ended with 13 active parts; a few
+  seconds later the background merger had it at 9. The promtool fixtures are baked
+  from captures, so `observability/ch_scrape.py` samples until no merge is running and
+  the counts are unchanged across two reads (bounded, and it RAISES on the cap rather
+  than capturing a moving number). With that wait, two full clean-stack cycles produce
+  byte-identical `clickhouse.prom`.
 
 ---
 
