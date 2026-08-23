@@ -243,7 +243,7 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   offline review gate (`scripts/review_gate.py`): `make test` + `make lint` +
   `make check-docs`, then with SPEC every Evidence test id / `make` target exists
   (`pytest --collect-only`, `make -n`) and every Record-updates file is in `git
-  diff BASE..HEAD` (record files in the diff but off the list → WARN); DELETED
+  diff BASE...HEAD` (record files in the diff but off the list → WARN); DELETED
   greps the tracked tree for each removed symbol (struck / `<!-- historical -->`
   lines exempt). One process, one line per check, exit 1 on any FAIL. SPEC is
   validated in-process as an existing file under `specs/`; nothing else is

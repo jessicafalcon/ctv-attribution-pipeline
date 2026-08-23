@@ -312,6 +312,7 @@ TRACES: list[tuple[str, str]] = [
     ("specs/TEMPLATE.md", "Invariants"),
     ("scripts/review_gate.py", "check_evidence"),
     ("scripts/mutate.py", "swap-sort-key"),
+    ("specs/TEMPLATE.md", "```mutations"),
     (".claude/commands/review-round.md", "review-round-"),
 ]
 

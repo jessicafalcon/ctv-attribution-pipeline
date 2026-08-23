@@ -11,7 +11,9 @@ thing `/review-round N` does, before any agent is spawned.
                        Evidence section names must exist (pytest --collect-only,
                        make -n). Needs --spec.
   d. Record updates  — every file on the spec's Record-updates list is in
-                       `git diff --name-only <base>..HEAD` (FAIL); every record
+                       `git diff --name-only <base>...HEAD` (three-dot: the
+                       branch's own changes since the merge-base, so a main that
+                       advanced under the branch adds nothing) (FAIL); every record
                        file in the diff that is NOT on the list is a WARN. --spec.
   e. Deleted symbols — each name in --deleted still found anywhere in the tracked
                        tree (except the spec itself, which names the deletion) is
@@ -154,9 +156,9 @@ def _matches(entry: str, changed: list[str]) -> bool:
 
 
 def check_records(spec_text: str, root: Path, base: str) -> bool:
-    code, out = run(["git", "diff", "--name-only", f"{base}..HEAD"], root)
+    code, out = run(["git", "diff", "--name-only", f"{base}...HEAD"], root)
     if code != 0:
-        print(f"FAIL records: git diff {base}..HEAD failed:\n{tail(out, 3)}")
+        print(f"FAIL records: git diff {base}...HEAD failed:\n{tail(out, 3)}")
         return False
     changed = [ln.strip() for ln in out.splitlines() if ln.strip()]
     listed = record_list(spec_text)

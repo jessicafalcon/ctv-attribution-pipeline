@@ -114,6 +114,25 @@ def test_gate_fails_on_a_record_file_absent_from_the_diff(repo: Path, capsys) ->
     assert "WARN records: record file in the diff but not on the list: README.md" in out
 
 
+def test_gate_diffs_against_the_merge_base_not_mains_tip(repo: Path, capsys) -> None:
+    # Three-dot: main advancing under the branch (18a's situation) must not
+    # surface main's own record edits as drift on the branch.
+    _git(repo, "checkout", "-q", "-b", "branch")
+    (repo / "DECISIONS.md").write_text("base\nphase x\n")
+    (repo / "docs" / "PHASES.md").write_text("row\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "branch records")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "BACKLOG.md").write_text("main moved on\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "main advances")
+    _git(repo, "checkout", "-q", "branch")
+    assert gate.check_records(SPEC, repo, "main") is True
+    out = capsys.readouterr().out
+    assert "BACKLOG.md" not in out  # main's commit is not the branch's drift
+    assert "PASS records: 2 listed record files are in the diff" in out
+
+
 def test_gate_fails_on_a_deleted_symbol_hit(repo: Path, capsys) -> None:
     assert gate.check_deleted(["old_symbol"], repo, None) is False
     assert (
