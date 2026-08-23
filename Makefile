@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench cost-report context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -217,6 +217,14 @@ cost-levers:
 # whose reconcile pass restates something (long_delay).
 rollup-bench:
 	uv run python -m queries.rollup_bench --profile $(call _Q,$(value PROFILE))
+
+# Phase 18b: per-query cost from system.query_log. Tags each report/restate/bench
+# query with a distinct log_comment, reads its cost back (as cost_rw), writes
+# query_cost_daily, and rewrites the "Cost per report query" block in docs/RESULTS.md.
+# Refuses a profile/DB mismatch via the eval_meta marker (BACKLOG 43). Run after
+# `make run PROFILE=<p>` populated the serving tables.
+cost-report:
+	uv run python -m queries.cost_report --profile $(call _Q,$(value PROFILE))
 
 # Dump each stage's terminal Prometheus registry from a REAL run (the provenance
 # of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make

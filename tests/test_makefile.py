@@ -308,6 +308,53 @@ def test_rollup_bench_recipe_has_no_delete_and_no_confirm() -> None:
     assert "CONFIRM" not in recipe and "_YES" not in recipe
 
 
+# ------- cost-report (Phase 18b): same shape as rollup-bench — one Python process,
+# a quoted+validated PROFILE, no delete/CONFIRM (the table is append-only, RMT).
+
+
+def test_cost_report_is_one_python_process_with_a_quoted_profile() -> None:
+    lines = [ln for ln in _dry_run("cost-report", "PROFILE=tiny") if ln.strip()]
+    assert lines == ["uv run python -m queries.cost_report --profile 'tiny'"], lines
+    (line,) = _dry_run("cost-report", 'PROFILE=a"; touch pwned')
+    assert line.count("--profile") == 1 and "touch pwned" in line
+    assert "&&" not in line and ";" not in line.split("--profile")[0]
+
+
+@pytest.mark.parametrize(
+    "value", ["", "../x", 'a"; touch pwned', "Tiny", "tiny/../../etc"]
+)
+def test_cost_report_refuses_a_malformed_profile(value: str) -> None:
+    res = subprocess.run(
+        ["uv", "run", "python", "-m", "queries.cost_report", "--profile", value],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    assert res.returncode != 0, res.stdout
+    assert "is not [a-z0-9_]+" in res.stdout + res.stderr
+
+
+def test_cost_report_profile_from_the_environment_is_still_validated() -> None:
+    res = subprocess.run(
+        ["make", "cost-report"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=clean_env(PROFILE="../x"),
+    )
+    assert res.returncode != 0
+    assert "is not [a-z0-9_]+" in res.stdout + res.stderr
+
+
+def test_cost_report_recipe_has_no_delete_and_no_confirm() -> None:
+    recipe = re.search(
+        r"^cost-report:\n((?:\t.*\n)+)", MAKEFILE.read_text(), re.M
+    ).group(1)
+    assert "rm " not in recipe and "truncate" not in recipe and "drop" not in recipe
+    assert "CONFIRM" not in recipe and "_YES" not in recipe
+
+
 @pytest.mark.parametrize("target", ["review-gate", "mutate"])
 def test_review_tool_spec_value_is_one_literal_argument(target: str) -> None:
     # The first cut interpolated "$(SPEC)"; the threat-model probe
@@ -360,6 +407,7 @@ PROFILE_RECIPE_TARGETS = [
     "context",
     "agent-run",
     "rollup-bench",
+    "cost-report",
 ]
 
 

@@ -41,6 +41,10 @@ services:
       # system.merges plus SHOW TABLES on the five tables it counts — enough to see
       # their parts, not to read a row. agent_ro is unchanged.
       - ./clickhouse/users.d/metrics-ro.xml:/etc/clickhouse-server/users.d/metrics-ro.xml:ro
+      # The cost writer's principal (Phase 18b): SELECT on system.query_log and
+      # INSERT on default.query_cost_daily — its only two grants. A writer, so its
+      # own principal, not a wider metrics_ro. Cannot read a pipeline row.
+      - ./clickhouse/users.d/cost-rw.xml:/etc/clickhouse-server/users.d/cost-rw.xml:ro
     ulimits:
       nofile:
         soft: 262144
