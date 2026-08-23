@@ -371,7 +371,7 @@ standard way over the clever way.
   is the only definition of done. Do not weaken failing tests. If a spec,
   fixture, or ARCHITECTURE.md seems wrong, STOP and report — never silently
   repair.
-- Specs follow `specs/TEMPLATE.md`. Its three added sections are mandatory:
+- Specs follow `specs/TEMPLATE.md`. Its four added sections are mandatory:
   **Evidence** (every Done-when item names the test or command output that
   proves it — an item without evidence is not a Done-when item), **Record
   updates** (the explicit list of record files the phase must change; checked
@@ -402,6 +402,24 @@ standard way over the clever way.
 - Commit at every green state with a descriptive message.
 - End each loop with a summary: what changed + decisions the spec didn't
   cover, listed explicitly for human review.
+- Invariants before mechanisms: `specs/TEMPLATE.md`'s fourth REQUIRED section,
+  **Invariants** — properties stated as "for all X, Y holds", each with the
+  scenario test that falsifies it, written before any pinned decision names a
+  mechanism; a pinned decision names a mechanism only by reference to the
+  invariant it satisfies (DECISIONS "Process", 2026-08-22).
+- Fix amendments: a fix that changes a data structure, a write path, or
+  who-writes-what is a design change, not a fix. It gets a one-paragraph spec
+  amendment (to the Invariants section) naming the invariant it restores,
+  committed alone; STOP for approval before implementing it. Wording-only and
+  test-only fixes do not.
+- Review cap: if two consecutive review rounds report correctness findings
+  only in the previous round's fixes, stop fixing. Write the invariant,
+  re-implement against it ONCE, then one scoped re-review pass — never a
+  fourth round of patches on patches.
+- Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
+  list (`/review-round N+1`). A finding on code unchanged since round N−1 is
+  labelled **"missed in round N"** so the review's own drift is visible
+  alongside the code's.
 
 ### Before reporting DONE
 
@@ -500,6 +518,10 @@ never auto-fixed, ignored, or committed around.
   each phase exit, before the phase PR merges.
 - `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
   commit (suite, DONE command, determinism, fixtures), then stops.
+- `/review-round N` command — `.claude/commands/review-round.md`; prints round
+  N−1's diff range and the spec's Invariants list, runs code-reviewer +
+  functionality-tester scoped to that range with the "missed in round N−1"
+  labelling, applies the review cap, then stops. Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 

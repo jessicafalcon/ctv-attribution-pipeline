@@ -166,6 +166,45 @@ below, never deleted.
   attentional; rejected: reshaping after 18 (the original order) — that is
   reshaping twice.
 
+- **Invariants before mechanisms; fixes that redesign are amendments; a review
+  cap (2026-08-22).** The Phase-18a review gate took three rounds, and each round
+  found correctness bugs in the previous round's fixes. The spec had pinned a
+  mechanism — a one-row refresh watermark — instead of the property it existed to
+  keep ("a row's version is a function of its content, never of the caller or the
+  clock"); so every fix re-implemented the feature under review pressure, without a
+  spec amendment, against no stated property, and round N's fix was round N+1's
+  bug. The review agents checked a fixed checklist and could not see a semantic bug
+  no item named; the strongest findings of the whole gate came from mutation
+  ("delete this call — does the suite notice?"), which no agent had been asked to
+  do. Five rules, recorded in CLAUDE.md Workflow rules, `specs/TEMPLATE.md`, and
+  `.claude/`: (1) **Invariants** is a REQUIRED spec section between Done-when and
+  Pinned decisions — "for all X, Y holds", each with its falsifying scenario test,
+  named before any mechanism; a pinned decision names a mechanism only by reference
+  to the invariant it satisfies. (2) **Fix amendments** — a fix that changes a data
+  structure, a write path, or who-writes-what is a design change: a one-paragraph
+  spec amendment naming the invariant it restores, committed alone, stop for
+  approval. (3) **Review cap** — two consecutive rounds reporting correctness
+  findings only in the previous round's fixes → stop fixing, write the invariant,
+  re-implement against it once, one scoped pass. (4) **Scoped re-review** — round
+  N+1 reviews round N's diff plus the invariant list; a finding on older code is
+  labelled "missed in round N" (`/review-round N`). (5) The agents check what the
+  checklist could not: functionality-tester runs a mandatory **Mutation** step over
+  every new write path and guard and confirms every Evidence-row test exists;
+  code-reviewer reads the Invariants section and flags any mechanism whose value
+  comes from the caller or the clock; coherence-auditor greps the records for
+  sentences naming a mechanism the code no longer has. Alternative not taken, for
+  each of the five: "catch everything at the end" with one bigger final review —
+  rejected because the 18a bugs were mechanism-level (a marker the caller advanced,
+  a version the clock supplied), and only a scenario test written BEFORE the
+  mechanism exists finds those; a larger checklist at the end still has no item
+  naming the bug, and a fourth round of patches on patches is what the cap exists
+  to stop. Landed on `docs/review-invariants`, merged before 18a's final gate so
+  that gate runs under these rules. The rule found a named-but-missing test in 18a
+  on the day it was written: the 18a Evidence table cites
+  `tests/integration/test_rollup_dirty.py::test_load_order_does_not_change_the_dirty_set`,
+  which the branch did not contain — the reverse-order-load pin for the version
+  invariant; the 18a session writes the test, the Evidence row stands.
+
 ## Appendix — by phase
 
 ### Phase 0

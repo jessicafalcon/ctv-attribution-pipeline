@@ -307,6 +307,9 @@ TRACES: list[tuple[str, str]] = [
     ("docs/ARCHITECTURE.md", "read_rows` counts un-merged version-parts"),
     ("docs/ARCHITECTURE.md", "renders DateTime columns in the client's local timezone"),
     ("docs/ARCHITECTURE.md", "The engine is a batch drain, not a continuous follow"),
+    (".claude/commands/review-round.md", "missed in round"),
+    (".claude/agents/functionality-tester.md", "Mutation"),
+    ("specs/TEMPLATE.md", "Invariants"),
 ]
 
 
