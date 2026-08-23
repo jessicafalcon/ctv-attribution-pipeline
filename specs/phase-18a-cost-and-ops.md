@@ -176,6 +176,46 @@ Every Done-when item names the test or command output that proves it.
 The same table, filled with the actual run's output, is item 2 of the "Before
 reporting DONE" checklist (CLAUDE.md Workflow rules).
 
+## Invariants (REQUIRED)
+
+Properties, not mechanisms (specs/TEMPLATE.md). Written at review-round 1 —
+this phase predates the Invariants rule; the properties below are the ones its
+Evidence rows already prove, stated as the contract they were standing in for.
+
+| Invariant ("for all …, … holds") | Falsified by (scenario test) |
+|---|---|
+| 1. For every row this phase writes (`rollup_dirty`, `rollup_refreshed`, `campaign_hourly`, `report_snapshots.snapshot_version`), the version is `max(stamp)` over the rows it summarizes — a function of the data, never of the caller or the clock. | `tests/test_rollup_dirty.py::test_the_loaders_versions_are_data_derived_not_wall_clock`, `::test_the_rollup_row_version_is_data_derived_not_caller_supplied`, `::test_a_reload_of_the_same_day_records_the_same_versions`; `tests/test_snapshot_version.py::test_snapshot_version_is_the_credited_max_processed_at_not_a_clock`; LIVE `tests/integration/test_rollup_dirty.py::test_every_rows_version_equals_the_max_stamp_of_what_it_summarizes`, `::test_a_replayed_refresh_cannot_lose_to_an_earlier_one` |
+| 2. For every key, dirtiness is decided by that key's own pair of versions (`d.version != r.version`), never against any other key or a global maximum; a never-refreshed key is dirty. | `tests/test_rollup_dirty.py::test_a_key_is_dirty_when_its_own_version_differs_not_when_it_beats_a_global_max`, `::test_a_never_refreshed_key_is_dirty_even_if_the_join_yields_null` |
+| 3. For every key whose served rollup row changed, that key was in the set the refresh recomputed (`changed ⊆ dirty`); the served rollup equals a full rebuild. | LIVE `tests/integration/test_rollup_dirty.py::test_every_changed_key_was_refreshed`, `::test_the_served_rollup_equals_a_full_rebuild`; reported by `make rollup-bench` |
+| 4. For every refresh interrupted before its stamp, the next pass recomputes at least the same keys — keys leave the dirty set only through a successful stamp, never through a delete or mutation. | `tests/test_rollup_dirty.py::test_crash_before_the_stamp_re_refreshes_the_same_keys`, `::test_the_dirty_set_is_never_deleted_or_mutated`; LIVE `::test_the_pipeline_converges_to_nothing_dirty` |
+| 5. For any order of day loads (a conversion's day before or after its exposures' day), `rollup_dirty` FINAL is identical. | `tests/test_rollup_dirty.py::test_a_days_load_records_credits_in_both_directions`, `::test_the_loader_records_both_sides_of_a_days_keys`, `::test_the_loader_actually_calls_the_recorders` |
+| 6. For all pipeline paths, the refresh is dirty-filtered; a whole-table rebuild exists only as the bench's measurement oracle. | `tests/test_rollup_dirty.py::test_there_is_no_full_rebuild_branch_in_the_pipeline_path`, `::test_refresh_selects_only_dirty_keys_and_binds_them` |
+| 7. For every capture, the exported storage numbers come from a settled state (two equal samples, no merge running) — an unsettled state raises, never a moving number. | `tests/test_ch_scrape.py::test_settle_returns_once_two_samples_agree_with_no_merge_running`, `::test_settle_does_not_accept_a_sample_taken_mid_merge`, `::test_a_state_that_never_settles_fails_loudly_instead_of_capturing` |
+| 8. For every migration run, `report_snapshots` is never dropped while it holds the sole copy, a short copy is never exchanged, and a migrated table gets no statement at all. | `tests/test_snapshot_version.py::test_migration_copies_before_it_exchanges_and_never_drops_the_original`, `::test_migration_refuses_to_exchange_a_short_copy`, `::test_migration_is_a_no_op_once_the_table_is_versioned` |
+
+```mutations
+lake/load_serving.py::record_dirty_exposure_keys   delete-call
+lake/load_serving.py::record_dirty_attributed_keys delete-call
+reconcile/rollup.py::dirty_keys                    constant-return:[]
+reconcile/rollup.py::refresh_campaign_hourly       invert-guard
+reconcile/rollup.py::refresh_campaign_hourly       constant-return:0
+observability/ch_scrape.py::settle                 invert-guard
+clickhouse/apply.py::migrate_report_snapshots      invert-guard
+```
+
+Coverage notes (why these lines and not others):
+- `swap-sort-key` is not used: no pipeline function this phase touches sorts with
+  a key lambda (the only `sorted(…)` sites are in `queries/rollup_bench.py`'s
+  bench-side reporting, which the offline suite does not execute).
+- Invariant 3 and the LIVE half of invariant 1 are upheld by SQL and proven only
+  under `make test-int-long-delay`; the sweep runs the offline suite, so a
+  mutation line for them would SURVIVE by construction. They are carried by
+  Evidence row 2, not by this block.
+- `lake/load_serving.py::insert_attributed` stays OUT of this block: it has no
+  offline kill (the BACKLOG row "18a coverage gaps the mutation sweep and the
+  round-3 functionality-tester surfaced"), and a knowingly-surviving line would
+  make the sweep red forever instead of meaningful.
+
 ## Pinned decisions (do not re-litigate)
 
 - **Direction asserts, never magnitude pins** (Phase 7/13 precedent). Cost numbers are
@@ -184,12 +224,13 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   60-day correction; the dirty set is exact and cheap. The full refresh stays as the
   equality oracle. Because the set is exact, there is no trailing lookback window —
   a lookback would only mask a wrong dirty set, which is what Done-when 2 exists to
-  catch.
+  catch. (Satisfies invariants 3, 6.)
 - **The dirty set is owned by the loader, not by the engine or the reconcile job.**
   The Phase-17 loader is the ONE writer of the serving tables and already knows the
   rows it loaded (Phase-17 D6), so it is the only place that cannot disagree with what
   ClickHouse holds. Rejected: recording keys in the engine and the reconcile job
   separately (two writers, two chances to drift, and neither sees a re-load).
+  (Satisfies invariant 5.)
 - **Cleared by a PER-KEY stamp, never by delete and never by a global watermark.**
   `rollup_refreshed` holds one row per key: the version that key was last computed
   against. The refresh recomputes the keys whose `rollup_dirty` version differs and
@@ -198,7 +239,7 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   permanently below it, serving a stale rollup); deleting or mutating processed rows
   out of `rollup_dirty` (a ClickHouse mutation is asynchronous and unversioned — a
   crash between refresh and delete would silently skip keys, the one failure mode that
-  is invisible to the full-refresh oracle).
+  is invisible to the full-refresh oracle). (Satisfies invariants 2, 4.)
 - **`reconciled_at` stays anchored in ClickHouse `_max_ingest`** (Phase-17 coherence
   Q3, decided here). The anchor is `max(ingest_time)` over the fixed serving state, it
   is already data-derived and re-run-identical, and the dirty set does not depend on it.
@@ -214,7 +255,7 @@ reporting DONE" checklist (CLAUDE.md Workflow rules).
   `snapshot_version = max(processed_at)` over the summarized rows has a deterministic
   source and survives a replay; the BACKLOG row's phrasing ("a pass sequence number")
   would invent state with no source — a re-run restarts it at 1 and the twin choice is
-  wrong in the one case the column exists for.
+  wrong in the one case the column exists for. (Satisfies invariant 1.)
 - **The scraper is a one-shot function, not a service.** Every stage here is a finite
   drain (ARCHITECTURE §8), so a scrape at the end of the run is the same shape as the
   existing terminal-registry dump; a daemon or a compose exporter would be a new
