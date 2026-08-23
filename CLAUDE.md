@@ -595,8 +595,9 @@ never auto-fixed, ignored, or committed around.
 
 **Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
 (spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
-`docs/review-invariants` (PR #34, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
-In review: `tooling/review-round` (PR #35). Next in order: 18b (its spec carries a
+`tooling/review-round` (PR #35, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
+In review: `fix/make-quote-profile` (PR #36, 2026-08-23 — closes the Phase-17
+`"$(PROFILE)"`-expansion residual). Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
 DECISIONS "Process"). Open BACKLOG rows: **36** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
