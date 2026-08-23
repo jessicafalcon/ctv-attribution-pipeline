@@ -77,9 +77,11 @@ through it).
    knows the rows it loaded) records the `(campaign_id, hour)` keys it touched in
    `rollup_dirty` (ReplacingMergeTree, key `(campaign_id, hour)`, version = `max`
    `processed_at` over the loaded rows for that key — data-derived, no wall clock), and
-   then REFRESHES those keys (`orchestration.run.materialize_load`), at offset 0 for the
-   hot load and `RECONCILE_DELTA_MS` for the reconcile pass's reload — so the pipeline's
-   own second pass is the incremental one, not a scenario a bench constructs. Still a
+   then REFRESHES those keys (`orchestration.run.materialize_load`), stamping each
+   refreshed rollup row with `max(stamp)` over the rows it summarizes — data-derived, no
+   caller offset (satisfies Invariant 1; the `offset 0` / `RECONCILE_DELTA_MS` offset
+   lives only on `report_snapshots`) — so the pipeline's own second pass is the
+   incremental one, not a scenario a bench constructs. Still a
    batch step recomputing from source, never an insert-triggered summing MV.
    `refresh_campaign_hourly` recomputes exactly the keys whose `rollup_dirty` version
    DIFFERS from that key's row in `rollup_refreshed`, then stamps those keys with the
@@ -250,7 +252,9 @@ Coverage notes (why these lines and not others):
   `agent_ro` grants unchanged.** Declared in `clickhouse/users.d/metrics-ro.xml` and
   reconstructed at every container start, exactly like `agent_ro`; any credential lives
   in `.env` only, never in CI. Phase 18b reuses this user rather than adding a "cost
-  writer user".
+  writer user". *(Superseded: 18b now creates a `cost_rw` writer — DECISIONS 18b, the
+  18b spec, and this spec's Record-updates 18b-banner edit; this frozen sentence is left
+  as the round-1 pin.)*
 - **The snapshot version is a data-derived timestamp, not a pass counter.**
   `snapshot_version = max(processed_at)` over the summarized rows has a deterministic
   source and survives a replay; the BACKLOG row's phrasing ("a pass sequence number")

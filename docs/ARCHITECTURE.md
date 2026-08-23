@@ -271,17 +271,19 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
   Since Phase 18a the refresh is **incremental and loader-driven**: the Dagster
   loader — the one writer of the serving tables — records the `(campaign_id, hour)`
   keys each day it loads touches in `rollup_dirty` (ReplacingMergeTree, version = a
-  data-derived stamp), then refreshes exactly those keys, at offset 0 for the hot
-  load and `RECONCILE_DELTA_MS` for the reconcile pass's reload. A key is recomputed
+  data-derived stamp), then refreshes exactly those keys. The refreshed rollup row's
+  version (`reported_at`) is `max(stamp)` over the rows that key summarizes — an
+  exposure's `ingest_time`, a credited conversion's `processed_at` — a function of the
+  data, never a caller offset or the clock (the `offset 0` / `RECONCILE_DELTA_MS`
+  offset survives only on `report_snapshots`). A key is recomputed
   when its recorded version DIFFERS from the version it was last computed against
   (`rollup_refreshed`, one row per key), and the refresh stamps those versions
   afterwards. Per key, never against a global maximum: a single scalar watermark
   left every key whose own timestamps lagged the highest key's permanently
   unrefreshed (Phase-18a review gate — 321 of 340 keys, serving a stale rollup). No
   deletes and no mutations, so a crash between the refresh and the stamp re-refreshes
-  the same keys rather than skipping them.
-  `refresh_campaign_hourly(full=True)` keeps the whole-table rebuild as the equality
-  ORACLE (`make rollup-bench`).
+  the same keys rather than skipping them. `refresh_sql(full=True)` keeps the
+  whole-table rebuild as the equality ORACLE (`make rollup-bench`).
 - `report_snapshots`: per refresh, metrics for each (campaign, period) with
   `reported_at`, which makes restatements queryable. Versioned since Phase 18a by
   `snapshot_version` = `max(processed_at)` over the rows a snapshot summarized; the

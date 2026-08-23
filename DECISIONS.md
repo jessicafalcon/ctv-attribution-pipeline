@@ -870,7 +870,7 @@ below, never deleted.
   which stamped `report_snapshots.reported_at` 6h apart between the `make run`
   subprocess and an in-process caller — four snapshots instead of two,
   restatement delta collapsed. So `reported_at` is computed **server-side** in the
-  rollup/snapshot INSERT (`max(ingest_time) + toIntervalMillisecond(offset_ms)`;
+  `report_snapshots` INSERT (`max(ingest_time) + toIntervalMillisecond(offset_ms)`;
   offset 0 for the pre/hot pass, `RECONCILE_DELTA_MS` for the post pass), and
   `_max_ingest` reads a timezone-free **epoch-millis integer**
   (`toUnixTimestamp64Milli`) rebuilt as UTC for the `reconciled_at` version.
@@ -2353,19 +2353,25 @@ below, never deleted.
   new data. Replaced by `rollup_refreshed (campaign_id, hour, version)`: a key is dirty
   when its recorded version DIFFERS from the version it was last computed against, and
   the refresh stamps exactly those versions afterwards. `!=` rather than `>` (a
-  deviation from the ruling's wording, taken with the reason stated): a key's version
-  can move DOWN — re-seed a profile after `lake-reset` and the same key's max
-  `ingest_time` may land earlier — and `>` would serve the previous seed's rollup
-  forever, which is the very scenario the gate reproduced. Rejected: a global marker
-  plus a per-key stamp (the stamp is this table by another name, with a second source
-  of truth to drift).
+  deviation from the ruling's wording, taken with the reason stated): "the rollup was
+  computed against a DIFFERENT version of this key" is the condition that matters, and
+  it does not depend on the two stamps being ordered. (An earlier justification here —
+  "a version can move DOWN on a re-seed" — was WRONG and is corrected in
+  `reconcile/rollup.py`: `rollup_dirty` is a ReplacingMergeTree keyed on the version,
+  so a lower stamp is discarded on read and `d.version` never moves down; the re-seed
+  hazard is real but closed elsewhere — `make replay-serving` truncates this
+  bookkeeping alongside the serving tables, a fresh stack is `make down`.) Rejected: a
+  global marker plus a per-key stamp (the stamp is this table by another name, with a
+  second source of truth to drift).
 - **The loader refreshes the keys it loaded, so the pipeline actually runs the
   incremental path.** Before, `refresh_campaign_hourly` was called once per `make run`
   (in `finalize`), on a stack whose marker was empty — so it was always a FULL refresh
   and the 19-vs-340 saving existed only inside `make rollup-bench`, which seeded its
   own marker to construct a scenario the pipeline never ran. Now
-  `orchestration.run.materialize_load` refreshes after every load (offset 0 hot,
-  `RECONCILE_DELTA_MS` on the reconcile reload), the reconcile pass's reload IS the
+  `orchestration.run.materialize_load` refreshes after every load (no version argument —
+  the rollup row's version is `max(stamp)` over the summarized rows, data-derived; the
+  `offset 0` / `RECONCILE_DELTA_MS` offset that round-3 removed from the rollup path
+  survives only on `report_snapshots`), the reconcile pass's reload IS the
   incremental second pass, and the bench measures the pipeline's own statement over the
   pipeline's own key set. Still a batch step recomputing from source, never an
   insert-triggered summing MV. Pinned live: served `campaign_hourly FINAL` == the
