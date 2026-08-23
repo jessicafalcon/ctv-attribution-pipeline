@@ -188,9 +188,13 @@ lines were stepped over by `make -i`; an env-origin `PROFILE='$(shell …)'` is
 expanded on every `$(PROFILE)` reference. The settled shape: one Python process
 validates the profile (`[a-z0-9_]+`), derives the root from it (no path argument
 exists to escape with), prompts on a tty, then acts; every recipe is one line; the
-residuals (`MAKEFLAGS`, env-origin `$(shell …)`) are STATED, with the threat model
-("mistakes, not a user who controls the environment"). Write the table up front so
-the gate reads it instead of discovering it.
+residuals (`MAKEFLAGS`, `$(shell …)`) are STATED, with the threat model
+("mistakes, not a user who controls the environment"). *(The `$(shell …)` residual
+was later closed for one line — `$(call _Q,$(value VAR))` + `unexport` — in
+fix/make-quote-profile; a stated residual you can close cheaply is a bug left in.
+`MAKEFLAGS`/`MAKEOVERRIDES` stays stated. The lesson stands: state the residual AND
+revisit whether it is closable.)* Write the table up front so the gate reads it
+instead of discovering it.
 
 | Target | empty | `../x` | `"; ` | env-exported | `$(origin)` on CONFIRM | Pinned by |
 |---|---|---|---|---|---|---|
