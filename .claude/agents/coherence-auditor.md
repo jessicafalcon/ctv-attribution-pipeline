@@ -56,6 +56,16 @@ missing their stage prefix.
   PHASES.md, never the spec/DECISIONS/RESULTS to match it — those are
   authoritative.)
 A stale record corrupts every future check — flag these as BLOCKERs.
+- **Invariants vs the record.** Read the finished phase's spec **Invariants**
+  section (`specs/TEMPLATE.md`). For each invariant, grep the records —
+  DECISIONS.md, docs/ARCHITECTURE.md, docs/RUNBOOK.md, README.md — for sentences
+  that state a MECHANISM the code no longer has: a watermark, a marker row, a
+  counter, a flag, a default, an offset that the invariant-driven re-implementation
+  removed or replaced (`grep -rniE "watermark|marker|counter|sentinel" DECISIONS.md
+  docs/ README.md` is the starting net; then read each hit against the code).
+  Report EACH such sentence with file:line and the invariant that superseded it.
+  A sentence describing a dead mechanism is a BLOCKER like any other stale record:
+  the next phase will re-build the mechanism the sentence describes.
 - Diff the spec's Record-updates list and the report's item-6 list against the
   actual diff; any file on either list not in the diff is a finding.
   (`specs/TEMPLATE.md` "Record updates"; CLAUDE.md "Before reporting DONE".)
