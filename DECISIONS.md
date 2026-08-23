@@ -208,7 +208,7 @@ below, never deleted.
 - **The review loop's judgment-free edges are scripts; the three judgments stay
   human (2026-08-23).** The loop is a graph — implement → review → fix → re-review
   → gate — and the Phase-18a rounds showed which edges carry no judgment and were
-  still done by hand, late, and inconsistently. Automated (`tooling/review-round`):
+  still done by hand, late, and inconsistently. Automated (PR #35, `scripts/review_gate.py`, `scripts/mutate.py`, `/review-round`):
   **suite + lint + docs guard before any agent** (`make review-gate` — an agent
   reviewing a red tree reviews noise); **Evidence rows exist** (a named test id is
   a claim; `pytest --collect-only` settles it); **Record-updates list vs the diff**
@@ -217,7 +217,10 @@ below, never deleted.
   does the suite notice" found the real 18a bugs and is a loop, not a judgment);
   **the round's diff range** (a local `review-round-N` tag — round N+1 reviews
   exactly what round N's fixes touched, no hand-picked SHA); **the cap arithmetic**
-  (every correctness finding inside the previous round's range → print CAP). Human,
+  (the written two-round rule: this round AND the previous one reported
+  correctness findings only inside the previous round's fixes → print CAP; the
+  first cut fired after one quiet round, and 18a is the evidence against that —
+  round 2 looked clean and round 3 found a BLOCKER inside round 2's fixes). Human,
   and why: **"is this finding real"** — a verdict needs the spec's intent, which
   only the reader of the spec holds; **"is this fix a design change"** — the
   Fix-amendments rule turns on what a change MEANS (a write path moved, not a line
@@ -228,8 +231,17 @@ below, never deleted.
   the cap can only be called from OUTSIDE the round: an agent inside the loop is
   the thing generating the findings it would have to stop, and 18a's three rounds
   were exactly a loop that could not see itself. The command therefore tags and
-  reports, and the scripts exit non-zero; nothing in `tooling/` edits, commits, or
-  pushes.
+  reports, and the scripts exit non-zero; nothing in `scripts/review_gate.py` /
+  `scripts/mutate.py` edits, commits, or pushes, and the command's only write is a
+  local `review-round-N` tag. Two rulings from its review gate: `constant-return:<v>`
+  is `ast.literal_eval`'d — spec text is model-authored and never reaches exec —
+  and the Makefile passes `$(value SPEC|BASE|DELETED)` through the `_Q` quoter so
+  an env-origin `$(shell …)` reaches Python as text. That closes, for these three
+  NEW variables, the class Phase 17 recorded as a stated residual for PROFILE
+  ("an env-origin `PROFILE='$(shell …)'` is expanded on every reference"); the
+  difference is not a reversal — the fix was free here, and the three destructive
+  recipes get the same `_Q`/`$(value)` treatment in `fix/make-quote-profile`
+  after PR #35 merges. Until then the PROFILE residual stands as written.
 
 ## Appendix — by phase
 

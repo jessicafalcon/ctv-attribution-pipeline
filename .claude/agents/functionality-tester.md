@@ -48,24 +48,28 @@ When invoked:
 
 A passing suite proves only that the tests agree with the code as written. To
 prove the tests would NOTICE the code being wrong, break it on purpose and watch.
-For EACH new or changed write path (anything that lands rows, stamps a version,
-records a key, appends to the lake) and EACH new guard (a tripwire, an assert, a
-validation, a `confirm_or_abort`-style gate), apply ONE mutation from this list
-(pick the one the code shape admits; use more than one only when the first is
-inapplicable):
+`make mutate SPEC=specs/<phase>.md` does the mechanical sweep: every line of the
+spec's Invariants ```mutations block (`path.py::function operator`, operators
+exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`) is
+applied to HEAD in a throwaway git worktree, the offline suite runs there, and
+each line prints `KILLED`, `SURVIVED` or `ERROR`. Under `/review-round` it has
+already run and its lines are in your prompt — do not repeat them. Your job is
+what the four operators cannot express:
 
-1. **Delete the call** — remove the write / the guard invocation entirely.
-2. **Replace a computed value with a constant** — a version, a key set, a
-   count, a `max(...)` becomes a literal.
-3. **Invert the predicate** — `if dirty` → `if not dirty`; `<` → `>=`.
-4. **Swap two equal-looking sort keys** — reorder a tuple key, a sort
-   expression, a `(day, bucket)`.
-
-Apply the mutation with a scratch edit under `git stash` discipline — `sed -i`
-or a here-doc patch, then run the OFFLINE suite (`uv run pytest -q`, no
-services), then `git checkout -- <file>` so the tree is exactly as you found it
-(confirm with `git status --porcelain`; a dirty tree at the end of your run is
-your own finding). Never commit a mutation; never mutate `fixtures/`.
+1. **Read the block against the diff.** For EACH new or changed write path
+   (anything that lands rows, stamps a version, records a key, appends to the
+   lake) and EACH new guard (a tripwire, an assert, a validation, a
+   `confirm_or_abort`-style gate) that has NO line in the block, that absence is
+   a finding ("no mutation listed for `<file>::<func>`") — name the operator that
+   fits.
+2. **Hand-mutate only what the operators can't reach** — a swapped argument
+   pair, an off-by-one on a window edge, a dropped `FINAL`, a boundary value —
+   and only in a worktree, never this tree: `git worktree add --detach
+   <tmpdir>/ft-1 HEAD`, edit THERE, `uv run pytest -q --ignore=tests/integration`
+   with `cwd` = the worktree, then `git worktree remove --force <tmpdir>/ft-1`.
+   `git status --porcelain` in the main tree must be identical before and after;
+   a dirty main tree at the end of your run is your own finding. Never commit a
+   mutation; never mutate `fixtures/`.
 
 Report EVERY mutation that survives (the suite stays green) as a finding,
 severity **correctness**, in this shape:

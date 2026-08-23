@@ -103,8 +103,11 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   rows. READ-ONLY ground truth after Phase 1.
 - `docs/` — ARCHITECTURE.md (spec), PHASES.md (plan), SCALING.md,
   RESULTS.md, RUNBOOK.md.
-- `scripts/` — `check_docs.py`, the one docs guard (`make check-docs`; was
-  `docs/check_runbook.py`, Phase 19).
+- `scripts/` — the offline guards, none a pytest file: `check_docs.py` (the one
+  docs guard, `make check-docs`; was `docs/check_runbook.py`, Phase 19),
+  `review_gate.py` (`make review-gate`), `mutate.py` (`make mutate`),
+  `review_common.py` (their shared SPEC validator / section parser / reduced
+  child env).
 - `data/` — gitignored. `data/truth/` side files.
 - `DECISIONS.md` — why-not-X log. Add an entry for every non-obvious choice.
 - `BACKLOG.md` — deferred findings with revisit triggers. Review at every
@@ -240,21 +243,35 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   shared-conversion_id reason
 - `make lint` — ruff via pre-commit
 - `make review-gate [SPEC=specs/<file>.md] [BASE=main] [DELETED=a,b]` — the
-  offline review gate (`scripts/review_gate.py`): `make test` + `make lint` +
-  `make check-docs`, then with SPEC every Evidence test id / `make` target exists
-  (`pytest --collect-only`, `make -n`) and every Record-updates file is in `git
-  diff BASE...HEAD` (record files in the diff but off the list → WARN); DELETED
-  greps the tracked tree for each removed symbol (struck / `<!-- historical -->`
-  lines exempt). One process, one line per check, exit 1 on any FAIL. SPEC is
-  validated in-process as an existing file under `specs/`; nothing else is
-  derived from it. `/review-round N` runs it first
+  offline review gate (`scripts/review_gate.py`): `make test` + `ruff check` +
+  `ruff format --check` (read-only — never `make lint`, whose ruff-format hook
+  rewrites files; a gate must not write to the tree it judges) + `make
+  check-docs`, then with SPEC every Evidence test id / `make` target exists
+  (`pytest --collect-only` under the reduced child env; targets are a set lookup
+  over the Makefile, never `make -n`) and every Record-updates file is in `git
+  diff BASE...HEAD` (a DECISIONS / BACKLOG / CLAUDE.md / README / `docs/` file in
+  the diff but off the list → WARN; `specs/` and the Makefile are not warned);
+  DELETED greps the tracked tree for each removed symbol as a literal (`git grep
+  -F -w`; struck / `<!-- historical -->` lines and the SPEC file itself exempt; a
+  git error is its own FAIL line, never a hit). One process, one line per check,
+  exit 1 on any FAIL, exit 2 on a refused SPEC. SPEC / BASE / DELETED reach
+  Python unexpanded and single-quoted (`$(value …)` + `_Q`); SPEC is validated
+  in-process as an existing file under `specs/`; nothing else is derived from
+  it. `/review-round N` runs it first
 - `make mutate SPEC=specs/<file>.md` — the mutation sweep (`scripts/mutate.py`):
   each line of the spec's Invariants ```mutations block (`path.py::func op`; ops
   exactly `delete-call`, `constant-return:<v>`, `invert-guard`, `swap-sort-key`)
-  is applied to HEAD in a temporary `git worktree` (never this tree), the offline
-  suite runs there, the worktree is removed (`finally`). One line per mutation,
-  `KILLED` or `SURVIVED` + file:line; exit 1 on any survivor. ~30 s per mutation
-  at repo size
+  is applied to HEAD in a temporary `git worktree` under the system temp dir
+  (never this tree; no env knob), the offline suite runs there with the reduced
+  child env (PATH / HOME / PYTHONPATH / CTV_INT — never credentials), the worktree
+  is removed (`finally`; stale ones pruned at start). `constant-return:<v>` must
+  be a Python literal ≤ 64 chars (`ast.literal_eval`) or the whole run is refused
+  — spec text never reaches exec. One line per mutation: `KILLED`, `SURVIVED`
+  (a correctness finding), or `ERROR` (the operator could not be applied — a
+  spec/tooling defect) + file:line; exit 1 on any survivor or error, 2 on a
+  refused SPEC. ~30 s per mutation at repo size. Same inbound-branch caveat as
+  the run-tests hook (Project tooling): it runs that branch's conftest.py —
+  review it before running on someone else's branch
 
 Canonical clean-state demos (a clean state is a clean lake too — the lake outlives
 `make down`, and a `run-hot` over a lake that already holds a reconcile pass's rows
@@ -432,11 +449,12 @@ standard way over the clever way.
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
   fourth round of patches on patches.
-- `/review-round N` is the review gate; round 1 before the first agent run.
+- `/review-round N` is the review gate: its deterministic half (`make
+  review-gate`, `make mutate`) runs before any agent is spawned, in every round.
 - Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
-  list (`/review-round N+1`). A finding on code unchanged since round N−1 is
-  labelled **"missed in round N"** so the review's own drift is visible
-  alongside the code's.
+  list (`/review-round N+1`). A finding on code NOT changed inside that range —
+  code an earlier round already reviewed — is labelled **"missed in round N"**
+  so the review's own drift is visible alongside the code's.
 
 ### Before reporting DONE
 
@@ -505,9 +523,10 @@ never auto-fixed, ignored, or committed around.
 - `run-tests` hook — `.claude/hooks/run-tests.py` (committed, adopted as-is
   from trial-signal-assistant); after any .py edit inside this repo, runs
   pytest and blocks on red; treats "no tests collected" as skip. Since Phase 17
-  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, which only the
-  `make test-int*` targets export — so the hook cannot seed the live broker or
-  re-stamp `eval_meta`. WIRING is
+  a bare pytest SKIPS `tests/integration` unless `CTV_INT=1`, and the integration
+  suite RUNS only under the `make test-int*` targets (`review_gate`'s
+  `--collect-only` exports it too, but collects, never executes) — so the hook
+  cannot seed the live broker or re-stamp `eval_meta`. WIRING is
   local-only by design (a committed settings.json would auto-execute an
   inbound PR branch's hook + pytest + conftest.py for anyone opening it in
   Claude Code). One-time re-enable — copy into the gitignored
@@ -548,12 +567,13 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**Current phase: 19 (docs reshape) — built, in review** on `phase-19-docs-reshape`
-(spec `specs/phase-19-docs-reshape.md`, reconciled 2026-08-22). **Last merged: Phase 17
-(PR #31, 2026-08-21).** Next in order: 18a → 18b (each spec carries a "Pre-branch
-reconciliation required" banner; its branch's commit 1 is that amendment — DECISIONS
-"Process"). Open BACKLOG rows: **33** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
-reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs) lives in `README.md` → History;
+**Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
+(spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
+`docs/review-invariants` (PR #34, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
+In review: `tooling/review-round` (PR #35). Next in order: 18b (its spec carries a
+"Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
+DECISIONS "Process"). Open BACKLOG rows: **33** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
 

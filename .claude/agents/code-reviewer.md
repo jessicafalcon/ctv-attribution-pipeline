@@ -85,9 +85,10 @@ because the next caller will not. State the invariant the mechanism should be
 derived from ("version = max(processed_at) over the rows it summarizes") in the
 finding, so the fix is designed against a property, not re-patched.
 
-When the prompt names a review round (`/review-round N`): the primary target is
-round N−1's diff plus the invariant list; a finding on code unchanged since
-round N−2 is still reported, labelled **"missed in round N−1"**.
+When the prompt names a review round (`/review-round N`): the target is the
+range the prompt gives (round N−1's fixes) plus the invariant list; a finding on
+code NOT changed inside that range — code an earlier round already reviewed — is
+still reported, labelled **"missed in round N−1"**.
 
 ## Generic checks (second pass)
 

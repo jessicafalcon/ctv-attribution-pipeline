@@ -343,6 +343,11 @@ firing) — specs under `specs/`, reconciled against main before each branch ope
 - `fix/make-resolve-source` (PR #29) — two pre-existing Makefile bugs surfaced by the Phase-16 review: bare `make resolve` exited 2 (`SOURCE ?= fixtures  # …` carried trailing spaces into `--source`), and `test-int-medium` stamped `eval_meta=tiny` over a medium DB (ran `run-hot` without `PROFILE=medium`, so the BACKLOG-43 guard could not fire). `tests/test_makefile.py` guards both offline via `make -n`.
 - `fix/docs-accuracy-pin` (PR #26) — single-sourced the household-grain accuracy pins into `tests/pins.py` (tiny/medium/long_delay), referenced by the 5 test suites, plus `tests/test_docs_accuracy_pins.py` asserting the README/RESULTS accuracy TABLE cells equal them; closes BACKLOG 36. Table-scoped — prose citations deferred to BACKLOG 47.
 
+**Tooling / process PRs** (not phases — no phase gate, no PHASES.md row; listed so the record is complete):
+- `docs/process-tightening` (PR #32) — `specs/TEMPLATE.md` Evidence / Record updates / Threat model sections; spec finalized only after its predecessor merges; ≤ ~6 items per spec; the "Before reporting DONE" self-review.
+- `docs/review-invariants` (PR #34) — Invariants-first specs, fix amendments, the two-round review cap, scoped re-review; agents gain the Invariants check and the Mutation step.
+- `tooling/review-round` (PR #35) — `make review-gate`, `make mutate`, `/review-round N`; the judgment-free edges of the review loop as scripts, three judgments left human (DECISIONS "Process").
+
 ## Next steps — what was cut, and why
 
 Everything here was a deliberate scope cut, not an oversight. Each is a written note,
