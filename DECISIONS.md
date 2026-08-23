@@ -206,7 +206,7 @@ below, never deleted.
   invariant; the 18a session writes the test, the Evidence row stands.
 
 - **The review loop's judgment-free edges are scripts; the three judgments stay
-  human (2026-08-23).** The loop is a graph — implement → review → fix → re-review
+  human (2026-08-22).** The loop is a graph — implement → review → fix → re-review
   → gate — and the Phase-18a rounds showed which edges carry no judgment and were
   still done by hand, late, and inconsistently. Automated (PR #35, `scripts/review_gate.py`, `scripts/mutate.py`, `/review-round`):
   **suite + lint + docs guard before any agent** (`make review-gate` — an agent
@@ -231,7 +231,12 @@ below, never deleted.
   the cap can only be called from OUTSIDE the round: an agent inside the loop is
   the thing generating the findings it would have to stop, and 18a's three rounds
   were exactly a loop that could not see itself. The command therefore tags and
-  reports, and the scripts exit non-zero; nothing in `scripts/review_gate.py` /
+  reports, and the scripts exit non-zero; the round's state is its ANNOTATED local
+  tag (range, agents, correctness count, the cap bit — the artifact the next
+  round's range derivation already reads; `data/` is disposable by design, so a
+  cap reading state from there would silently revert to one-round), read
+  fail-closed; `/review-round` is for phase branches only — tooling / fix / docs
+  PRs run the agents directly, as this one did; nothing in `scripts/review_gate.py` /
   `scripts/mutate.py` edits, commits, or pushes, and the command's only write is a
   local `review-round-N` tag. Two rulings from its review gate: `constant-return:<v>`
   is `ast.literal_eval`'d — spec text is model-authored and never reaches exec —
@@ -239,9 +244,18 @@ below, never deleted.
   an env-origin `$(shell …)` reaches Python as text. That closes, for these three
   NEW variables, the class Phase 17 recorded as a stated residual for PROFILE
   ("an env-origin `PROFILE='$(shell …)'` is expanded on every reference"); the
-  difference is not a reversal — the fix was free here, and the three destructive
-  recipes get the same `_Q`/`$(value)` treatment in `fix/make-quote-profile`
+  difference is not a reversal — the fix was free here, and every `"$(PROFILE)"`
+  recipe (~15 of them, the three destructive ones first) gets the same
+  `_Q`/`$(value)` treatment in `fix/make-quote-profile` (BACKLOG row, with the two
+  PR-35 probe facts: it reaches the destructive recipes, and `make -n` is not a
+  safe inspection)
   after PR #35 merges. Until then the PROFILE residual stands as written.
+
+- **Dates in every record are LOCAL dates (the developer's machine, `git log
+  --format=%ci`), never GitHub's UTC merge timestamp (2026-08-22).** PR #34 merged at
+  04:27 UTC on the 23rd and was first recorded as 08-23 beside commits dated 08-22;
+  one event looked like two. README History, CLAUDE.md Current status, DECISIONS and
+  BACKLOG all use the local date.
 
 ## Appendix — by phase
 
@@ -1965,6 +1979,12 @@ below, never deleted.
   environment-origin `PROFILE='$(shell …)'` is expanded by make on ANY
   `$(PROFILE)` reference (every target, pre-existing `?=` behaviour), which no
   single recipe can close; `$(value)` keeps it out of lake-reset's own guard.
+  *(Corrected in place, PR #35 coherence audit, 2026-08-22: `$(value)` was never
+  in `lake-reset` or any recipe of this phase — the actual guard is the
+  one-process design: `lake/destructive.py` validates, prompts, acts, and Make
+  never interpolates into a guard. `$(value)` + `_Q` first appear in PR #35's
+  `review-gate` / `mutate` recipes; every `"$(PROFILE)"` recipe gets them in
+  `fix/make-quote-profile` — BACKLOG row.)*
   (3) `CONFIRM` counts only from the command line (`$(origin CONFIRM)`): an
   exported `CONFIRM=yes` no longer skips the prompt (pinned). (4)
   `PrePhase17RowError` is raised in `lake.read_attributed._row` BEFORE the model

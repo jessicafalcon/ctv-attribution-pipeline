@@ -5,13 +5,23 @@ description: Review round N — run make review-gate + make mutate (stop on red)
 Run review round **$ARGUMENTS** (an integer N ≥ 1) on the current phase branch.
 Read-only and report-only, like every agent this command invokes: no edits, no
 fixes, no commits, no push. Findings are relayed verbatim and the session STOPS
-(CLAUDE.md Git workflow, "STOP-on-findings"). The only write is a LOCAL git tag.
+(CLAUDE.md Git workflow, "STOP-on-findings"). The working tree is never written;
+the repo's only writes are a LOCAL annotated tag per round and the throwaway
+worktrees `make mutate` registers and removes under `.git/worktrees/`.
 
 ## 1. Locate the spec and derive the range
 
+- Scope: phase branches only. If the branch is not `phase-*` (a `tooling/*`,
+  `fix/*`, `docs/*` branch) print ONE line and STOP:
+  `no phase spec for <branch> — tooling/fix branches run the agents directly
+  (CLAUDE.md Git workflow)`. Never die on a missing `--spec`; never invent a spec
+  so the sweep has something to mutate.
 - Spec: the one `specs/phase-*.md` whose slug matches the branch name
   (`phase-18a-cost-and-ops` → `specs/phase-18a-cost-and-ops.md`). If none
   matches, ask for `SPEC=` and stop. Set `SPEC=<that path>`.
+- Tag collision, checked HERE before anything runs: if `review-round-N` already
+  exists, print it and STOP — a round is reviewed once; a re-run is round N+1, or
+  the developer deletes the tag on purpose.
 - Range: round 1 → `RANGE=main...HEAD` (three-dot: the branch since its
   merge-base, so a main that advanced under the branch adds nothing). Round N > 1 → the local tag
   `review-round-(N−1)` must exist (`git tag -l 'review-round-*'`); if it does
@@ -81,25 +91,39 @@ with no pin, a caller/clock-sourced mechanism), **security**, **record** (a
 stale or missing record sentence), **wording** (names, comments, docs prose).
 
 Tag first — every completed round is tagged, cap or no cap, or the scoped pass
-that follows a cap has no boundary: `git tag review-round-N HEAD` (local; never
-pushed — `git push` does not send a lightweight tag unless asked, and this
-command never pushes). If the tag already exists, print it and STOP: a round is
-reviewed once; a re-run is round N+1, or the developer deletes the tag on purpose.
+that follows a cap has no boundary. The tag is ANNOTATED and its message is the
+round's record (`git tag -l --format='%(contents)' 'review-round-*'` is the
+audit trail):
 
-Cap check (CLAUDE.md Workflow rules, "Review cap" — two consecutive rounds):
-if N ≥ 3 and EVERY correctness finding in this table falls inside
-`review-round-(N−1)..HEAD` (the previous round's fixes) AND round N−1's table
-had the same property against `review-round-(N−2)..HEAD` (read round N−1's
-report), print:
+```
+git tag -a review-round-N HEAD -m "round: N
+range: <RANGE>
+agents: code-reviewer, functionality-tester[, security-reviewer]
+correctness-findings: <count>
+correctness-only-in-previous-fixes: yes|no
+gate: review-gate OK, mutate <killed>/<total>"
+```
+
+Local; never pushed — `git push` sends no tag unless asked, and this command
+never pushes.
+
+Cap check (CLAUDE.md Workflow rules, "Review cap" — two consecutive rounds).
+Let THIS = "every correctness finding in this table falls inside
+`review-round-(N−1)..HEAD`" (the previous round's fixes). Let PREV = the
+`correctness-only-in-previous-fixes` line of the `review-round-(N−1)` tag's
+message — read it with `git tag -l --format='%(contents)' review-round-(N−1)`.
+**Fail closed:** a missing tag, a message without that line, or any value other
+than the literal `yes` means PREV = no (the cap is a ship decision; its default
+is "don't"). If N ≥ 3 and THIS and PREV, print:
 
 ```
 CAP: fixes are generating findings — write the invariant, re-implement once
 ```
 
-and STOP; the next step is a fix amendment, then ONE scoped pass (round N+1,
-against the tag just written), not a round N+1 of patches. Otherwise print
-**"no cap"** — and, when N ≥ 2 and this round alone has the property, **"cap
-watch: one more such round trips the cap"**.
+and STOP; the next step is a fix amendment, then ONE scoped pass (the round
+after this one, against the tag just written), not another round of patches.
+Otherwise print **"no cap"** — and, when N ≥ 2 and THIS alone holds, **"cap
+watch: one more such round trips the cap"** (CLAUDE.md Workflow rules).
 
 Close with the one line the developer decides on per finding: **fix
 (wording/test-only)**, **fix amendment (design change → spec paragraph first,

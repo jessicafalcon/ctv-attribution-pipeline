@@ -344,7 +344,8 @@ check-docs:
 lint:
 	uv run pre-commit run --all-files
 
-# The offline review gate (scripts/review_gate.py): make test + lint + check-docs,
+# The offline review gate (scripts/review_gate.py): make test + ruff check/format
+# --check (read-only, never make lint) + check-docs,
 # then — with SPEC — the spec's Evidence ids exist and its Record-updates files
 # are in the diff; DELETED=a,b greps for removed symbols. ONE process validates
 # SPEC (an existing file under specs/, nothing derived from it) before anything
@@ -354,15 +355,17 @@ lint:
 # "$(VAR)" interpolation ran the echo — this branch's threat-model probe). Callers
 # pass `$(value VAR)`, the UNEXPANDED text: make expands a variable before _Q ever
 # sees it, so `SPEC='$(shell …)'` would otherwise run at recipe time, even under
-# -n (security review, PR #35). The three destructive recipes still interpolate
-# "$(PROFILE)" and keep Phase 17's stated residual until fix/make-quote-profile.
+# -n (security review, PR #35). Every "$(PROFILE)" recipe (~15, the three
+# destructive ones first) still interpolates the expanded value and keeps Phase
+# 17's stated residual until fix/make-quote-profile (BACKLOG row).
 _Q = '$(subst ','\'',$(1))'
 review-gate:
 	uv run python scripts/review_gate.py $(if $(value SPEC),--spec $(call _Q,$(value SPEC)),) --base $(call _Q,$(if $(value BASE),$(value BASE),main)) $(if $(value DELETED),--deleted $(call _Q,$(value DELETED)),)
 
 # The mutation sweep (scripts/mutate.py): each line of the spec's ```mutations
 # block is applied to HEAD in a temporary git worktree (never this tree), the
-# offline suite runs there, the worktree is removed (try/finally). One line per
-# mutation, KILLED or SURVIVED; exit 1 on any survivor. SPEC validated in-process.
+# offline suite runs there under a reduced env, the worktree is removed
+# (try/finally). One line per mutation, KILLED / SURVIVED / ERROR; exit 1 on any
+# survivor or error. SPEC validated in-process.
 mutate:
 	uv run python scripts/mutate.py --spec $(call _Q,$(value SPEC))

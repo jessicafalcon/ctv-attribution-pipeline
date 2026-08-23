@@ -5,10 +5,10 @@ from "delete this call â€” does the suite notice?"). Run via `make mutate SPEC=â
 Reads the spec's Invariants section for ONE fenced block:
 
     ```mutations
-    lake/load_serving.py::record_dirty_exposure_keys   delete-call
-    reconcile/rollup.py::refresh_campaign_hourly        constant-return:0
-    clickhouse/apply.py::migrate_report_snapshots       invert-guard
-    reconcile/reconcile.py::pick_household              swap-sort-key
+    lake/load_serving.py::insert_attributed      delete-call
+    reconcile/rollup.py::refresh_campaign_hourly constant-return:None
+    reconcile/reconcile.py::pick_household       invert-guard
+    reconcile/reconcile.py::pick_household       swap-sort-key
     ```
 
 Exactly four operators:

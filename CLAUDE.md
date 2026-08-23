@@ -202,13 +202,16 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   on tiny's only RestatementMagnitude fires (the Phase-16 deferral landing restates
   ROAS) and the other three stay silent (offline; needs the image, not the stack)
 - `make check-docs` — the one docs guard (`scripts/check_docs.py`, Phase 19; was
-  `check-runbook`): every link/anchor in README.md + docs/ resolves; each
-  `make`-generated block (`scale-curve`, `cost-levers`) is present under its
+  `check-runbook`), four checks: every link/anchor in README.md + docs/ resolves;
+  each `make`-generated block (`scale-curve`, `cost-levers`) is present under its
   generator's marker and the README first-screen copies of its numbers match it;
-  every guard/alert/`make` target the docs name exists in source as an EXACT token
-  (offline; a standalone script, not a pytest file, so a docs-only edit does not
-  re-trigger the full suite — `tests/test_check_docs.py` does run the trace/target
-  half under `make test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
+  every guard/alert/`make` target the docs name exists in source as an EXACT
+  token; and this file's "Open BACKLOG rows: **N**" equals BACKLOG.md's un-struck
+  rows (the sentence two branches rewrite — a wrong count fails at edit time, on
+  whichever branch merges second) (offline; a standalone script, not a pytest
+  file, so a docs-only edit does not re-trigger the full suite —
+  `tests/test_check_docs.py` does run the trace/target/count checks under `make
+  test` on purpose; runs in the CI lint job). Accuracy TABLE cells:
   `tests/test_docs_accuracy_pins.py`
 - `make agent-run PROFILE=<fault>` — one agent invocation (API tokens; ask first)
 - `make agent-eval` — full fault → diagnosis table incl. no-fault baseline
@@ -448,7 +451,9 @@ standard way over the clever way.
 - Review cap: if two consecutive review rounds report correctness findings
   only in the previous round's fixes, stop fixing. Write the invariant,
   re-implement against it ONCE, then one scoped re-review pass — never a
-  fourth round of patches on patches.
+  fourth round of patches on patches. `/review-round` prints "cap watch" after
+  the FIRST such round, "CAP" after the second; round N−1's bit is read from its
+  annotated tag, fail-closed.
 - `/review-round N` is the review gate: its deterministic half (`make
   review-gate`, `make mutate`) runs before any agent is spawned, in every round.
 - Scoped re-review: round N+1 reviews round N's diff plus the spec's invariant
@@ -558,14 +563,19 @@ never auto-fixed, ignored, or committed around.
   each phase exit, before the phase PR merges.
 - `/selfcheck` command — `.claude/commands/selfcheck.md`; verifies the last
   commit (suite, DONE command, determinism, fixtures), then stops.
-- `/review-round N` command — `.claude/commands/review-round.md`; runs `make
-  review-gate` + `make mutate` first (red → no agents spawned), derives the range
-  (round 1 `main..HEAD`; round N the local tag `review-round-(N−1)..HEAD`, tagged
-  at the end, never pushed), prints the spec's Invariants list, runs
-  code-reviewer + functionality-tester scoped to the range with the "missed in
-  round N−1" labelling (+ security-reviewer in round 1 when CI / compose /
-  ClickHouse users / .env / agent are touched), prints the consolidated finding
-  table and the CAP line, then stops. Read-only, report-only.
+- `/review-round N` command — `.claude/commands/review-round.md`; phase branches
+  only (a `tooling/*` / `fix/*` / `docs/*` branch gets one line — run the agents
+  directly, the PR-#35 precedent). Checks the `review-round-N` tag is new, runs
+  `make review-gate` + `make mutate` first (red → no agents spawned), derives the
+  range (round 1 `main...HEAD`; round N the local tag `review-round-(N−1)..HEAD`),
+  prints the spec's Invariants list, runs code-reviewer + functionality-tester
+  scoped to the range with the "missed in round N−1" labelling (+
+  security-reviewer in round 1 when CI / compose / ClickHouse users / .env /
+  agent are touched), then writes the round's ANNOTATED local tag (range, agents,
+  correctness count, the cap bit — never pushed) BEFORE the cap check, prints the
+  consolidated finding table and the CAP / "cap watch" / "no cap" line, then
+  stops. The cap reads round N−1's bit from its tag and fails closed (missing or
+  unparsable → "no"). Read-only, report-only.
 - `strategic-compact` skill — `~/.claude/skills/strategic-compact/`
   (user-level, already wired); suggests /compact at phase breakpoints.
 
@@ -573,10 +583,10 @@ never auto-fixed, ignored, or committed around.
 
 **Current phase: 18a (cost and ops levers) — in build** on `phase-18a-cost-and-ops`
 (spec `specs/phase-18a-cost-and-ops.md`, reconciled 2026-08-22). **Last merged:
-`docs/review-invariants` (PR #34, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
+`docs/review-invariants` (PR #34, 2026-08-22); last phase: 19 (PR #33, 2026-08-22).**
 In review: `tooling/review-round` (PR #35). Next in order: 18b (its spec carries a
 "Pre-branch reconciliation required" banner; its branch's commit 1 is that amendment —
-DECISIONS "Process"). Open BACKLOG rows: **34** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+DECISIONS "Process"). Open BACKLOG rows: **35** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

@@ -110,7 +110,7 @@ Rules:
   (Every function above exists on `main`, so `make mutate SPEC=specs/TEMPLATE.md`
   runs as a smoke test of the tool — and on main today two of the four SURVIVE:
   the ClickHouse writers `insert_attributed` / `refresh_campaign_hourly` have no
-  offline test, the coverage gap PR #35 recorded for 18a's round 4. A third verdict, `ERROR`, means the operator
+  offline test — the BACKLOG row "18a coverage gaps the mutation sweep … surfaced". A third verdict, `ERROR`, means the operator
   could not be applied — a wrong function name, no `if` to invert — and is a
   spec/tooling defect to fix, not a coverage finding; it exits 1 like a survivor.)
 
