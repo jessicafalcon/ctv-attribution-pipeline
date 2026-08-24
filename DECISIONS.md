@@ -1858,7 +1858,25 @@ below, never deleted.
   the append-at-end contract the writer assumes. The writer's robustness fix
   (splice between `<!-- AGENT_EVAL_START/END -->` sentinels, fail loud,
   `check-docs`-guarded, per the `cost_report`/`measure_levers`/`rollup_bench`
-  idiom) is its own follow-up, `fix/run-eval-splice`.
+  idiom) is its own follow-up, `fix/run-eval-splice` (shipped — next entry).
+- **`run_eval.write_results` now splices between sentinels, fail-loud (was
+  split-to-EOF).** `fix/run-eval-splice`, the companion to the recapture reorder
+  above. The writer reads `docs/RESULTS.md`, raises `SystemExit` if the
+  `<!-- AGENT_EVAL_START/END -->` pair is absent (operator seeds the skeleton
+  once, as every other block needed), and rewrites only `head + section + tail`
+  — it can no longer truncate a following section to EOF. `render_section` emits
+  the sentinels and the provenance line itself (the capture date threaded in from
+  `main()`, never `datetime.now()` inside the pure renderer), so the machine block
+  holds no hand-written prose and a `check_docs.py::_markers()` entry guards its
+  presence. Consequence: **section order below `## Agent eval` is no longer
+  load-bearing** — the item-2 reorder is now belt-and-suspenders, kept (not
+  reverted) because a tidy record ordering costs nothing. Alternatives not taken:
+  (a) leave the split-to-EOF writer and rely on section order — rejected, it was
+  exactly the silent-drop trap the reorder only papered over; (b) regenerate
+  RESULTS.md to seed the skeleton — rejected, `make agent-eval` spends API tokens,
+  so the skeleton + provenance line were hand-shaped to match the generator's
+  byte output (verified: the block's non-table scaffolding is identical to
+  `render_section(sweep, "2026-08-23")`).
 - **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
   match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
   the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the

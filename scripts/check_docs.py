@@ -159,6 +159,12 @@ def _markers() -> list[tuple[str, Path, str, str]]:
             _const("queries/cost_report.py", "_START"),
             _const("queries/cost_report.py", "_END"),
         ),
+        (
+            "agent-eval",
+            RESULTS,
+            _const("agent/eval/run_eval.py", "_START"),
+            _const("agent/eval/run_eval.py", "_END"),
+        ),
     ]
 
 
