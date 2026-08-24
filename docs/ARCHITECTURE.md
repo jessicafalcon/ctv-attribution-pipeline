@@ -456,7 +456,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 |---|---|
 | Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 18+; SCALING.md Flink mapping) |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; the Iceberg lake is the system of record (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(household_id)`), ClickHouse a derived projection loaded by Dagster per touched day, reconciliation a bucket-aligned DuckDB-over-Iceberg join, replay from the lake with no Kafka (Phase 17). Object store / REST catalog / Spark-Trino compute are the SCALING port |
-| OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
+| OLAP reporting stack | ClickHouse: ReplacingMergeTree, incremental rollups, restatements; the loader's async-insert lever is built (Phase 18b, `async_insert=1, wait_for_async_insert=1`, env-gated on in `make run`, off in the golden paths — larger buffers at scale are the same lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
 | On-call / incident readiness | Prometheus, Grafana, Alertmanager rules, runbook-style SCALING.md |
 | Data contracts | Pydantic-derived JSON Schemas enforced via schema registry at produce and consume |

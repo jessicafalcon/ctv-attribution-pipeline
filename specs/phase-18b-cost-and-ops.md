@@ -309,8 +309,10 @@ Coverage notes (why these lines and not others):
       `make check-docs`); History row for 18b at exit.
 - [ ] `.env.example` — a commented `cost_rw` credential entry (none in local dev, same
       posture as `metrics_ro` / `agent_ro`).
-- [ ] `scripts/check_docs.py` + `tests/test_check_docs.py` — the `cost-report` target token
-      and any new gauge/alert token in `TRACES`.
+- [x] `scripts/check_docs.py` — the `cost-report` block registered in `_markers()`.
+      (`tests/test_check_docs.py` struck from this list — review-round-1 coherence: the
+      guarded-block set is enumerated at runtime and `cost-report` auto-traces against
+      the Makefile, so no test edit was needed; no `TRACES` entry required.)
 - [ ] Touched-beyond-Scope, recorded at exit (rather than left for the auditor): to be
       filled in the phase report — the "Before reporting DONE" item 6 list.
 

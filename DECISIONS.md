@@ -520,7 +520,9 @@ below, never deleted.
   yet, so every subject is set to `NONE` before its version is posted.
   Verified against Redpanda: `PUT /config/<subject>` works before the
   subject's first version exists, and an incompatible re-register then returns
-  a new id instead of 409. Global stays BACKWARD.
+  a new id instead of 409. Global stays BACKWARD. *(Superseded Phase 18b: every
+  subject is now set to BACKWARD — the data contract, `producer/schemas.py`
+  `_compat_level`; add-optional accepted, remove-required 409, proven live.)*
 - **Integration test compares the DISTINCT resolved payload set.** Seeding is
   deterministic (idempotent bytes) but topics accumulate across re-seeds
   without `make down`; the stage drains from offset 0 by manual assignment
@@ -619,7 +621,10 @@ below, never deleted.
   Phase-5 migration to stateful/windowed versions. Async inserts are deferred
   to Phase 7 (the benchmark phase); Phase 3 inserts synchronously so the
   integration FINAL-comparison is deterministic (async insert buffering makes
-  read-after-write flaky for no benefit at tiny scale).
+  read-after-write flaky for no benefit at tiny scale). *(Superseded Phase 18b:
+  async inserts landed on the LOADER, not Phase 7 — `lake/load_serving.py`,
+  env-gated off by default so the golden paths stay synchronous; the
+  read-after-write race is closed by `wait_for_async_insert=1`.)*
 
 - **ClickHouse `default` user re-enabled for network access (local-dev).**
   ClickHouse 24.8 images, when `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` are
@@ -1007,12 +1012,15 @@ below, never deleted.
   formatting. Annotations only surface in an Alertmanager notification, and live
   firing is the deferred push path — so the descriptive text lives in rule comments
   now, and annotations (with rendering) land with the live path. Keeps the fixture
-  robust and drift-free.
+  robust and drift-free. *(Superseded Phase 18b: the live push path is built — stages
+  push to the Pushgateway, Prometheus scrapes it, the rules evaluate on live data. The
+  Phase-7 four still carry no annotations, now by explicit scope choice, not deferral.)*
 - **Grafana dashboards committed as correct JSON, not a live render.** The batch
   stages aren't scraped, so panels populate only under the deferred push path. The
   dashboard carries correct queries against the real metric names and provisions
   cleanly (verified: Grafana loads "Attribution Integrity"); a live screenshot needs
-  the deferred path. Not oversold as a live dashboard.
+  the deferred path. Not oversold as a live dashboard. *(Superseded Phase 18b: the push
+  path is built, so panels populate from a real scrape; a query-cost panel was added.)*
 
 ### Phase 8
 
@@ -1534,7 +1542,9 @@ below, never deleted.
   service"); resolved toward the file-scope + the headless DONE, per the minimal-but-
   scalable rule — a containerized/published Dagster webserver is speculative deployment
   infra, a SCALING/deployment lever, not built (same posture as async inserts and the
-  Flink port). `make dagster-ui` binds loopback (127.0.0.1) with `DAGSTER_HOME` under
+  Flink port). *(Superseded Phase 18b for the async half: async inserts are now built on
+  the loader; the Dagster-webserver and Flink-port halves of the analogy still hold.)*
+  `make dagster-ui` binds loopback (127.0.0.1) with `DAGSTER_HOME` under
   gitignored `data/`; the headless `make reconcile-dagster` uses an ephemeral instance
   (nothing persists). The spec's Review-section wording is corrected.
 - **`pyiceberg[sql]` reality: no `[sql]` extra in 0.11.1; writes need `pyiceberg-core`.**

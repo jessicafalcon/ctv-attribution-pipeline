@@ -31,11 +31,14 @@
 # it. The metric ships anyway — measuring without alerting is true, alerting without a
 # fireable measurement is not (BACKLOG; DECISIONS Phase 18a).
 #
-# No annotations yet on the Phase-7 four: they only surface in an Alertmanager
-# notification, and live
-# firing (a real scrape → notification) is the deferred push path (BACKLOG). Here
-# the rules are proven and the live-scrape hop is simulated; annotations (with
-# {{ $value }} rendering) land with that live path. Each rule's meaning is in the
+# The live push path is BUILT (Phase 18b): each batch stage pushes its terminal
+# registry to the Pushgateway, Prometheus scrapes it after the stage exits, and these
+# rules evaluate on live data — RestatementMagnitude is proven ACTIVE in Prometheus
+# from a pushed reconcile metric, and Alertmanager routes firing → agent/webhook.py
+# (tests/integration/test_live_firing.py). The `for: 5m` → firing → Alertmanager hop is
+# proven deterministically by `make test-alerts` (eval_time), not re-timed on a wall
+# clock (DECISIONS Phase 18b, amendment 2). The Phase-7 four carry no annotations, by
+# design — a deliberate scope choice, not a deferral. Each rule's meaning is in the
 # comment above it. Batch-mode honesty (DECISIONS Phase 7): ConsumerLag is a
 # backlog proxy, not live consumer-group lag; WatermarkStall is a peak
 # event→ingest lateness proxy, not a true watermark-advance stall.
