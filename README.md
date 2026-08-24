@@ -71,6 +71,7 @@ ICEBERG LAKE (system of record)  raw.exposures · raw.attributed_conversions
                                        ▼ Dagster load (touched days)
 CLICKHOUSE (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
             exposures_landed · campaign_hourly (incremental refresh, dirty keys) · report_snapshots
+            query_cost_daily (per-query cost; quarantined, read by no pipeline path)
                                        ▲
 RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
                                state-miss → bucket-local join vs raw.exposures [day−90d, day];
@@ -80,8 +81,9 @@ RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-u
                                        │
 REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
 ──── off the critical path ──────────────────────────────────────────────
-PROMETHEUS → GRAFANA · ALERTMANAGER ──webhook──► AGENT (SELECT-only user, probe registry,
-                                                  typed AttributionFinding)
+each stage ──push terminal registry──► PUSHGATEWAY ──scrape──► PROMETHEUS → GRAFANA
+                                                    ALERTMANAGER ──webhook──► AGENT
+                                                    (SELECT-only user, probe registry, typed AttributionFinding)
 ```
 
 The spec is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); every non-obvious choice
@@ -107,7 +109,9 @@ a later stage join them without a shuffle.
 the log retains only the latest message per key, so it holds the *current* graph as a
 replayable table rather than an ever-growing history. Each topic carries a JSON Schema
 (generated from the pydantic models, never hand-edited) registered in the schema
-registry; producer and every consumer validate against it.
+registry at **BACKWARD** compatibility — a real data contract (a producer may add an
+optional field, but removing or renaming a required one is rejected at registration);
+producer and every consumer validate against it.
 
 **Resolve step (in-process).** For each conversion: look up the device in the graph →
 one record for that household. Device unknown (guest, roommate, id churn) → fall back to
@@ -159,7 +163,11 @@ insert-triggered summing view (a correction would otherwise double-count).
 restatements ("ROAS for day D as reported on D+1 vs now") queryable — and carries
 `snapshot_version` (`max(processed_at)` over the rows it summarized) as its
 ReplacingMergeTree version, so which of two rows on one key survives a merge is decided
-by the data rather than by merge timing.
+by the data rather than by merge timing. `query_cost_daily` (filled by `make cost-report`
+from `system.query_log`) records the per-query cost of the report/restate/bench queries
+in cpu-seconds and an illustrative dollar figure — a measurement table *outside* the
+byte-identical guarantee (costs vary run to run) that no pipeline path reads, so its
+non-determinism never leaks into an answer.
 
 **Reconciliation job (periodic, reads the lake).** Per event-time day, selects the
 current hot-unattributed rows still inside the 90-day long window — state-misses join
@@ -172,12 +180,14 @@ refreshes the rollup, and writes a new snapshot. No device graph, no broker. Thi
 makes a 90-day window possible without 90 days of processor state.
 
 **Observability.** Prometheus metrics per stage (`producer_`, `resolve_`, `engine_`,
-`lake_`, `reconcile_`), a Grafana dashboard (JSON, committed), and Alertmanager rules
-for the deterministic conditions (consumer lag, watermark stall, match-rate band,
-restatement magnitude). Alerts fire a webhook to the agent — the live scrape →
-Alertmanager → webhook push path is built (Phase 18b: each batch stage pushes its
-terminal registry to a Pushgateway that Prometheus scrapes, and Alertmanager routes
-firing alerts to the agent).
+`lake_`, `reconcile_`, and `clickhouse_` — read from ClickHouse's own system tables:
+storage part-counts and per-query cost, never data content), a Grafana dashboard (JSON,
+committed), and Alertmanager rules for the deterministic conditions (consumer lag,
+watermark stall, match-rate band, restatement magnitude, storage part-count). Because
+the batch stages exit before a pull-scrape, the live scrape → Alertmanager → webhook
+push path is built (Phase 18b) as a **push** path: each stage pushes its terminal
+registry to a Pushgateway that Prometheus scrapes, the rules evaluate on live data, and
+Alertmanager routes firing alerts to the agent.
 
 **The agent — attribution-integrity guardian.** Threshold alerts catch "lag is high";
 they cannot catch a **plausible-but-wrong attribution number** — a ROAS inflated by a
