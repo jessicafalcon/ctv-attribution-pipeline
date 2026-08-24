@@ -152,31 +152,51 @@ def test_accumulated_lake_reloads_byte_identically(oracle_run) -> None:
 # never ran" / "only a subset of days loaded" OBSERVABLE, each case first empties
 # the serving tables — the sanctioned `SERVING_TABLES` truncate `make replay-serving`
 # uses, no new destructive path — to establish the crash state, then runs the load
-# as the recovery. Placed BEFORE the reconcile tests below on purpose: those land
-# reconciled corrections into this module's tmp lake (LAKE_ROOT), which would move
-# the current row per conversion_id off the hot oracle these tests compare to. Each
-# test self-heals (it ends with every day reloaded). No `OPTIMIZE … FINAL` is
-# issued: a recovery test must observe the table as the recovery left it (same
-# rationale as fix/reconcile-idempotency-6dp, BACKLOG 65).
+# as the recovery. The comparison oracle is the in-memory engine run (`_oracle`), so
+# the tests read from an ISOLATED per-test hot lake (`hot_lake`), NOT the module lake
+# the reconcile tests below append reconciled corrections to — that keeps the two
+# tests independent of test order (a load of the isolated lake always matches the hot
+# oracle, whatever ran first). Each test self-heals (it ends with every day reloaded).
+# No `OPTIMIZE … FINAL` is issued: a recovery test must observe the table as the
+# recovery left it (same rationale as fix/reconcile-idempotency-6dp, BACKLOG 65).
+
+
+@pytest.fixture
+def hot_lake(oracle_run, tmp_path, monkeypatch) -> set[str]:
+    """The hot oracle run landed into a FRESH tmp lake used only by the crash tests.
+    Isolates them from the module `oracle_run` lake, into which the reconcile tests
+    land reconciled corrections that would move the current row per conversion_id off
+    the hot rows `_oracle` compares to — so the two tests hold regardless of test
+    order. `monkeypatch.setenv` stays in force through the test body (LAKE_ROOT wins
+    over the profile in `iceberg_catalog._lake_root`) and is undone at teardown,
+    restoring the module lake for whatever runs next. Returns the touched days."""
+    monkeypatch.setenv("LAKE_ROOT", str(tmp_path / "hot_lake"))
+    return land_run(oracle_run)
 
 
 def _truncate_serving(client) -> None:
     """Empty the loaded serving tables — the crash state (nothing loaded). The
     sanctioned `SERVING_TABLES` set, truncated exactly as `orchestration.replay`'s
-    `truncate_and_reload` (make replay-serving) does."""
+    `truncate_and_reload` (make replay-serving) does. NOTE this empties `eval_meta`
+    too (it is in `SERVING_TABLES`) and, unlike `truncate_and_reload`, does NOT
+    re-stamp it — harmless within this module (nothing reads `eval_meta` after), but
+    a later `make eval` / `make replay-serving` on the same stack would hit the
+    empty-marker guard until the next re-stamp."""
     for table in SERVING_TABLES:
         client.command(f"truncate table {table}")
 
 
-def test_load_after_a_skipped_load_recovers_the_oracle_rows(oracle_run) -> None:
-    # Case (a): a crash BETWEEN land and load. The run is landed in the lake
-    # (fixture); truncating the serving tables is the "load never ran" state.
+def test_load_after_a_skipped_load_recovers_the_oracle_rows(
+    oracle_run, hot_lake
+) -> None:
+    # Case (a): a crash BETWEEN land and load. The run is landed in the isolated hot
+    # lake (`hot_lake`); truncating the serving tables is the "load never ran" state.
     # Running the load over the touched days is the recovery on restart, and it
     # converges to the uninterrupted oracle's rows (6dp).
     client = connect()
     att, exp = _oracle(oracle_run)
     assert att, "long_delay must attribute rows"
-    days = land_run(oracle_run)  # touched days (re-land is idempotent on read)
+    days = hot_lake  # touched days of the isolated hot lake
     _truncate_serving(client)
     assert not _att(client) and not _exp(client), "crash state: nothing loaded"
     materialize_load(days)  # the recovery
@@ -184,24 +204,28 @@ def test_load_after_a_skipped_load_recovers_the_oracle_rows(oracle_run) -> None:
     assert _exp(client) == exp
 
 
-def test_load_resumed_after_a_partial_multi_day_load_converges(oracle_run) -> None:
+def test_load_resumed_after_a_partial_multi_day_load_converges(
+    oracle_run, hot_lake
+) -> None:
     # Case (b): a crash PARTWAY THROUGH a multi-day load. Load a strict subset of
     # the touched days (the load stopped one day short), then re-run the full set
     # (restart) — convergence to the uninterrupted oracle's rows (6dp).
     client = connect()
     att, exp = _oracle(oracle_run)
-    days = land_run(oracle_run)
+    days = hot_lake
     ordered = sorted(days)
     assert len(ordered) >= 2, "long_delay must span ≥2 touched days for a partial load"
     subset = set(ordered[:-1])  # stopped one touched day short of the full set
     _truncate_serving(client)
-    materialize_load(subset)
-    # genuinely partial: the held-back day is a touched day, so it carries rows the
-    # subset load has not landed yet — strictly fewer serving rows than the full run.
-    assert len(_att(client)) + len(_exp(client)) < len(att) + len(exp), (
-        "the subset load must be genuinely partial"
-    )
-    materialize_load(days)  # restart over the full set
+    try:
+        materialize_load(subset)
+        # genuinely partial: the held-back day is a touched day, so it carries rows
+        # the subset load has not landed yet — strictly fewer serving rows than full.
+        assert len(_att(client)) + len(_exp(client)) < len(att) + len(exp), (
+            "the subset load must be genuinely partial"
+        )
+    finally:
+        materialize_load(days)  # always restore the full serving state, then compare
     assert _att(client) == att
     assert _exp(client) == exp
 

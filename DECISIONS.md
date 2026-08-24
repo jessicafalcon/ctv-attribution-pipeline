@@ -2642,27 +2642,34 @@ below, never deleted.
   are first emptied. Rather than invent a truncate, the tests reuse
   `orchestration.replay.SERVING_TABLES` and truncate exactly as `make replay-serving`'s
   `truncate_and_reload` does — the one sanctioned rebuild-from-lake path. The tests
-  self-heal (each ends with every touched day reloaded). Alternative not taken: assert
-  convergence without emptying ClickHouse first — rejected because with the table
-  already full both cases are trivially green and demonstrate nothing (the "subset"
-  would not be observably partial).
+  self-heal (each ends with every touched day reloaded); case (b) reloads the full set
+  in a `finally`, so a failed partiality assert reports the failure AND leaves the
+  serving tables whole rather than cascading noise into later tests. One deviation from
+  `truncate_and_reload` is documented in `_truncate_serving`: it empties `eval_meta`
+  (a member of `SERVING_TABLES`) without re-stamping it — harmless within the module,
+  noted so a later `make eval` on the same stack is not a surprise. Alternative not
+  taken: assert convergence without emptying ClickHouse first — rejected because with
+  the table already full both cases are trivially green and demonstrate nothing (the
+  "subset" would not be observably partial).
 - **No `OPTIMIZE … FINAL` before the reads.** A recovery/idempotency test must observe
   the table as the recovery step left it — canonicalizing first would mask a seam that
   failed to collapse. Same rule as fix/reconcile-idempotency-6dp (BACKLOG 65); the 6dp
   `_norm` already absorbs the float-summation last-digit jitter that motivated a
   canonicalize elsewhere, and these tests compare per-row column values (not summed
   aggregates) so no merge can move a digit anyway.
-- **Test placement is load-bearing, and rests on a STEP-0 finding about lake
-  resolution.** `iceberg_catalog._lake_root` checks `LAKE_ROOT` before the configured
-  profile, so the module's `oracle_run` fixture (which sets `LAKE_ROOT` to a tmp lake
-  for the whole module) governs every lake read even after
-  `test_dagster_pass_writes_the_same_reconciled_rows` calls `configure("long_delay")` —
-  every recovery load reads that one tmp lake. But the module's reconcile tests LAND
-  reconciled corrections into that same tmp lake (`reconcile.reconcile` →
-  `land_attributed` → `materialize_load`), which moves the current row per
-  conversion_id off the hot rows these two tests compare to. So the two crash tests are
-  placed BEFORE the reconcile tests, where the tmp lake still holds only the hot run
-  (the accumulated-lake test above them only re-lands the same hot rows). A first
-  draft placed them last and both failed for exactly this reason — caught by the live
-  run, not patched around: the seam was correct, the comparison oracle had been
-  polluted by an out-of-order test.
+- **Order-independence via an isolated per-test lake — a STEP-0 finding about lake
+  resolution made this necessary.** `iceberg_catalog._lake_root` checks `LAKE_ROOT`
+  before the configured profile, so a `LAKE_ROOT` override governs every lake read
+  regardless of any `configure(profile)` call. The module's reconcile tests LAND
+  reconciled corrections into the shared `oracle_run` tmp lake (`reconcile.reconcile` →
+  `land_attributed` → `materialize_load`), which would move the current row per
+  conversion_id off the hot rows these two tests compare to (`_oracle`, the in-memory
+  engine run). A first draft leaned on source ORDER — placing the crash tests before
+  the reconcile tests — and a live run proved that brittle: run out of order, the
+  comparison oracle is polluted and the tests fail on a seam that is actually correct.
+  The fix is a function-scoped `hot_lake` fixture that re-lands the hot run into a
+  FRESH tmp lake (its own `LAKE_ROOT`, undone at teardown) used only by the two crash
+  tests, so a load of that lake always matches the hot oracle no matter what else ran —
+  verified by running `test_dagster_pass_writes_the_same_reconciled_rows` first, then
+  both crash tests, all green. The seam was correct throughout; only the test harness's
+  choice of comparison oracle needed hardening.
