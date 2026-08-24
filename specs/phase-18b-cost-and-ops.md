@@ -106,15 +106,32 @@ through it).
    evolution story yet" caveat. *Evidence: Evidence row 3.*
 4. **Live alert firing path.** Each stage pushes its terminal registry (including 18a's
    `observability/ch_scrape.py` storage scrape) to a Prometheus Pushgateway (compose
-   service, digest-pinned, loopback-bound like the other five) so the **five** rules
-   evaluate against a live scrape and Alertmanager actually delivers the webhook to
-   `agent/webhook.py`. Per-run gateway reset is part of `make run`. The live integration
-   proof (a `long_delay` run produces a FIRING `RestatementMagnitude` in Alertmanager's
-   API) lands in `make test-int-long-delay` — the reconcile-bearing stack where a
-   restatement actually happens. Webhook amplification (BACKLOG): the handler dedupes by
-   `groupKey` per sweep — one sweep per alert group, not per alert (Invariant 7); the
-   trigger-only LLM boundary is unchanged (Invariant 8). Closes two BACKLOG rows ("Live
-   Alertmanager firing path", "Webhook sweep amplification"). *Evidence: Evidence rows
+   service, digest-pinned, loopback-bound like the other five), which persists the push
+   after the batch stage exits, so Prometheus scrapes it and the **five** rules evaluate
+   on live data — closing the "batch stages exit before a scrape" gap every prior phase
+   deferred. Per-run gateway reset is part of `make run`. The AM webhook receiver is wired
+   to `agent/webhook.py`. **What each layer proves (amended, review-round 0 — the shipped
+   `for: 5m` makes a real-data AM-firing assertion a ~5.5-min wall-clock wait, rejected as
+   slow + a clock-timed flake vector; retuning `for:` on the shipped rules is out of scope
+   here):**
+   - **LIVE (`make test-int-long-delay`):** a `long_delay` run's pushed reconcile registry
+     makes `RestatementMagnitude` **ACTIVE (pending/firing) in Prometheus** within a
+     bounded poll — proving push → scrape → evaluate on real data. Separately, a
+     **synthetic** firing alert POSTed to Alertmanager's API is delivered **AM → agent**
+     and `agent/webhook.py` records receipt (bounded poll) — proving the receiver is
+     wired, the "alerts fire but never reach the agent" bug the integration exists to
+     catch. Labelled synthetic (18a's `alerts_synthetic_test.yml` precedent for the case
+     real data cannot drive the leg fast).
+   - **PROMTOOL (`make test-alerts`):** the rule FIRES with `for: 5m` timing, deterministic
+     via `eval_time` — not re-proven with a wall clock.
+   - **CONFIG:** the AM webhook receiver → agent URL is present (asserted against
+     `observability/alertmanager.yml`).
+
+   No "live end-to-end 5-minute firing" claim anywhere. Webhook amplification (BACKLOG):
+   the handler dedupes by `groupKey` per sweep — one sweep per alert group, not per alert
+   (Invariant 7); the trigger-only LLM boundary is unchanged (Invariant 8). Closes two
+   BACKLOG rows ("Live Alertmanager firing path", "Webhook sweep amplification").
+   *Evidence: Evidence rows
    4a–4c.*
 5. **Shard key chosen and defended.** `docs/SCALING.md`'s 500k tier names `household_id`
    as the shard key (corrections and dedup shard-local; reports aggregate via
@@ -136,7 +153,7 @@ Every Done-when item names the test or command output that proves it.
 | 2b (cpu_seconds and dollars derived, not literal) | `tests/test_cost_report.py::test_cpu_seconds_is_the_profileevents_value`, `::test_dollars_come_from_the_config_rate_not_a_hardcoded_sql_literal` |
 | 2c (the cost table is quarantined non-determinism) | `tests/test_cost_report.py::test_no_pipeline_path_reads_query_cost_daily`; LIVE `tests/integration/test_cost_rw.py` (the `cost_rw` principal has exactly `SELECT ON system.query_log` + `INSERT INTO query_cost_daily`, every other write ACCESS_DENIED — the `metrics_ro` mirror) |
 | 3 (BACKWARD accepts optional, rejects breaking) | LIVE `tests/integration/test_schema_compat.py::test_backward_accepts_an_optional_field_and_old_fixtures_still_validate`, `::test_backward_rejects_removing_a_required_field` (409) |
-| 4a (live firing) | LIVE under `make test-int-long-delay`: `tests/integration/test_live_firing.py::test_a_long_delay_run_produces_a_firing_restatementmagnitude_in_alertmanager` |
+| 4a (live firing path) | LIVE under `make test-int-long-delay`: `tests/integration/test_live_firing.py::test_pushed_reconcile_metric_makes_restatementmagnitude_active_in_prometheus` (real data: push→scrape→evaluate) and `::test_a_synthetic_firing_alert_is_delivered_from_alertmanager_to_the_agent` (AM→agent receipt). PROMTOOL firing+timing: `make test-alerts` (`RestatementMagnitude` fires with `for: 5m` via `eval_time`). CONFIG: `tests/test_alertmanager_config.py::test_the_webhook_receiver_points_at_the_agent` |
 | 4b (webhook dedupe by group) | `tests/test_webhook.py::test_one_sweep_per_group_key_not_per_alert`, `::test_duplicate_alerts_in_one_group_trigger_one_sweep` |
 | 4c (LLM boundary intact) | `tests/test_webhook.py::test_alert_text_never_enters_the_sweep_context`; pipeline output byte-identical with the agent disabled (existing determinism pin) |
 | 5 (shard key defended) | `docs/SCALING.md` 500k tier names `household_id` + the why-not-`campaign_id` paragraph; `make check-docs` green (link/anchor + first-screen copy) |
@@ -379,3 +396,22 @@ this half, plus the Phase-18a corrections. What changed, and how:
   written before the pinned decisions name mechanisms.
 - **Citations**: BACKLOG rows are cited by TITLE, never by line number (line numbers shift
   — Phase-19 audit D-b).
+
+## Amendment 2 — Done-when 4a live assertion (2026-08-23, architect ruling)
+
+Done-when 4a originally read "a `long_delay` run produces a FIRING `RestatementMagnitude`
+in Alertmanager's API". The shipped rule carries `for: 5m`, so a real-data AM-firing
+assertion is a ~5.5-min wall-clock wait — rejected as slow AND a clock-timed flake vector
+(the stack-risk line: never a fixed sleep / real-clock timing). Retuning `for:` on the
+four shipped production rules to make a test fast was also rejected: whether a batch-pushed
+*settled terminal* metric warrants the 5-minute transient-debounce is a real alert-semantics
+question, but it is its own pinned decision for every consumer, not something to smuggle in
+through a test-timing fix — out of scope here, shipped rule semantics unchanged.
+
+The assertion is split by what each layer can prove deterministically and fast (Done-when 4
+above): **LIVE** — `RestatementMagnitude` ACTIVE in Prometheus on the pushed real reconcile
+metric (push→scrape→evaluate, the genuinely new capability every prior phase deferred) plus a
+labelled **synthetic** firing alert delivered AM→`agent/webhook.py` (the mis-wired-receiver
+bug); **PROMTOOL** — the rule fires with `for: 5m` timing via `eval_time`; **CONFIG** — the AM
+webhook receiver points at the agent. Nothing is left to a 5.5-min timer. Recorded in
+DECISIONS Phase 18b.
