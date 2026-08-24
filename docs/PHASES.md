@@ -233,10 +233,11 @@ lake of record, cost/ops levers, and a docs reshape. Each has a spec under
 `specs/phase-N-<slug>.md`; the spec keeps its "(PROPOSED)" title as the record of
 how it was approved (a spec reconciled against main before its branch opened —
 Phase 19 on — is titled "(RECONCILED)"), and none opens a branch until approved.
-Status: **12–17, 19 and 18a merged** (19 reordered before 18a/18b — DECISIONS
-"Process"; 18a PR #38, 2026-08-23), **18b in build** (`phase-18b-cost-and-ops`; its
-spec RECONCILED by the branch's commit 1, approved 2026-08-23). Phase 12
-additionally needed dependency sign-off and an ARCHITECTURE §3.5 scope reversal.
+Status: **all planned phases merged (0–19, 18a, 18b)** — the roadmap is complete
+(19 reordered before 18a/18b — DECISIONS "Process"; 18a PR #38, 18b PR #39, both
+2026-08-23). Phase 12 additionally needed dependency sign-off and an ARCHITECTURE §3.5
+scope reversal. Next work is BACKLOG-driven (top candidate: a Phase-20 Decimal64 money
+migration), not a pre-planned phase.
 The per-phase results table lives in `README.md` → History.
 
 ## Phase 12 — Lakehouse landing + orchestrated reconciliation (PROPOSED)
@@ -414,7 +415,7 @@ the metric does. The migration for `snapshot_version` is create → backfill →
 confirmed `migrate-snapshots` target (never added — the rebuild preserves every row), a read-side assert that only holds on a profile the
 DONE command never runs.
 
-## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (in review)
+## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (merged)
 
 **Goal.** Async inserts measured, a query-cost table (`query_cost_daily`), schema
 compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook
