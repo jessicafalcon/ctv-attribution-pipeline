@@ -1844,7 +1844,21 @@ below, never deleted.
   here". The frozen Phase-8 `AttributionContext` shape is unchanged (no rename, no
   new field — agent contract pinned); one sentence in `agent/context.py` says it.
   Trigger to re-validate the agent on this: BACKLOG 49 (`make agent-eval` re-run,
-  API tokens, ask first).
+  API tokens, ask first) — **FIRED 2026-08-23** (roadmap item 2,
+  `docs/agent-eval-recapture`): re-run live, the agent held 30/30 correct / FP
+  0/10 and the shifted signal's post-reconcile meaning shows in the recaptured
+  RESULTS tables.
+- **Agent-eval recapture (roadmap item 2) reordered RESULTS sections; it did NOT
+  touch the writer.** `run_eval.write_results` truncates from the `## Agent eval`
+  marker to EOF, so any section that follows it is dropped on the next
+  `make agent-eval`; two Phase-17-era sections had drifted below it. Changing the
+  writer inside a docs-only capture PR would put Phase-10 code on a capture branch
+  and change who-writes-what for a record file — the shape the fix-amendment rule
+  guards — so instead the two sections were moved ABOVE `## Agent eval`, restoring
+  the append-at-end contract the writer assumes. The writer's robustness fix
+  (splice between `<!-- AGENT_EVAL_START/END -->` sentinels, fail loud,
+  `check-docs`-guarded, per the `cost_report`/`measure_levers`/`rollup_bench`
+  idiom) is its own follow-up, `fix/run-eval-splice`.
 - **`MatchRateOutOfBand` headroom halved; kept as-is.** The clean profile's hot
   match rate moved 0.945 → 0.854 because deferrals are unattributed by design, so
   the band's floor (0.80) now clears by 0.054 instead of 0.145. Kept as-is — the

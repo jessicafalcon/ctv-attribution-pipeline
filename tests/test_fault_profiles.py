@@ -214,8 +214,9 @@ def test_no_fault_baseline_is_clean_nothing_to_flag() -> None:
 # - ambiguous_ip channel (Phase 16): recovers exactly the deferred shared-IP
 #   conversions. shared_ip_spike has 25 and therefore DOES restate after `make run`
 #   (the deferral landing, not a late-arrival signal); real_lift and
-#   no_fault_baseline have none and do not restate. agent-eval is not re-run in
-#   Phase 16 (API tokens) — BACKLOG 49.
+#   no_fault_baseline have none and do not restate. agent-eval was re-run in
+#   roadmap item 2 (2026-08-23) — the old BACKLOG-49 deferral; the catalog held
+#   30/30 correct.
 # (late_burst is excluded: its misses are arrival lateness / eviction, not
 # event-time, so it genuinely restates.)
 
