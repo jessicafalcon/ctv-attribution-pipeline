@@ -2585,8 +2585,17 @@ below, never deleted.
   (`streaming/dataflow.py:157,163` for Exposure/Conversion; `resolve/graph_loader.py:37`
   for Household). None wraps decode in try/except, so a `ValidationError` propagates out
   of the comprehension and halts the pass — no message is skipped. `tests/test_poison_message.py`
-  pins it (a `[good, malformed, good]` batch through the decode comprehension raises rather
-  than returning a length-2 list) so a future edit cannot regress to skip-and-continue.
+  pins it AT THE REAL SITES: it patches the drain seam (`_drain_topic`,
+  `graph_loader.drain`) to inject a `[good, malformed, good]` batch and calls the
+  production `run_engine` / `load_graph_index`, asserting each raises `ValidationError`.
+  Because the correct code raises at the decode comprehension before any broker is
+  touched, the test is offline and fast; a regression that wrapped a real site in
+  `try/except: continue` would swallow the poison row and NOT raise there, so the test
+  goes red exactly when the invariant is violated (verified by mutating a site to
+  skip-and-continue → test fails). An earlier draft re-implemented the comprehension in a
+  local helper — code-reviewer + functionality-tester flagged that it pinned pydantic, not
+  the pipeline (a skip-and-continue at the named sites left it green), so it was replaced
+  with the real-path test above.
 - **The loud failure is inscrutable, and that is left as-is (accepted limitation).** The
   propagated `ValidationError` carries no topic/offset/which-message context — the
   comprehension iterates over raw `bytes` with no offset threaded through. Making the crash

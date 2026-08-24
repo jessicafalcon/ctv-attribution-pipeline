@@ -6,50 +6,98 @@ skip-and-continue would break the byte-identical determinism guarantee (the same
 seed no longer reproduces the same output once one message is dropped).
 
 `common.kafka.drain` returns raw bytes; consume-time validation lives in the
-callers' bare `model_validate_json` comprehensions (streaming/dataflow.py:157,163
-for Exposure/Conversion; resolve/graph_loader.py:37 for Household). That
-comprehension is the decode path this pins: a malformed element in the middle of
-a drained batch raises `ValidationError` out of the comprehension rather than
-yielding a shorter list. Current behavior already fails loud (no try/except at any
-site) — this test pins it so a future edit cannot regress to skip-and-continue.
+callers' bare `model_validate_json` comprehensions. This pins the invariant at
+the THREE REAL sites by patching the drain seam and calling the production
+functions — a malformed element mid-batch must raise `ValidationError` out of the
+real code path, not be swallowed:
 
-Offline: no broker, no services. Covers the Exposure event model; Conversion and
-the graph loader's Household path are the identical comprehension shape.
+- `streaming.dataflow.run_engine`  → exposures decode (dataflow.py:157) and
+  conversions decode (dataflow.py:163), seam = `streaming.dataflow._drain_topic`
+- `resolve.graph_loader.load_graph_index` → Household decode (graph_loader.py:37),
+  seam = `resolve.graph_loader.drain`
+
+`pytest.raises(ValidationError)` is the assertion that gives this its teeth: the
+correct code raises a pydantic `ValidationError` at the decode comprehension
+before any broker is touched, so the committed test never connects. A regression
+that wraps a decode site in `try/except: continue` would NOT raise a
+`ValidationError` there — it would swallow the poison row and fall through to a
+different (non-pydantic) failure or none at all — so these tests go red exactly
+when the invariant is violated at the site they name. Offline: no broker, no
+services (the patched seams keep every path off the network).
 """
 
 import pytest
 from pydantic import ValidationError
 
-from producer.models import Exposure
+from resolve import graph_loader
+from resolve.index import GraphIndex
+from streaming import dataflow
 
-# A well-formed Exposure wire payload (every required field present, types valid).
-_GOOD = (
-    '{"exposure_id": "e1", "event_time": "2026-01-01T00:00:00Z",'
-    ' "ingest_time": "2026-01-01T00:00:01Z", "campaign_id": "c1",'
-    ' "household_id": "h1", "ip": "10.0.0.1", "app_id": "a1",'
-    ' "program_genre": "news", "spend": 1.5}'
+# Well-formed wire payloads (bytes, as the drain returns). Every required field
+# present, types valid.
+_GOOD_EXPOSURE = (
+    b'{"exposure_id": "e1", "event_time": "2026-01-01T00:00:00Z",'
+    b' "ingest_time": "2026-01-01T00:00:01Z", "campaign_id": "c1",'
+    b' "household_id": "h1", "ip": "10.0.0.1", "app_id": "a1",'
+    b' "program_genre": "news", "spend": 1.5}'
 )
-# Malformed: valid JSON, but missing required fields and carrying a negative
-# spend — fails schema validation exactly as a corrupted/poison wire byte would.
-_MALFORMED = '{"exposure_id": "e2", "spend": -1}'
+_GOOD_CONVERSION = (
+    b'{"conversion_id": "cv1", "event_time": "2026-01-01T00:00:00Z",'
+    b' "ingest_time": "2026-01-01T00:00:01Z", "device_id": "d1",'
+    b' "ip": "10.0.0.1", "conversion_type": "purchase", "revenue": 9.99,'
+    b' "order_id": "o1"}'
+)
+_GOOD_HOUSEHOLD = (
+    b'{"household_id": "h1", "devices": [{"device_id": "d1", "kind": "tv"}],'
+    b' "ips": ["10.0.0.1"]}'
+)
+# Malformed: valid JSON, but missing required fields (and a negative spend) —
+# fails schema validation exactly as a corrupted/poison wire byte would.
+_MALFORMED = b'{"exposure_id": "e2", "spend": -1}'
 
 
-def _decode_batch(payloads: list[str]) -> list[Exposure]:
-    """The callers' consume-time decode step, verbatim in shape: a bare
-    `model_validate_json` comprehension over the drained values."""
-    return [Exposure.model_validate_json(v) for v in payloads]
+def test_run_engine_halts_on_malformed_exposure(monkeypatch) -> None:
+    """A poison exposure mid-drain raises out of the real exposures decode
+    (dataflow.py:157) — run_engine does not skip it and carry on."""
 
+    def fake_drain(broker, topic, group):
+        if topic == dataflow.EXPOSURES_TOPIC:
+            return [_GOOD_EXPOSURE, _MALFORMED, _GOOD_EXPOSURE]
+        return []
 
-def test_malformed_payload_halts_the_batch_decode() -> None:
-    """A malformed element mid-batch raises out of the decode comprehension —
-    it does NOT skip the bad message and return the two good ones."""
+    monkeypatch.setattr(dataflow, "_drain_topic", fake_drain)
     with pytest.raises(ValidationError):
-        _decode_batch([_GOOD, _MALFORMED, _GOOD])
+        dataflow.run_engine("unused:9092")
 
 
-def test_good_batch_decodes_in_full() -> None:
-    """Control: with no poison message the same decode path yields every row,
-    so the raise above is the malformed element and not the harness."""
-    rows = _decode_batch([_GOOD, _GOOD])
-    assert len(rows) == 2
-    assert all(isinstance(r, Exposure) for r in rows)
+def test_run_engine_halts_on_malformed_conversion(monkeypatch) -> None:
+    """A poison conversion mid-drain raises out of the real conversions decode
+    (dataflow.py:163). Exposures decode cleanly first, so this pins the second
+    site specifically; the decode runs before resolve, so no broker is reached."""
+
+    def fake_drain(broker, topic, group):
+        if topic == dataflow.EXPOSURES_TOPIC:
+            return [_GOOD_EXPOSURE, _GOOD_EXPOSURE]
+        return [_GOOD_CONVERSION, _MALFORMED, _GOOD_CONVERSION]
+
+    monkeypatch.setattr(dataflow, "_drain_topic", fake_drain)
+    with pytest.raises(ValidationError):
+        dataflow.run_engine("unused:9092")
+
+
+def test_load_graph_index_halts_on_malformed_household(monkeypatch) -> None:
+    """A poison Household in the compacted-topic drain raises out of the real
+    graph-loader decode (graph_loader.py:37). The Consumer is constructed but
+    never connects (the patched drain returns before any poll)."""
+    monkeypatch.setattr(graph_loader, "drain", lambda consumer, topic: [_MALFORMED])
+    with pytest.raises(ValidationError):
+        graph_loader.load_graph_index("unused:9092")
+
+
+def test_load_graph_index_control_good_household(monkeypatch) -> None:
+    """Control: the SAME real path over a clean payload returns a GraphIndex, so
+    the raise above is the poison row and not the harness or the patched seam."""
+    monkeypatch.setattr(
+        graph_loader, "drain", lambda consumer, topic: [_GOOD_HOUSEHOLD]
+    )
+    assert isinstance(graph_loader.load_graph_index("unused:9092"), GraphIndex)
