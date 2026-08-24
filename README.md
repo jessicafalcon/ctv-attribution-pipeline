@@ -236,9 +236,14 @@ reproduced by the command it states.
   rows, 1.2× fewer bytes, ~1.8× faster**, and a magnitude-free direction assert fails
   `make bench` if the rollup ever stops being the smaller read. The structural point: the
   naive scan grows with every event, the rollup read is bounded by `(campaign, hour)`.
-- **Alert rules** are proven by `promtool test rules` against REAL captured stage
-  registries (`make test-alerts`): the four workload rules fire on `long_delay`; on `tiny` only
-  `RestatementMagnitude` fires (its own deferral landing restates ROAS). They detect
+- **Alert rules** — five, proven by `promtool test rules` against REAL captured stage
+  registries (`make test-alerts`): the four workload rules fire on `long_delay` (on
+  `tiny` only `RestatementMagnitude` fires — its own deferral landing restates ROAS), and
+  the storage rule `PartCountHigh` is silent on both real captures, fired only by a
+  labelled synthetic input. Since Phase 18b they also evaluate **live**: each batch stage
+  pushes its terminal registry to a Pushgateway that Prometheus scrapes, and
+  `RestatementMagnitude` is proven ACTIVE from a real pushed metric (the `for: 5m` →
+  Alertmanager-firing timing stays promtool's, via `eval_time`). They detect
   *operational* faults, not inflation — a green alert board does not mean the numbers
   are right, which is the agent's job.
 - **Agent eval.** Every fault profile plus a no-fault baseline, 5× each: 30/30 correct,
@@ -255,9 +260,11 @@ The written deliverable is [`docs/SCALING.md`](docs/SCALING.md): the constraint 
 breaks first (hot-window state, the measured ~571 B/exposure above), the partition math
 (parallelism = partition count; the household-keyed re-partition a multi-partition
 engine needs), what changes at the **50k/s** and **500k/s** tiers (state backend,
-stream processor — the Flink mapping is the port target, continuous follow is a
-Phase-18+ decision — and ClickHouse: async inserts, sharding), and the lake's scale
-port (object store + REST catalog, Spark/Trino running the same SQL DuckDB runs here).
+stream processor — the Flink mapping is the port target, continuous follow a
+post-roadmap decision the phases through 18b did not take on — and ClickHouse: larger
+async-insert buffers (the async lever itself is built, Phase 18b) and sharding by
+`household_id`), and the lake's scale port (object store + REST catalog, Spark/Trino
+running the same SQL DuckDB runs here).
 Bucketing is what keeps the 90-day reconcile join shuffle-free: a household's exposures
 and its candidates' exploded rows hash to the same bucket of every day partition.
 
@@ -288,14 +295,14 @@ under `producer/profiles/`: `tiny`, `medium`, `long_delay`, six fault/control pr
 `no_fault_baseline`) and two volume profiles (`bench_large`, `scale_curve`).
 
 Other entry points — `make report` / `restate` / `bench` / `cost-levers` /
-`scale-curve` / `context` (the LLM-free context object), `make eval` (accuracy vs
-truth), `make test` (offline, no services), `make test-int` (against the running
-stack), `make test-alerts` (promtool on the alert rules), `make check-docs` (the docs
-guard). The two LLM paths — `make agent-run` and `make agent-eval` — cost API tokens;
+`rollup-bench` / `cost-report` / `scale-curve` / `context` (the LLM-free context
+object), `make eval` (accuracy vs truth), `make test` (offline, no services), `make
+test-int` (against the running stack), `make test-alerts` (promtool on the alert
+rules), `make check-docs` (the docs guard). The two LLM paths — `make agent-run` and `make agent-eval` — cost API tokens;
 **ask before running** (they load `ANTHROPIC_API_KEY` from `.env`). Full command
 reference: [`CLAUDE.md`](CLAUDE.md) → Commands. Service UIs once `make up` is healthy:
-ClickHouse `:8123`, Prometheus `:9090`, Alertmanager `:9093`, Grafana `:3000`, Redpanda
-Kafka API `:19092`.
+ClickHouse `:8123`, Prometheus `:9090`, Alertmanager `:9093`, Grafana `:3000`,
+Pushgateway `:9091`, Redpanda Kafka API `:19092` (all bound to `127.0.0.1`).
 
 ## Repo map
 
@@ -306,7 +313,7 @@ streaming/       attribution engine: pure core + batch-drain driver (window, ded
 lake/            Iceberg lake of record: catalog, schemas, landing, DuckDB reads, ClickHouse loader
 orchestration/   Dagster assets (lake → ClickHouse load, day-partitioned reconcile) + headless CLI
 reconcile/       periodic long-window matcher over the lake, rollup, snapshots
-clickhouse/      DDL, users (agent_ro SELECT-only; metrics_ro metadata-only), migrations
+clickhouse/      DDL, users (agent_ro SELECT-only; metrics_ro metadata-only; cost_rw query_log→cost table), migrations
 queries/         reporting SQL, restatement view, naive-vs-optimized benchmark, cost levers
 observability/   prometheus.yml, 5 alert rules, the clickhouse_ scrape, grafana (JSON)
 agent/           collectors, hypothesis catalog, probe registry, loop, webhook, eval/
@@ -351,8 +358,9 @@ cited. Rationale per phase: [`DECISIONS.md`](DECISIONS.md).
 | 18a | 08-22 | #38 | *post-plan* — cost and ops levers, first half: the Dagster loader records the `(campaign_id, hour)` keys each load touches (`rollup_dirty`) and refreshes them after every load — the rollup row's version is `max(stamp)` over the summarized rows (data-derived, no caller offset), so the reconcile pass's reload is a genuinely incremental second pass (19 of 340 keys rewritten, 17.9× fewer rows written; reads unchanged at one granule). Per-key watermark (`rollup_refreshed`), never a global max: the first cut left 321 of 340 keys permanently unrefreshed. `report_snapshots` gains `snapshot_version` as its RMT version (migrated by create → backfill → `exchange tables` → drop; ClickHouse has no `alter … modify engine`). Storage measured by a one-shot `clickhouse_` scrape as a SELECT-only `metrics_ro`; ONE new alert rule, `PartCountHigh > 150` (the server's `parts_to_delay_insert`) — silence from real captures, firing from a labelled synthetic input; no merge-lag rule, because no capture can fire one. `queries/bench_common.py` graduated | merged 08-23 | `phase-18a-cost-and-ops` |
 | 18b | 08-23 | #39 | *post-plan* — cost and ops levers, second half: async inserts on the loader (`async_insert=1, wait_for_async_insert=1`, `LAKE_ASYNC_INSERT=1` in `make run`, off in golden paths; serving rows byte-identical, no read-after-load race — proven live). Per-query cost from `system.query_log` into `query_cost_daily` (RMT `(day, query_tag)`) via a new SELECT-`system.query_log`+INSERT-only `cost_rw` writer; cpu-seconds + illustrative $ (config rate, never SQL); quarantined non-determinism, no pipeline path reads it. Schema registry set to BACKWARD (add-optional accepted, remove-required 409 — proven live). Live alert firing PATH: batch stages push their terminal registry to a digest-pinned Pushgateway, Prometheus scrapes it and the five rules evaluate on live data (`RestatementMagnitude` ACTIVE proven live); Alertmanager routes firing → `agent/webhook.py`, proven with a synthetic alert; webhook dedupes by `groupKey` (one sweep per group). Shard-key note: `household_id`. `for: 5m`→AM-firing timing stays promtool's (amendment 2) | merged 08-23 | `phase-18b-cost-and-ops` |
 
-Next in order: **18b** (async inserts, `query_cost_daily`, BACKWARD compat, live alert
-firing) — specs under `specs/`, reconciled against main before each branch opens.
+The planned roadmap is **complete** — all phases (0–19, 18a, 18b) merged. Next work is
+BACKLOG-driven, not a pre-planned phase (top candidate: a Phase-20 Decimal64 money
+migration); specs live under `specs/`, reconciled against main before each branch opens.
 
 **Follow-on / standalone fix PRs** (each its own branch off main, same review discipline):
 - `fix/bench-direction-guard` (PR #14) — magnitude-free bench direction assert + `_canonicalize` OPTIMIZE for deterministic `read_rows` (BACKLOG 29; the helper is `queries/bench_common.py` `canonicalize` since Phase 18a).
@@ -366,7 +374,8 @@ firing) — specs under `specs/`, reconciled against main before each branch ope
 - `docs/process-tightening` (PR #32, merged 08-22) — `specs/TEMPLATE.md` Evidence / Record updates / Threat model sections; spec finalized only after its predecessor merges; ≤ ~6 items per spec; the "Before reporting DONE" self-review.
 - `docs/review-invariants` (PR #34, merged 08-22) — Invariants-first specs, fix amendments, the two-round review cap, scoped re-review; agents gain the Invariants check and the Mutation step.
 - `tooling/review-round` (PR #35, merged 08-22) — `make review-gate`, `make mutate`, `/review-round N`; the judgment-free edges of the review loop as scripts, three judgments left human (DECISIONS "Process").
-- `fix/make-quote-profile` (PR #36, in review) — every recipe quotes user variables through `$(call _Q,$(value VAR))` and `unexport`s the seven of them (incl. `CONFIRM`), closing both the recipe-time and the make-startup `$(shell …)` expansion vectors on both origins (`make -n` shows only the first). Phase-17 residual, closed.
+- `fix/make-quote-profile` (PR #36, merged 08-23) — every recipe quotes user variables through `$(call _Q,$(value VAR))` and `unexport`s the seven of them (incl. `CONFIRM`), closing both the recipe-time and the make-startup `$(shell …)` expansion vectors on both origins (`make -n` shows only the first). Phase-17 residual, closed.
+- `fix/review-gate-pytest9` (PR #37, merged 08-23) — `make review-gate`'s Evidence check went silently broken under pytest 9 (the `-qq` collection-summary format changed, so `collected_ids` returned zero and every spec passed vacuously); fixed the collector parse for `make review-gate` + `make mutate`. The gate runs in no automated check, so it surfaced only when a human ran it (BACKLOG).
 
 ## Next steps — what was cut, and why
 
@@ -376,7 +385,8 @@ not speculative code.
 - **Continuous Kafka follow.** The engine is a bounded batch drain in plain Python.
   Windowing, watermarks, and eviction are all real, but on the drain. Moving to an
   unbounded continuous follow — and choosing the framework for it, Bytewax proper vs
-  Flink — is a Phase-18+ decision, and it is the trigger for the next two items.
+  Flink — is a post-roadmap decision (the phases through 18b did not take it on), and it
+  is the trigger for the next two items.
 - **TTL'd dedup state.** Batch dedup is a full seen-set, correct because the whole stream
   is in memory. Under continuous follow an unbounded seen-set is a memory leak; it
   becomes TTL'd state keyed on `event_time + max_resend_delay`. The seeded duplicate is
