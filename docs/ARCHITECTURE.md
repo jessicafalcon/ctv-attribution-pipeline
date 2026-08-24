@@ -60,66 +60,74 @@ $10 in API tokens.
 
 ### 3.2 Diagram
 
-```
-PRODUCER (seeded)
-  ├─ device graph: household → devices → IPs (shared-IP noise knob)   [reference data]
-  ├─ exposures   keyed household_id ─────────────────┐
-  ├─ conversions keyed device_id ──────┐             │
-  └─ truth links (hidden from pipeline)│             │
-                                       v             v
-REDPANDA           topics: exposures | conversions
-                   + schema registry (JSON Schema per topic)
-                   + device_graph (compacted topic, reference data)
-                                       │
-          exposures ───────────────────┤
-                                       v
-ATTRIBUTION ENGINE (deterministic batch attributor — no stream framework)
-                   ├─ resolve step, in-process: conversion → device graph lookup →
-                   │  household_id (device hit, else IP fallback; shared IP = ambiguous)
-                   ├─ hot path: join both sides on household_id
-                   ├─ hot window state (configurable, default 7d of exposures)
-                   ├─ last-touch match, all candidates recorded as assists
-                   ├─ ambiguous shared-IP conversion → UNATTRIBUTED (reason ambiguous_ip),
-                   │  never a hot guess; reconciliation owns it
-                   ├─ dedup on exposure_id / conversion_id (seen-set; TTL'd under continuous follow)
-                   ├─ watermarks + allowed lateness (minutes–hours late)
-                   └─ emits attributed + unattributed conversion records; a deferred row
-                      carries its full candidate_households
-                                       │  lands (append) — never writes ClickHouse rows
-                                       v
-ICEBERG LAKE (system of record)   raw.exposures · raw.attributed_conversions
-                   both partitioned day(event_time) × bucket(N, household_id), N a table
-                   property; append-only logs (hot row, later the reconciled row);
-                   "current row" = argMax(processed_at) in SQL (DuckDB here; Spark/Trino at scale)
-                                       │  Dagster load, driven by the days TOUCHED
-                                       v
-CLICKHOUSE (derived serving projection, loaded from the lake; replayable with no Kafka)
-                   attributed_conversions  (ReplacingMergeTree, key conversion_id, version processed_at)
-                   exposures_landed        (raw exposures, for the naive benchmark + reconcile parity)
-                   campaign_hourly         (rollups, incremental refresh of the keys a load
-                                            touched; not insert-triggered)
-                   report_snapshots        (reported_at × period → metrics; enables restatements)
-                                       ^
-RECONCILIATION JOB (periodic, reads the LAKE, no broker)
-                   current hot-unattributed rows of raw.attributed_conversions per day:
-                   state-miss → bucket-local join vs raw.exposures in [day−90d, day];
-                   ambiguous_ip → EXPLODE over candidate_households BEFORE bucketing →
-                   bucket-local join → reduce by conversion_id across buckets, most-recent
-                   exposure wins (the ONE tiebreak) → append corrected rows to the lake
-                   → reload touched days → refresh rollups → write new report snapshot
-                                       │
-REPORTING          ROAS / CPA / CVR / site-visit rate
-                   restatement view: metric for period P as of time T
-                   naive (full-scan) vs optimized (rollup) benchmark
+This is the authoritative diagram; README embeds a copy. The lake (heavier
+border) is the system of record — every row reaches ClickHouse through it.
+Dotted edges are off the critical path.
 
-──── off the critical path ──────────────────────────────────────────────
-PROMETHEUS ← input backlog, resolve ambiguity rate, join-state size, match rate,
-             watermark lag, insert batch size, reconciliation volume
-     │
-GRAFANA (dashboards)      ALERTMANAGER (deterministic thresholds)
-                                       │  webhook
-                                       v
-ATTRIBUTION-INTEGRITY AGENT (§4)  read-only ClickHouse user, probe registry, typed findings
+```mermaid
+flowchart TD
+    %% ===================== Producer =====================
+    subgraph PROD["Producer — seeded, deterministic given a seed"]
+        DG["Device graph<br/>household → devices → IPs<br/>(shared-IP fraction = the only wrong-household source)"]
+        GEN["Event generator<br/>+ knobs: lateness, duplicates, faults"]
+        TRUTH["Truth links<br/>(side file — the pipeline NEVER reads it)"]
+    end
+    GEN -.->|"scored against, off-pipeline"| TRUTH
+
+    %% ===================== Redpanda =====================
+    subgraph RP["Redpanda — Kafka API + schema registry (BACKWARD)"]
+        EXP["exposures<br/>keyed household_id"]
+        CONV["conversions<br/>keyed device_id"]
+        DGT["device_graph<br/>compacted topic"]
+    end
+    GEN --> EXP
+    GEN --> CONV
+    DG --> DGT
+
+    %% ===================== Engine =====================
+    subgraph ENG["Attribution engine — deterministic batch attributor, no stream framework"]
+        RESOLVE["resolve step (in-process)<br/>device → household; IP fallback;<br/>shared IP ⇒ ambiguous fan-out"]
+        HOT["hot 7d window · last-touch + assists<br/>dedup seen-set · watermark + allowed lateness<br/>ambiguous shared-IP ⇒ UNATTRIBUTED (reason ambiguous_ip)<br/>+ candidate_households — never a hot guess"]
+    end
+    EXP --> HOT
+    CONV --> RESOLVE
+    DGT --> RESOLVE
+    RESOLVE --> HOT
+
+    %% ===================== Lake =====================
+    subgraph LAKE["Iceberg lake — SYSTEM OF RECORD, append-only"]
+        RAW["raw.exposures · raw.attributed_conversions<br/>day(event_time) × bucket(8, household_id)<br/>current row = argMax(processed_at), computed on read"]
+    end
+    HOT -->|"land (append) — never writes ClickHouse"| RAW
+
+    %% ===================== ClickHouse =====================
+    subgraph CH["ClickHouse — derived serving projection, replayable with no Kafka"]
+        AC["attributed_conversions<br/>ReplacingMergeTree (key conversion_id, ver processed_at)"]
+        ROLL["campaign_hourly (incremental dirty-set refresh)<br/>exposures_landed · report_snapshots"]
+    end
+    RAW -->|"Dagster load, touched days"| AC
+    AC -->|"loader refreshes touched rollup keys"| ROLL
+
+    %% ===================== Reconciliation =====================
+    RECON["Reconciliation job — periodic, reads the lake, no broker<br/>state-miss → bucket-local join over day−90d … day<br/>ambiguous_ip → explode candidate_households → join → reduce<br/>most-recent exposure wins → append correction (path=reconciled)"]
+    RAW -->|"read bucket-locally"| RECON
+    RECON -->|"append reconciled rows, reload touched days"| RAW
+
+    %% ===================== Reporting =====================
+    REPORT["Reporting<br/>ROAS · CPA · CVR · site-visit rate<br/>restatement view · naive-vs-rollup benchmark"]
+    CH --> REPORT
+
+    %% ===================== Off critical path =====================
+    subgraph OBS["Off the critical path"]
+        PROM["each stage pushes its terminal registry →<br/>Pushgateway → Prometheus → Grafana<br/>Alertmanager (5 deterministic rules)"]
+        AGENT["read-only AI agent<br/>SELECT-only user · probe registry<br/>typed AttributionFinding"]
+    end
+    ENG -.->|"push metrics"| PROM
+    CH -.->|"push metrics"| PROM
+    PROM -.->|"firing alert webhook"| AGENT
+    CH -.->|"SELECT-only reads"| AGENT
+
+    style LAKE stroke-width:4px
 ```
 
 ### 3.3 Components

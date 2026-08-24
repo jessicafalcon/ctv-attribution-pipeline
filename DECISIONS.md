@@ -2673,3 +2673,57 @@ below, never deleted.
   verified by running `test_dagster_pass_writes_the_same_reconciled_rows` first, then
   both crash tests, all green. The seam was correct throughout; only the test harness's
   choice of comparison oracle needed hardening.
+
+### docs/public-readiness (2026-08-24)
+
+Docs-only pass to make the repo presentable to outside human reviewers before it is
+made PUBLIC. No pipeline code, no pin, no golden, no BACKLOG-count change.
+
+- **ASCII architecture diagram → Mermaid, but only the two human-facing copies.** The
+  diagram lived in three places (README, `docs/ARCHITECTURE.md` §3.2, CLAUDE.md), each
+  slightly different. GitHub renders a `mermaid` code fence natively, so a public
+  repo's README and spec should carry a legible graph, not a box-drawing block. The
+  **authoritative** Mermaid graph now lives in `ARCHITECTURE.md` §3.2; README **embeds a
+  copy** (rather than linking it) so the public front page shows the visual inline. The
+  graph keeps every element the ASCII conveyed — producer (seeded, device graph, truth
+  links never read), Redpanda (exposures keyed household_id / conversions keyed
+  device_id + registry), engine (resolve in-process, hot 7d window, last-touch +
+  assists, dedup, ambiguous-shared-IP deferral), Iceberg lake = system of record
+  (`day × bucket(8)`), Dagster load, ClickHouse serving (RMT + rollups), reporting, the
+  periodic reconciliation reading the lake and appending corrections, and the
+  off-critical-path observability → read-only agent — grouped into the spec's swimlanes
+  with labeled edges. Duplicating the graph in two files risks drift, but a diagram is
+  not a `check-docs`-guarded number and the drift cost is low; the alternative (README
+  links ARCHITECTURE's copy) was rejected because a public README with no inline visual
+  is the thing this pass exists to fix.
+- **The ASCII diagram STAYS in CLAUDE.md.** CLAUDE.md is loaded into every agent session
+  as context, not rendered as Markdown for a human — a Mermaid fence there would sit in
+  the model's context as raw source, giving up the at-a-glance legibility that is the
+  whole point. ASCII is the right format for tool-context; Mermaid is the right format
+  for the two human-facing copies. So this pass replaced the README and ARCHITECTURE
+  copies and left CLAUDE.md's untouched (a deliberate per-file choice, stated here so a
+  future reader does not "finish the job" by converting it).
+- **README split: slimmed the middle, kept the first screen verbatim.** The ~115-line
+  prose stage-by-stage walk-through (a near-duplicate of ARCHITECTURE §3.3) was removed
+  from README and replaced by the Mermaid diagram + a one-line pointer to
+  `ARCHITECTURE.md#3-architecture`; a new **Documentation** index table maps each concern
+  to the doc that owns it (ARCHITECTURE spec, PHASES plan, RESULTS numbers, RUNBOOK,
+  SCALING, DECISIONS, BACKLOG, CLAUDE.md); `## Run it` became `## Quickstart` with its
+  entry-point list folded into a pointer to CLAUDE.md → Commands; `## How it's proven`
+  and `## Scaling` were tightened, keeping every claim. **The first screen was left
+  byte-for-byte** because `scripts/check_docs.py` pins six generated-number copies to it
+  (`~571 B/exposure`, `~8.6 TB`, the rollup-write and three cost-lever ratios) under a
+  ≤60-line limit — editing it risks failing check 2 for no reader benefit. `## History`
+  and `## Next steps` were kept below the fold (History is an anchor target of
+  ARCHITECTURE §7). Alternative not taken: reorder Quickstart above the fold — rejected
+  because the headline demo command is already on the first screen and the check-docs
+  first-screen constraint leaves no room.
+- **Pre-public security sweep scans the whole git history, not HEAD.** Going public
+  exposes every commit, so the mandatory sweep (security-reviewer) checked the full
+  `git rev-list --all` (all local + `origin/*` refs) for key patterns and
+  for any `.env` / `data/` / credential ever committed, plus CI token exposure and
+  compose service binding — not just the working tree (the sweep covered every ref at
+  the time it ran, 299 commits on main's tip; this PR's own docs commits land after and
+  are docs-only). Verdict: clean, **GO** for the
+  visibility flip; no secret in tree or history, nothing to rotate or rewrite. The flip
+  itself and branch-protection are the developer's operational steps, out of this PR.
