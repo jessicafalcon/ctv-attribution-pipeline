@@ -24,11 +24,13 @@ from datetime import UTC
 from pathlib import Path
 
 from clickhouse_connect.driver.client import Client
+from prometheus_client import CollectorRegistry, Gauge
 
 from accuracy.guard import assert_profile_marker, db_profile_marker
 from clickhouse.apply import apply as apply_ddl
 from clickhouse.client import connect, connect_cost
 from lake.iceberg_catalog import validate_profile
+from observability.push import push_registry
 from queries.bench_common import canonicalize, measure
 
 RESULTS_PATH = Path(__file__).parent.parent / "docs" / "RESULTS.md"
@@ -178,6 +180,30 @@ def write_results(section: str) -> None:
     RESULTS_PATH.write_text(head + section + tail)
 
 
+def push_cost_metrics(rows: list[dict]) -> None:
+    """Push per-query cost to the Pushgateway as `clickhouse_query_cost_*{query_tag}`
+    gauges (job "cost"), so the Grafana cost panel can graph it — no-op unless
+    PUSHGATEWAY_URL is set. Grafana's only datasource is Prometheus, so cost reaches it
+    through the push path, not by reading query_cost_daily directly."""
+    registry = CollectorRegistry()
+    cpu = Gauge(
+        "clickhouse_query_cost_cpu_seconds",
+        "cpu-seconds for the tagged query (illustrative, one run)",
+        ["query_tag"],
+        registry=registry,
+    )
+    usd = Gauge(
+        "clickhouse_query_cost_usd",
+        "illustrative $ for the tagged query (cpu_seconds × config rate)",
+        ["query_tag"],
+        registry=registry,
+    )
+    for r in rows:
+        cpu.labels(query_tag=r["query_tag"]).set(r["cpu_seconds"])
+        usd.labels(query_tag=r["query_tag"]).set(r["usd"])
+    push_registry(registry, "cost")
+
+
 def format_table(rows: list[dict]) -> str:
     out = ["cost per report query (this run):"]
     for r in rows:
@@ -201,6 +227,7 @@ def main(argv: list[str] | None = None) -> None:
     apply_ddl(runner)
     rows = measure_costs(runner, connect_cost())
     write_results(render(rows))
+    push_cost_metrics(rows)  # no-op unless PUSHGATEWAY_URL is set (Grafana cost panel)
     print(format_table(rows))
     print("\nwrote docs/RESULTS.md → 'Cost per report query'")
 

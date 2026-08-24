@@ -1,6 +1,19 @@
-# Minimal boot config. Real routes (webhook → agent) arrive in Phase 9.
+# Phase 18b: firing alerts route to the agent webhook (agent/webhook.py, POST /alerts).
+# group_wait/group_interval are short — this is a low-volume batch pipeline, so a firing
+# alert should reach the agent promptly rather than waiting the 30s default. The receiver
+# URL targets the host-run agent via host.docker.internal (compose extra_hosts on this
+# service); a real deploy points the URL at the agent service instead. The agent re-derives
+# its context from ClickHouse and never reads the alert body (trigger-only boundary), so a
+# hostile alert label cannot steer it.
 route:
-  receiver: "null"
+  receiver: agent-webhook
+  group_by: ["alertname"]
+  group_wait: 5s
+  group_interval: 10s
+  repeat_interval: 1h
 
 receivers:
-  - name: "null"
+  - name: agent-webhook
+    webhook_configs:
+      - url: "http://host.docker.internal:18099/alerts"
+        send_resolved: false

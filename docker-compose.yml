@@ -55,6 +55,23 @@ services:
       timeout: 3s
       retries: 24
 
+  # Pushgateway (Phase 18b): the batch stages are finite drains that exit before a
+  # pull-scrape, so they PUSH their terminal registry here and the gateway PERSISTS it
+  # for Prometheus to scrape. `make run` resets it per run. Loopback-bound + digest-pinned
+  # like the other five services.
+  pushgateway:
+    image: prom/pushgateway:v1.11.1@sha256:03738d278e082ee9821df730c741b3b465c251fc2b68a85883def301a55a6215
+    command:
+      - --web.listen-address=:9091
+      - --web.enable-admin-api # for the per-run wipe (make run reset); loopback-only
+    ports:
+      - "127.0.0.1:9091:9091"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
   prometheus:
     image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
     ports:
@@ -76,6 +93,11 @@ services:
     volumes:
       - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
+    # Phase 18b: reach the host-run agent webhook (agent/webhook.py) from inside the
+    # container. host.docker.internal resolves natively on Docker Desktop; host-gateway
+    # makes it resolve on Linux CI too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/healthy"]
       interval: 5s

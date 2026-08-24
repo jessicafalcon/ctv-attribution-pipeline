@@ -347,6 +347,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.metrics_out:
         write_to_textfile(args.metrics_out, REGISTRY)
+    # Push the terminal registry to the Pushgateway (Phase 18b) — no-op unless
+    # PUSHGATEWAY_URL is set (make run). Carries reconcile_restatement_roas_abs_delta,
+    # which drives the live RestatementMagnitude rule.
+    from observability.push import push_registry
+
+    push_registry(REGISTRY, "reconcile")
 
 
 if __name__ == "__main__":

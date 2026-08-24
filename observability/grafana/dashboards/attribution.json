@@ -126,6 +126,19 @@
         { "refId": "A", "expr": "engine_conversions_ambiguous_deferred_total", "legendFormat": "ambiguous deferred", "datasource": { "type": "prometheus", "uid": "prometheus" } },
         { "refId": "B", "expr": "engine_conversions_unattributed_total", "legendFormat": "unattributed (all reasons)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
       ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Query cost — cpu-seconds per report query (Phase 18b)",
+      "description": "clickhouse_query_cost_cpu_seconds{query_tag}: pushed by `make cost-report` via the Pushgateway. Illustrative and non-deterministic (cpu-seconds vary run to run); query_cost_daily in ClickHouse is the system of record (docs/RESULTS.md 'Cost per report query').",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "clickhouse_query_cost_cpu_seconds", "legendFormat": "{{query_tag}} cpu-s", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
     }
   ]
 }

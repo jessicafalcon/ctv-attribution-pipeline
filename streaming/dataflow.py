@@ -238,6 +238,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.metrics_out:
         write_to_textfile(args.metrics_out, REGISTRY)
+    # Push the terminal registry to the Pushgateway (Phase 18b) — no-op unless
+    # PUSHGATEWAY_URL is set (make run); the batch stage exits before a pull-scrape.
+    from observability.push import push_registry
+
+    push_registry(REGISTRY, "engine")
 
 
 if __name__ == "__main__":

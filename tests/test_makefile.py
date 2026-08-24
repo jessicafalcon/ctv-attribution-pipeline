@@ -314,7 +314,10 @@ def test_rollup_bench_recipe_has_no_delete_and_no_confirm() -> None:
 
 def test_cost_report_is_one_python_process_with_a_quoted_profile() -> None:
     lines = [ln for ln in _dry_run("cost-report", "PROFILE=tiny") if ln.strip()]
-    assert lines == ["uv run python -m queries.cost_report --profile 'tiny'"], lines
+    assert lines == [
+        "PUSHGATEWAY_URL=http://127.0.0.1:9091 uv run python -m queries.cost_report "
+        "--profile 'tiny'"
+    ], lines
     (line,) = _dry_run("cost-report", 'PROFILE=a"; touch pwned')
     assert line.count("--profile") == 1 and "touch pwned" in line
     assert "&&" not in line and ";" not in line.split("--profile")[0]
