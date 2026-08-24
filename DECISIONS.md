@@ -2609,3 +2609,67 @@ below, never deleted.
 - **The three decode sites are NOT refactored into a shared helper here.** Folding them into
   one decode function is also a write-path change (it moves who-decodes-what); deferred with
   the scrutability work above, same trigger.
+
+### fix/crash-recovery-proof (2026-08-24)
+
+- **Invariant demonstrated (BACKLOG 88):** for all interruptions of the land → load
+  seam — a load that never ran after a land, or a load that stopped after a subset of
+  the touched days — completing the load afterward converges to exactly the serving
+  rows the uninterrupted oracle produces (row content, 6dp; RMT FINAL read).
+  Interruption changes nothing an observer can see once the load finishes.
+- **It holds by construction; this item only demonstrates it — NO code change.** The
+  seam is idempotent for three composed reasons already in the design: the lake is an
+  append-only log, loads are driven by the days a landing TOUCHED (`materialize_load`
+  takes an explicit day set, so a subset is a normal call, not a new path), and
+  `attributed_conversions` is a ReplacingMergeTree keyed `conversion_id` / version
+  `processed_at` (with `exposures_landed` keyed `(campaign_id, event_time, exposure_id)`),
+  so re-inserting a day collapses on the FINAL read. STEP-0 confirmed both properties
+  before any test was written; reproducing an interrupted load needs only test-side
+  setup, so this stayed a `fix/` branch with no Invariants amendment.
+- **Two live demonstrations** in `tests/integration/test_lakehouse.py`, under the
+  existing `make test-int-lakehouse` (clean long_delay stack), reusing its `oracle_run`
+  fixture and `_norm` / `_att` / `_exp` / `_oracle` helpers so the comparison is
+  byte-for-byte the same as the module's other parity tests: (a)
+  `test_load_after_a_skipped_load_recovers_the_oracle_rows` — land, empty the serving
+  tables (the "load never ran" state), then load the touched days and assert 6dp
+  equality; (b) `test_load_resumed_after_a_partial_multi_day_load_converges` — empty,
+  load a strict subset of the touched days (stopped one day short), assert the state is
+  genuinely partial (strictly fewer serving rows), then load the full set and assert
+  6dp equality.
+- **The crash state is created by truncating the sanctioned `SERVING_TABLES` set, not a
+  new destructive path.** The stack's ClickHouse is already loaded by `make run-hot`, so
+  "skip the load" / "load only a subset of days" is invisible unless the serving tables
+  are first emptied. Rather than invent a truncate, the tests reuse
+  `orchestration.replay.SERVING_TABLES` and truncate exactly as `make replay-serving`'s
+  `truncate_and_reload` does — the one sanctioned rebuild-from-lake path. The tests
+  self-heal (each ends with every touched day reloaded); case (b) reloads the full set
+  in a `finally`, so a failed partiality assert reports the failure AND leaves the
+  serving tables whole rather than cascading noise into later tests. One deviation from
+  `truncate_and_reload` is documented in `_truncate_serving`: it empties `eval_meta`
+  (a member of `SERVING_TABLES`) without re-stamping it — harmless within the module,
+  noted so a later `make eval` on the same stack is not a surprise. Alternative not
+  taken: assert convergence without emptying ClickHouse first — rejected because with
+  the table already full both cases are trivially green and demonstrate nothing (the
+  "subset" would not be observably partial).
+- **No `OPTIMIZE … FINAL` before the reads.** A recovery/idempotency test must observe
+  the table as the recovery step left it — canonicalizing first would mask a seam that
+  failed to collapse. Same rule as fix/reconcile-idempotency-6dp (BACKLOG 65); the 6dp
+  `_norm` already absorbs the float-summation last-digit jitter that motivated a
+  canonicalize elsewhere, and these tests compare per-row column values (not summed
+  aggregates) so no merge can move a digit anyway.
+- **Order-independence via an isolated per-test lake — a STEP-0 finding about lake
+  resolution made this necessary.** `iceberg_catalog._lake_root` checks `LAKE_ROOT`
+  before the configured profile, so a `LAKE_ROOT` override governs every lake read
+  regardless of any `configure(profile)` call. The module's reconcile tests LAND
+  reconciled corrections into the shared `oracle_run` tmp lake (`reconcile.reconcile` →
+  `land_attributed` → `materialize_load`), which would move the current row per
+  conversion_id off the hot rows these two tests compare to (`_oracle`, the in-memory
+  engine run). A first draft leaned on source ORDER — placing the crash tests before
+  the reconcile tests — and a live run proved that brittle: run out of order, the
+  comparison oracle is polluted and the tests fail on a seam that is actually correct.
+  The fix is a function-scoped `hot_lake` fixture that re-lands the hot run into a
+  FRESH tmp lake (its own `LAKE_ROOT`, undone at teardown) used only by the two crash
+  tests, so a load of that lake always matches the hot oracle no matter what else ran —
+  verified by running `test_dagster_pass_writes_the_same_reconciled_rows` first, then
+  both crash tests, all green. The seam was correct throughout; only the test harness's
+  choice of comparison oracle needed hardening.

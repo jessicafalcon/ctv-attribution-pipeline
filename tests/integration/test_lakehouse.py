@@ -18,6 +18,11 @@ it is safe to run standalone), then proves the spec's Done-when:
   source-equivalence proof, kept, now with the lake pass as the product path);
 - Phase 12 #3 (kept): the Dagster-orchestrated pass writes the same reconciled
   rows a single pass would — now via lake append + reload.
+
+BACKLOG 88 (crash recovery at the land → load seam): two additive demonstrations
+that an interrupted load is recoverable by construction — (a) a load that never
+ran after a land, (b) a load that stopped after a subset of touched days — each
+converges on restart to the uninterrupted oracle's serving rows. No code change.
 """
 
 import os
@@ -28,6 +33,7 @@ import pytest
 
 from clickhouse.client import connect
 from lake.load_serving import ATTRIBUTED_COLS, EXPOSURE_COLS
+from orchestration.replay import SERVING_TABLES
 from orchestration.run import main as dagster_main
 from orchestration.run import materialize_load
 from producer.models import Exposure
@@ -130,6 +136,98 @@ def test_accumulated_lake_reloads_byte_identically(oracle_run) -> None:
     after_exp = _serving(client, "exposures_landed", EXPOSURE_COLS, _EXP_ORDER)
     assert after_att == before_att
     assert after_exp == before_exp
+
+
+# --- Crash recovery at the land → load seam (BACKLOG 88) -------------------
+#
+# Invariant: for all interruptions of the land → load seam — a load that never
+# ran after a land, or a load that stopped after a subset of touched days —
+# completing the load afterward converges to exactly the serving rows the
+# uninterrupted oracle produces (row content, 6dp; RMT FINAL read). The seam is
+# idempotent by construction (append-only lake, touched-day reloads, and the
+# ReplacingMergeTree collapses re-inserts on FINAL) — these two tests DEMONSTRATE
+# it; no production code change accompanies them.
+#
+# The stack's ClickHouse is already loaded (`make run-hot`), so to make "the load
+# never ran" / "only a subset of days loaded" OBSERVABLE, each case first empties
+# the serving tables — the sanctioned `SERVING_TABLES` truncate `make replay-serving`
+# uses, no new destructive path — to establish the crash state, then runs the load
+# as the recovery. The comparison oracle is the in-memory engine run (`_oracle`), so
+# the tests read from an ISOLATED per-test hot lake (`hot_lake`), NOT the module lake
+# the reconcile tests below append reconciled corrections to — that keeps the two
+# tests independent of test order (a load of the isolated lake always matches the hot
+# oracle, whatever ran first). Each test self-heals (it ends with every day reloaded).
+# No `OPTIMIZE … FINAL` is issued: a recovery test must observe the table as the
+# recovery left it (same rationale as fix/reconcile-idempotency-6dp, BACKLOG 65).
+
+
+@pytest.fixture
+def hot_lake(oracle_run, tmp_path, monkeypatch) -> set[str]:
+    """The hot oracle run landed into a FRESH tmp lake used only by the crash tests.
+    Isolates them from the module `oracle_run` lake, into which the reconcile tests
+    land reconciled corrections that would move the current row per conversion_id off
+    the hot rows `_oracle` compares to — so the two tests hold regardless of test
+    order. `monkeypatch.setenv` stays in force through the test body (LAKE_ROOT wins
+    over the profile in `iceberg_catalog._lake_root`) and is undone at teardown,
+    restoring the module lake for whatever runs next. Returns the touched days."""
+    monkeypatch.setenv("LAKE_ROOT", str(tmp_path / "hot_lake"))
+    return land_run(oracle_run)
+
+
+def _truncate_serving(client) -> None:
+    """Empty the loaded serving tables — the crash state (nothing loaded). The
+    sanctioned `SERVING_TABLES` set, truncated exactly as `orchestration.replay`'s
+    `truncate_and_reload` (make replay-serving) does. NOTE this empties `eval_meta`
+    too (it is in `SERVING_TABLES`) and, unlike `truncate_and_reload`, does NOT
+    re-stamp it — harmless within this module (nothing reads `eval_meta` after), but
+    a later `make eval` / `make replay-serving` on the same stack would hit the
+    empty-marker guard until the next re-stamp."""
+    for table in SERVING_TABLES:
+        client.command(f"truncate table {table}")
+
+
+def test_load_after_a_skipped_load_recovers_the_oracle_rows(
+    oracle_run, hot_lake
+) -> None:
+    # Case (a): a crash BETWEEN land and load. The run is landed in the isolated hot
+    # lake (`hot_lake`); truncating the serving tables is the "load never ran" state.
+    # Running the load over the touched days is the recovery on restart, and it
+    # converges to the uninterrupted oracle's rows (6dp).
+    client = connect()
+    att, exp = _oracle(oracle_run)
+    assert att, "long_delay must attribute rows"
+    days = hot_lake  # touched days of the isolated hot lake
+    _truncate_serving(client)
+    assert not _att(client) and not _exp(client), "crash state: nothing loaded"
+    materialize_load(days)  # the recovery
+    assert _att(client) == att
+    assert _exp(client) == exp
+
+
+def test_load_resumed_after_a_partial_multi_day_load_converges(
+    oracle_run, hot_lake
+) -> None:
+    # Case (b): a crash PARTWAY THROUGH a multi-day load. Load a strict subset of
+    # the touched days (the load stopped one day short), then re-run the full set
+    # (restart) — convergence to the uninterrupted oracle's rows (6dp).
+    client = connect()
+    att, exp = _oracle(oracle_run)
+    days = hot_lake
+    ordered = sorted(days)
+    assert len(ordered) >= 2, "long_delay must span ≥2 touched days for a partial load"
+    subset = set(ordered[:-1])  # stopped one touched day short of the full set
+    _truncate_serving(client)
+    try:
+        materialize_load(subset)
+        # genuinely partial: the held-back day is a touched day, so it carries rows
+        # the subset load has not landed yet — strictly fewer serving rows than full.
+        assert len(_att(client)) + len(_exp(client)) < len(att) + len(exp), (
+            "the subset load must be genuinely partial"
+        )
+    finally:
+        materialize_load(days)  # always restore the full serving state, then compare
+    assert _att(client) == att
+    assert _exp(client) == exp
 
 
 def _clickhouse_exposures(client) -> dict[str, list[Exposure]]:

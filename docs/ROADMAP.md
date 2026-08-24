@@ -62,7 +62,7 @@ the item's PR merges.
   failure is INSCRUTABLE (no topic/offset context) — left as an accepted
   limitation, deferred to the continuous-follow phase (a scrutability wrap is a
   write-path change → fix-amendment ritual).
-- [ ] **5. Crash-recovery proof** (BACKLOG: "The land → load seam's crash
+- [x] **5. Crash-recovery proof** (BACKLOG: "The land → load seam's crash
   idempotency is argued, never demonstrated"; additive integration tests, no
   spec).
   The land → load seam is idempotent by construction (append-only lake,
@@ -71,6 +71,16 @@ the item's PR merges.
   land and load), then load fresh — serving rows equal the uninterrupted
   oracle's; (b) drive `orchestration/run.py` load day-by-day, stop after a
   subset of touched days, re-run the full load — convergence. `fix/` branch.
+  **DONE (`fix/crash-recovery-proof`, 2026-08-24):** STEP-0 finding — no
+  production code change needed (`materialize_load` already takes an explicit
+  touched-day set; the RMT collapses re-loads on FINAL). Two additive live tests
+  in `tests/integration/test_lakehouse.py` under `make test-int-lakehouse`
+  (`test_load_after_a_skipped_load_recovers_the_oracle_rows`,
+  `test_load_resumed_after_a_partial_multi_day_load_converges`); each establishes
+  the crash state by truncating the sanctioned `SERVING_TABLES` (as
+  `make replay-serving` does — no new destructive path), then loads as the recovery
+  and asserts 6dp equality to the uninterrupted oracle. DECISIONS
+  `fix/crash-recovery-proof`.
 
 ## Items 6–8 — phase-sized, after 1–5
 
