@@ -15,7 +15,7 @@ the item's PR merges.
 
 ## Items 1–5 — fix-sized, do first
 
-- [ ] **1. Flake fix** (BACKLOG: "test_second_pass_is_idempotent compares … by
+- [x] **1. Flake fix** (BACKLOG: "test_second_pass_is_idempotent compares … by
   exact float equality"). `tests/integration/test_reconcile.py` compares
   restatement rows exactly; summation order over un-merged parts moves the last
   digit. Round to 6 dp as `tests/integration/test_lakehouse.py::_norm` does.

@@ -648,7 +648,7 @@ mutate 7/7). Next work is BACKLOG-driven, not pre-planned: the top candidate is 
 Phase-18b caveat: BACKWARD now 409s an in-place required-column retype, so the migration
 must add an optional Decimal field + dual-write, not retype). A new phase starts the
 usual way: architect writes/approves the spec (Invariants-first), implementer builds.
-Open BACKLOG rows: **44** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+Open BACKLOG rows: **43** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.
