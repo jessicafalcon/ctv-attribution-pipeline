@@ -54,207 +54,130 @@ make down && make lake-reset CONFIRM=yes && make up && make seed PROFILE=tiny &&
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    %% ===================== Producer =====================
+    subgraph PROD["Producer — seeded, deterministic given a seed"]
+        DG["Device graph<br/>household → devices → IPs<br/>(shared-IP fraction = the only wrong-household source)"]
+        GEN["Event generator<br/>+ knobs: lateness, duplicates, faults"]
+        TRUTH["Truth links<br/>(side file — the pipeline NEVER reads it)"]
+    end
+    GEN -.->|"scored against, off-pipeline"| TRUTH
+
+    %% ===================== Redpanda =====================
+    subgraph RP["Redpanda — Kafka API + schema registry (BACKWARD)"]
+        EXP["exposures<br/>keyed household_id"]
+        CONV["conversions<br/>keyed device_id"]
+        DGT["device_graph<br/>compacted topic"]
+    end
+    GEN --> EXP
+    GEN --> CONV
+    DG --> DGT
+
+    %% ===================== Engine =====================
+    subgraph ENG["Attribution engine — deterministic batch attributor, no stream framework"]
+        RESOLVE["resolve step (in-process)<br/>device → household; IP fallback;<br/>shared IP ⇒ ambiguous fan-out"]
+        HOT["hot 7d window · last-touch + assists<br/>dedup seen-set · watermark + allowed lateness<br/>ambiguous shared-IP ⇒ UNATTRIBUTED (reason ambiguous_ip)<br/>+ candidate_households — never a hot guess"]
+    end
+    EXP --> HOT
+    CONV --> RESOLVE
+    DGT --> RESOLVE
+    RESOLVE --> HOT
+
+    %% ===================== Lake =====================
+    subgraph LAKE["Iceberg lake — SYSTEM OF RECORD, append-only"]
+        RAW["raw.exposures · raw.attributed_conversions<br/>day(event_time) × bucket(8, household_id)<br/>current row = argMax(processed_at), computed on read"]
+    end
+    HOT -->|"land (append) — never writes ClickHouse"| RAW
+
+    %% ===================== ClickHouse =====================
+    subgraph CH["ClickHouse — derived serving projection, replayable with no Kafka"]
+        AC["attributed_conversions<br/>ReplacingMergeTree (key conversion_id, ver processed_at)"]
+        ROLL["campaign_hourly (incremental dirty-set refresh)<br/>exposures_landed · report_snapshots"]
+    end
+    RAW -->|"Dagster load, touched days"| AC
+    AC -->|"loader refreshes touched rollup keys"| ROLL
+
+    %% ===================== Reconciliation =====================
+    RECON["Reconciliation job — periodic, reads the lake, no broker<br/>state-miss → bucket-local join over day−90d … day<br/>ambiguous_ip → explode candidate_households → join → reduce<br/>most-recent exposure wins → append correction (path=reconciled)"]
+    RAW -->|"read bucket-locally"| RECON
+    RECON -->|"append reconciled rows, reload touched days"| RAW
+
+    %% ===================== Reporting =====================
+    REPORT["Reporting<br/>ROAS · CPA · CVR · site-visit rate<br/>restatement view · naive-vs-rollup benchmark"]
+    CH --> REPORT
+
+    %% ===================== Off critical path =====================
+    subgraph OBS["Off the critical path"]
+        PROM["each stage pushes its terminal registry →<br/>Pushgateway → Prometheus → Grafana<br/>Alertmanager (5 deterministic rules)"]
+        AGENT["read-only AI agent<br/>SELECT-only user · probe registry<br/>typed AttributionFinding"]
+    end
+    ENG -.->|"push metrics"| PROM
+    CH -.->|"push metrics"| PROM
+    PROM -.->|"firing alert webhook"| AGENT
+    CH -.->|"SELECT-only reads"| AGENT
+
+    style LAKE stroke-width:4px
 ```
-PRODUCER (seeded)  ── device graph (compacted topic) ── truth links (side file, never read)
-   │ exposures (key household_id)      │ conversions (key device_id)
-   ▼                                   ▼
-REDPANDA  exposures | conversions  + schema registry
-                                       │
-   exposures ──────────────────────────┤
-                                       ▼
-ATTRIBUTION ENGINE (deterministic batch attributor)
-   resolve step in-process: device → household (IP fallback; shared IP = ambiguous)
-   hot window (7d) · last-touch + assists · dedup (seen-set) · watermarks + allowed lateness
-   ambiguous shared-IP → unattributed (ambiguous_ip) + candidate_households, never a hot guess
-                                       ▼ land (append)
-ICEBERG LAKE (system of record)  raw.exposures · raw.attributed_conversions
-            day(event_time) × bucket(8, household_id) · append-only · argMax(processed_at) read
-                                       ▼ Dagster load (touched days)
-CLICKHOUSE (derived)  attributed_conversions (ReplacingMergeTree, key conversion_id, ver processed_at)
-            exposures_landed · campaign_hourly (incremental refresh, dirty keys) · report_snapshots
-            query_cost_daily (per-query cost; quarantined, read by no pipeline path)
-                                       ▲
-RECONCILIATION JOB (periodic, reads the lake, no broker)  per day, current hot-unattributed rows:
-                               state-miss → bucket-local join vs raw.exposures [day−90d, day];
-                               ambiguous_ip → explode over candidate_households → bucket-local
-                               join → reduce across buckets, most-recent exposure wins →
-                               append to lake → reload → refresh → snapshot
-                                       │
-REPORTING  4 metrics · restatement view · naive-vs-optimized benchmark
-──── off the critical path ──────────────────────────────────────────────
-each stage ──push terminal registry──► PUSHGATEWAY ──scrape──► PROMETHEUS → GRAFANA
-                                                    ALERTMANAGER ──webhook──► AGENT
-                                                    (SELECT-only user, probe registry, typed AttributionFinding)
-```
 
-The spec is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); every non-obvious choice
-is in [`DECISIONS.md`](DECISIONS.md) ("Decisions still in force" first, the per-phase
-log as an appendix). The problem in one paragraph: CTV is sold as a performance channel,
-but the ad is seen on a TV and the conversion happens on a phone — two high-volume
-streams keyed by *different* things (the TV's household, the phone's device), bridged by
-a device graph, joined inside a window, under duplicates and arrivals days late.
-View-through attribution over-credits about as often as it under-credits, which is where
-an automated integrity check on the numbers earns its place. A walk through the stages,
-with the stream concepts explained where they first appear:
+The lake (heavier border) is the system of record — every row reaches ClickHouse
+through it; dotted edges are off the critical path. The full stage-by-stage
+walk-through, with the stream concepts (compacted topic, watermark, ReplacingMergeTree,
+bucketing) explained where they first appear, is
+[`docs/ARCHITECTURE.md` §3](docs/ARCHITECTURE.md#3-architecture).
 
-**Producer (seeded).** Builds a device graph — households, each with a few devices and
-one or more IPs — then emits two streams plus a hidden truth file. A configurable
-fraction of IPs are *shared* across households (CGNAT, office, campus); shared IPs are
-the **only** source of wrong-household matches, kept isolated so the fault is
-diagnosable. Exposures are **keyed by** `household_id`, conversions by `device_id`. A
-key decides which partition a message lands in — Redpanda (a Kafka-API log) guarantees
-ordering only *within* a partition, so keying matchable events the same way is what lets
-a later stage join them without a shuffle.
+## Documentation
 
-**Redpanda.** Two event topics plus `device_graph`, a **compacted topic** — one where
-the log retains only the latest message per key, so it holds the *current* graph as a
-replayable table rather than an ever-growing history. Each topic carries a JSON Schema
-(generated from the pydantic models, never hand-edited) registered in the schema
-registry at **BACKWARD** compatibility — a real data contract (a producer may add an
-optional field, but removing or renaming a required one is rejected at registration);
-producer and every consumer validate against it.
+Each concern lives in the doc that owns it; this README is the map.
 
-**Resolve step (in-process).** For each conversion: look up the device in the graph →
-one record for that household. Device unknown (guest, roommate, id churn) → fall back to
-IP; if the IP maps to several households, **fan out** one candidate record per
-household with an ambiguity flag. This is a function the engine calls (`resolve/`), not a
-separate consumer and topic — that seam returns only when the device graph is owned by
-another team or a vendor (DECISIONS Phase 16).
-
-**Attribution engine.** A deterministic batch attributor in plain Python, no stream
-framework (DECISIONS Phase 16). It drains `exposures` and `conversions` start-to-end
-once, resolves in-process, joins on `household_id`, and applies event-time windowing
-over the drain:
-- **Hot window.** Exposures are held for 7 days of event-time. Window-state size is the
-  central scaling constraint — you cannot hold 90 days of exposures in processor memory
-  at real throughput, which is *why* there is a second reconciliation path.
-- **Watermarks + allowed lateness.** A watermark is the pipeline's estimate of "we've
-  now seen everything up to time T" (`max(event_time) − allowed_lateness`). It gates
-  *when* a conversion is released for matching and *when* an exposure is evicted from
-  the hot window. A conversion is a pure probe — never dropped by a lateness gate; it
-  goes **unattributed** only when its matching exposure has already aged out of the
-  window, and reconciliation retries it later.
-- **Last-touch + assists.** Credit the most-recent in-window exposure; record the others
-  as assists. Multi-touch then becomes a query, not a re-run.
-- **Ambiguous deferral.** A shared-IP conversion (several candidate households) is never
-  guessed hot: it is emitted **unattributed (ambiguous_ip)** as one placeholder row —
-  still exactly one row per conversion — carrying its full `candidate_households`, and
-  reconciliation, which holds every exposure, credits the household with the most recent
-  exposure. Hot-path wrong-household is 0 by construction; a late correct credit beats a
-  fast wrong one.
-- **Dedup.** A full seen-set on `conversion_id`/`exposure_id` (the batch already holds
-  the whole topic; TTL'd eviction is the continuous-follow target — see SCALING.md).
-
-**Iceberg lake (system of record).** The engine lands its deduped exposures and its
-attributed rows in a local Iceberg lake (`raw.exposures`, `raw.attributed_conversions`),
-both partitioned `day(event_time) × bucket(8, household_id)`, as **append-only logs**:
-the hot row and, later, the reconciled row for the same conversion both live there, and
-"current row per conversion" is computed on read (`argMax(processed_at)`), never assumed.
-The lake outlives `make down`; ClickHouse is loaded from it by a Dagster asset per
-touched day and can be rebuilt from it with no Kafka (`make replay-serving`).
-
-**ClickHouse (serving layer, derived).** `attributed_conversions` is a
-**ReplacingMergeTree** keyed on `conversion_id` with `processed_at` as the version: when
-a reconciliation correction or a replay writes the same key with a newer version, reads
-with `FINAL` (or `argMax`) return only the latest — so replays and corrections are safe
-by construction. `campaign_hourly` is a rollup the loader **refreshes over the keys
-each load touched** (a full rebuild stays as the oracle), never an
-insert-triggered summing view (a correction would otherwise double-count).
-`report_snapshots` stamps each refresh with `reported_at` — which is what makes
-restatements ("ROAS for day D as reported on D+1 vs now") queryable — and carries
-`snapshot_version` (`max(processed_at)` over the rows it summarized) as its
-ReplacingMergeTree version, so which of two rows on one key survives a merge is decided
-by the data rather than by merge timing. `query_cost_daily` (filled by `make cost-report`
-from `system.query_log`) records the per-query cost of the report/restate/bench queries
-in cpu-seconds and an illustrative dollar figure — a measurement table *outside* the
-byte-identical guarantee (costs vary run to run) that no pipeline path reads, so its
-non-determinism never leaks into an answer.
-
-**Reconciliation job (periodic, reads the lake).** Per event-time day, selects the
-current hot-unattributed rows still inside the 90-day long window — state-misses join
-bucket-locally against `raw.exposures` in `[day − 90d, day]`; the deferred ambiguous_ip
-rows are exploded over their persisted `candidate_households` BEFORE bucketing, joined
-bucket-locally, and reduced across buckets with the one most-recent-exposure tiebreak
-(`reconcile.pick_household`) — the *same* pure attribution leaf the hot path runs. It
-appends corrected rows (`path=reconciled`) to the lake, reloads the touched days,
-refreshes the rollup, and writes a new snapshot. No device graph, no broker. This is what
-makes a 90-day window possible without 90 days of processor state.
-
-**Observability.** Prometheus metrics per stage (`producer_`, `resolve_`, `engine_`,
-`lake_`, `reconcile_`, and `clickhouse_` — read from ClickHouse's own system tables:
-storage part-counts and per-query cost, never data content), a Grafana dashboard (JSON,
-committed), and Alertmanager rules for the deterministic conditions (consumer lag,
-watermark stall, match-rate band, restatement magnitude, storage part-count). Because
-the batch stages exit before a pull-scrape, the live scrape → Alertmanager → webhook
-push path is built (Phase 18b) as a **push** path: each stage pushes its terminal
-registry to a Pushgateway that Prometheus scrapes, the rules evaluate on live data, and
-Alertmanager routes firing alerts to the agent.
-
-**The agent — attribution-integrity guardian.** Threshold alerts catch "lag is high";
-they cannot catch a **plausible-but-wrong attribution number** — a ROAS inflated by a
-device-graph mismatch, a window-edge effect, or a late-arrival restatement. The agent
-does the cross-signal reasoning a data engineer would do by hand, bounded to make that
-safe: **read-only, enforced at the database** (a SELECT-only ClickHouse user,
-`agent_ro`; an integration test proves it cannot INSERT/ALTER/DROP/CREATE); **no
-free-form SQL** (a **probe registry** of named, parameterized queries exposed as tools);
-**typed in, typed out** (deterministic collectors build a pydantic `AttributionContext`
-with no LLM; the agent emits a pydantic `AttributionFinding` — verdict `CONFIDENT` |
-`AMBIGUOUS_NEEDS_HUMAN`; validation failure escalates to a human, never a silent retry);
-**off the critical path** (run with the agent disabled and the attribution output is
-byte-identical).
+| Concern | Doc |
+|---|---|
+| The spec — components, decisions, and the stack-gotcha log | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| The build plan — phases and their Done-when checks | [`docs/PHASES.md`](docs/PHASES.md) |
+| Headline numbers — accuracy, benchmark, cost levers, agent eval | [`docs/RESULTS.md`](docs/RESULTS.md) |
+| On-call runbook — four post-incident writeups + known limitations | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) |
+| Where the design breaks at 50k / 500k, and what changes | [`docs/SCALING.md`](docs/SCALING.md) |
+| Why-not-X log — decisions in force, then a per-phase appendix | [`DECISIONS.md`](DECISIONS.md) |
+| Deferred findings, each with a revisit trigger | [`BACKLOG.md`](BACKLOG.md) |
+| Commands, invariants, conventions, and the tooling index | [`CLAUDE.md`](CLAUDE.md) |
 
 ## How it's proven
 
-Full numbers and method in [`docs/RESULTS.md`](docs/RESULTS.md). Its accuracy tables are
-pinned (`tests/pins.py` via `tests/test_docs_accuracy_pins.py`) and the scale-curve and
-cost-lever blocks are regenerated by `make` (their first-screen copies checked by `make
-check-docs`); the agent-eval and lakehouse tables are dated captures; the benchmark table is
-reproduced by the command it states.
+Full numbers and method in [`docs/RESULTS.md`](docs/RESULTS.md); the accuracy tables are
+pinned (`tests/pins.py` via `tests/test_docs_accuracy_pins.py`), the scale-curve and
+cost-lever blocks are `make`-regenerated (first-screen copies checked by `make
+check-docs`), and the agent-eval and lakehouse tables are dated captures.
 
-- **Determinism is the core design principle.** Same `PRODUCER_SEED` + profile →
-  byte-identical topics and identical attribution output; breaking this is a bug.
-  Anything computable is computed in Python/SQL, never asked of an LLM. The pipeline
-  **never reads the truth links** (a structural test forbids the word in pipeline
-  packages); accuracy is scored in the eval harness against the side file. Every write to
-  `attributed_conversions` is idempotent, so replaying any topic from offset 0 converges
-  to the same ClickHouse state. The lake's metadata (snapshot ids) and the agent's output
-  are the two carve-outs — every asserted check reads row content back.
-- **Accuracy vs ground truth** (the table above). Household grain is deliberate: the
-  engine is last-touch, so scoring exact `exposure_id` would measure
-  last-touch-vs-causal coincidence, not attribution quality. Precision below 1.0 on the
-  clean profiles is last-touch over-crediting organic conversions — a model property.
-  Hot recall below 1.0 on `tiny`/`medium` is the shared-IP deferral: reconciliation
-  credits those conversions and post-reconcile tiny is 52/35/35, medium 130/92/92 —
-  the same answer, fewer moving parts (DECISIONS Phase 16). Wrong-household credit can
-  only happen on the reconciled path and is exercised by the `shared_ip_spike` fault
-  profile (69/80 correct, 11 wrong-household — the fault observed, not assumed).
-- **Lake of record parity.** Lake-loaded serving rows == the direct-write oracle's rows;
-  an accumulated lake (3 more appends) reloads byte-identically; the bucket-aligned lake
-  reconcile == the single in-memory pass on `long_delay` and `shared_ip_spike`; the
-  Dagster-orchestrated pass writes the same rows (`make test-int-lakehouse`).
-- **Benchmark** (naive full-`FINAL` scan-and-join vs the `campaign_hourly` rollup, same
-  four-metric report, both sides at merged steady state): the rollup reads **2.5× fewer
-  rows, 1.2× fewer bytes, ~1.8× faster**, and a magnitude-free direction assert fails
-  `make bench` if the rollup ever stops being the smaller read. The structural point: the
-  naive scan grows with every event, the rollup read is bounded by `(campaign, hour)`.
-- **Alert rules** — five, proven by `promtool test rules` against REAL captured stage
-  registries (`make test-alerts`): the four workload rules fire on `long_delay` (on
-  `tiny` only `RestatementMagnitude` fires — its own deferral landing restates ROAS), and
-  the storage rule `PartCountHigh` is silent on both real captures, fired only by a
-  labelled synthetic input. Since Phase 18b they also evaluate **live**: each batch stage
-  pushes its terminal registry to a Pushgateway that Prometheus scrapes, and
-  `RestatementMagnitude` is proven ACTIVE from a real pushed metric (the `for: 5m` →
-  Alertmanager-firing timing stays promtool's, via `eval_time`). They detect
-  *operational* faults, not inflation — a green alert board does not mean the numbers
-  are right, which is the agent's job.
-- **Agent eval.** Every fault profile plus a no-fault baseline, 5× each: 30/30 correct,
-  false-positive rate 0/10. `shared_ip_spike` → CONFIDENT `device_graph_mismatch`
-  (`ip_resolved_fraction` 0.420); `real_lift` → CONFIDENT `real_performance_change`
-  (0.061), never `device_graph_mismatch`. `co_view_bug` correctly **abstains** — a
-  labeled capability boundary, kept out of the FP denominator. The agent is
-  non-reproducible by construction (no temperature control on the Claude-5 family), so
-  the reps measure stability; the numbers are the 2026-08-23 recapture (the
-  Phase-10 result reproduced — 30/30, FP 0/10).
+- **Determinism is the core principle.** Same `PRODUCER_SEED` + profile →
+  byte-identical topics and identical attribution output; breaking it is a bug. The
+  pipeline **never reads the truth links** (a structural test forbids the word in
+  pipeline packages) — accuracy is scored against the side file in the eval harness.
+  Every write to `attributed_conversions` is idempotent, so replaying any topic from
+  offset 0 converges to the same ClickHouse state. The lake's metadata and the agent's
+  output are the two carve-outs; every asserted check reads row content back.
+- **Accuracy vs ground truth** (the first-screen table). Household grain isolates the
+  real failure mode — wrong-household shared-IP attribution; precision below 1.0 on the
+  clean profiles is last-touch organic over-credit, a model property. Wrong-household
+  credit can only happen on the reconciled path, exercised by `shared_ip_spike`
+  (69/80 correct, 11 wrong-household — observed, not assumed).
+- **Lake-of-record parity.** Lake-loaded serving rows == the direct-write oracle's rows;
+  an accumulated lake reloads byte-identically; the bucket-aligned reconcile == the
+  single in-memory pass on `long_delay` and `shared_ip_spike` (`make test-int-lakehouse`).
+- **Benchmark.** The `campaign_hourly` rollup reads **2.5× fewer rows** than the naive
+  full-`FINAL` scan-and-join (`make bench`, both sides at merged steady state), with a
+  magnitude-free direction assert; the naive scan grows with every event, the rollup
+  read is bounded by `(campaign, hour)`.
+- **Alert rules** — five, promtool-proven against REAL captured stage registries (`make
+  test-alerts`) and evaluated **live** since Phase 18b (each batch stage pushes its
+  terminal registry to a Pushgateway that Prometheus scrapes). They detect *operational*
+  faults, not inflation — a green alert board does not mean the numbers are right, which
+  is the agent's job.
+- **Agent eval** — every fault profile plus a no-fault baseline, 5× each: **30/30
+  correct, false-positive 0/10** (`make agent-eval`, 2026-08-23 capture). `shared_ip_spike`
+  → `device_graph_mismatch`, `real_lift` → `real_performance_change` (never confused);
+  `co_view_bug` correctly **abstains** — a labeled capability boundary, kept out of the FP
+  denominator. Non-reproducible by construction (no temperature on the Claude-5 family),
+  so the reps measure stability.
 
 ## Scaling
 
@@ -270,7 +193,7 @@ running the same SQL DuckDB runs here).
 Bucketing is what keeps the 90-day reconcile join shuffle-free: a household's exposures
 and its candidates' exploded rows hash to the same bucket of every day partition.
 
-## Run it
+## Quickstart
 
 Requirements: Docker (16 GB), `uv`, `make`. First-time setup: `make setup` (uv sync +
 pre-commit). `make up` brings the stack up with health checks, not sleeps. Two state
@@ -294,17 +217,16 @@ reconciliation (lake → append → reload), a single pass, not a daemon. `make 
 stops before reconciliation and backs the hot-path oracle suites. Eleven profiles live
 under `producer/profiles/`: `tiny`, `medium`, `long_delay`, six fault/control profiles
 (`shared_ip_spike`, `late_burst`, `co_view_bug`, `real_lift`, `duplicate_flood`,
-`no_fault_baseline`) and two volume profiles (`bench_large`, `scale_curve`).
+`no_fault_baseline`) and two volume profiles (`bench_large`, `scale_curve`). The two
+LLM paths — `make agent-run` and `make agent-eval` — cost API tokens; **ask before
+running** (they load `ANTHROPIC_API_KEY` from `.env`). Every other entry point
+(`make report` / `restate` / `bench` / `cost-levers` / `rollup-bench` / `cost-report` /
+`scale-curve` / `context` / `eval` / `test` / `test-int` / `test-alerts` / `check-docs`)
+is in the full command reference: [`CLAUDE.md`](CLAUDE.md) → Commands.
 
-Other entry points — `make report` / `restate` / `bench` / `cost-levers` /
-`rollup-bench` / `cost-report` / `scale-curve` / `context` (the LLM-free context
-object), `make eval` (accuracy vs truth), `make test` (offline, no services), `make
-test-int` (against the running stack), `make test-alerts` (promtool on the alert
-rules), `make check-docs` (the docs guard). The two LLM paths — `make agent-run` and `make agent-eval` — cost API tokens;
-**ask before running** (they load `ANTHROPIC_API_KEY` from `.env`). Full command
-reference: [`CLAUDE.md`](CLAUDE.md) → Commands. Service UIs once `make up` is healthy:
-ClickHouse `:8123`, Prometheus `:9090`, Alertmanager `:9093`, Grafana `:3000`,
-Pushgateway `:9091`, Redpanda Kafka API `:19092` (all bound to `127.0.0.1`).
+Service UIs once `make up` is healthy: ClickHouse `:8123`, Prometheus `:9090`,
+Alertmanager `:9093`, Grafana `:3000`, Pushgateway `:9091`, Redpanda Kafka API `:19092`
+(all bound to `127.0.0.1`).
 
 ## Repo map
 

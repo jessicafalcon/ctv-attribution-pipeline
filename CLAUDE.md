@@ -640,12 +640,26 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**No phase in progress — the planned roadmap is complete.** All planned phases
-(0–19, 18a, 18b) are merged; **last merged phase: 18b (PR #39, 2026-08-23)** — async
-inserts on the loader, `query_cost_daily` + `cost_rw`, schema compatibility BACKWARD,
-the live alert firing path (Pushgateway) + webhook `groupKey` dedupe, the shard-key
-note (review-round 1 + coherence audit + fix-range re-review all cleared; gate 5/5,
-mutate 7/7). Next work is BACKLOG-driven, not pre-planned: the top candidate is a
+**Planned roadmap complete; a pre-public presentation-hardening pass then followed.**
+All planned phases (0–19, 18a, 18b) are merged (last: 18b, PR #39, 2026-08-23 — async
+inserts, `query_cost_daily` + `cost_rw`, schema compatibility BACKWARD, the live alert
+firing path + webhook `groupKey` dedupe). After the roadmap, a five-item hardening pass
+(agreed at the 2026-08-23 architect review) landed as standalone fix PRs off main, each
+with its own review gate: **(1)** reconcile-idempotency flake fix
+(`fix/reconcile-idempotency-6dp`, PR #44); **(2)** agent-eval recapture — 30/30, FP 0/10
+reproduced (`docs/agent-eval-recapture`, PR #45); **(3)** dirty-set rollup READ measured
+on `bench_large`, BACKLOG 73 (`fix/rollup-bench-read`, PR #47); **(4)** poison-message
+disposition — fail-loud-and-halt, BACKLOG 87 (`fix/poison-message-disposition`, PR #48);
+**(5)** land→load crash-recovery proof, BACKLOG 88 (`fix/crash-recovery-proof`, PR #49).
+
+**In progress: `docs/public-readiness`** — the docs-only pass that makes the repo
+presentable before it is made PUBLIC: README slimmed to its first screen + a Mermaid
+architecture diagram (authoritative in `docs/ARCHITECTURE.md` §3.2, embedded in README;
+the ASCII diagram below stays HERE, load-bearing tool context) + a Documentation index;
+a doc-drift cleanse; and a mandatory pre-public git-history secrets sweep (clean — GO).
+No pipeline code change.
+
+Next work after this remains BACKLOG-driven, not pre-planned: the top candidate is a
 **Phase-20 Decimal64 money migration** (BACKLOG "Money is stored as Float64" — note its
 Phase-18b caveat: BACKWARD now 409s an in-place required-column retype, so the migration
 must add an optional Decimal field + dual-write, not retype). A new phase starts the
