@@ -18,6 +18,7 @@ device_graph_mismatch?), then the rest. The tables render in catalog order."""
 
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -34,6 +35,10 @@ from clickhouse.client import connect_agent
 
 RESULTS_PATH = Path(__file__).resolve().parents[2] / "docs" / "RESULTS.md"
 AGENT_EVAL_MARKER = "## Agent eval — fault → diagnosis"
+# The sentinel pair the block is spliced between — same fail-loud idiom as
+# queries/cost_report.py / measure_levers.py / rollup_bench.py (fix/run-eval-splice).
+_START = "<!-- AGENT_EVAL_START -->"
+_END = "<!-- AGENT_EVAL_END -->"
 
 # Live watch order (§4.3): baseline, then the near-miss negative half, then the rest.
 RUN_ORDER = (
@@ -143,10 +148,16 @@ def run_scenario(
         ch.close()
 
 
-def render_section(sweep: SweepResult) -> str:
-    """The full `## Agent eval` block appended to docs/RESULTS.md."""
+def render_section(sweep: SweepResult, capture_date: str) -> str:
+    """The full `## Agent eval` block spliced into docs/RESULTS.md between the
+    `_START`/`_END` sentinels. A PURE function of its inputs — `capture_date` is
+    threaded in (never `datetime.now()` here) so the round-trip test is
+    deterministic; the provenance line is generator-emitted, so no hand-written
+    prose sits inside the machine block."""
     return "\n".join(
         [
+            _START,
+            "",
             AGENT_EVAL_MARKER,
             "",
             f"Every fault profile plus the no-fault baseline, run {EVAL_REPS}× "
@@ -156,6 +167,11 @@ def render_section(sweep: SweepResult) -> str:
             "construction (temperature is unset on the Claude-5 family, DECISIONS "
             "Phase 9), so each cell reports a spread over reps, not a single-run "
             "claim; the reps measure residual stability.",
+            "",
+            f"> _Captured {capture_date} by `make agent-eval` "
+            f"({scen.TOTAL_INVOCATIONS} live invocations); this whole block is "
+            "regenerated wholesale by the next sweep — the numbers below are that "
+            "run's measurement._",
             "",
             "### Fault → top hypothesis → correct?",
             "",
@@ -185,16 +201,25 @@ def render_section(sweep: SweepResult) -> str:
             "gated assertion (the AI edge is carved out of the byte-identical "
             "guarantee, CLAUDE.md).",
             "",
+            _END,
         ]
     )
 
 
-def write_results(sweep: SweepResult) -> None:
-    """Replace (or append) the `## Agent eval` section at the end of docs/RESULTS.md,
-    keeping everything before the marker intact."""
-    existing = RESULTS_PATH.read_text() if RESULTS_PATH.exists() else ""
-    head = existing.split(AGENT_EVAL_MARKER)[0].rstrip()
-    RESULTS_PATH.write_text(head + "\n\n" + render_section(sweep))
+def write_results(section: str) -> None:
+    """Splice `section` between the `_START`/`_END` sentinels in docs/RESULTS.md,
+    keeping everything before and after them intact (the cost_report idiom). Fails
+    loud if the sentinels are absent — it never appends or truncates to EOF, so a
+    section that follows the block can no longer be silently dropped."""
+    text = RESULTS_PATH.read_text()
+    if _START not in text or _END not in text:
+        raise SystemExit(
+            f"{RESULTS_PATH} is missing the {_START} / {_END} markers — seed the "
+            "block skeleton before running agent-eval."
+        )
+    head = text[: text.index(_START)]
+    tail = text[text.index(_END) + len(_END) :]
+    RESULTS_PATH.write_text(head + section + tail)
     print(f"\nwrote both tables → {RESULTS_PATH}", flush=True)
 
 
@@ -212,7 +237,8 @@ def main(argv: list[str] | None = None) -> None:
         ordered = [results[s.name] for s in scen.SCENARIOS if s.name in results]
         if ordered:
             sweep = SweepResult(scenarios=ordered)
-            write_results(sweep)
+            capture_date = datetime.now(UTC).date().isoformat()
+            write_results(render_section(sweep, capture_date))
             print("\n" + tally.report(), flush=True)
             if len(ordered) < len(scen.SCENARIOS):
                 print(

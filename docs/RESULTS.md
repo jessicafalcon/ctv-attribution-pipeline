@@ -376,18 +376,13 @@ itself is live-pinned by `make test-int-lakehouse` / `test-int-long-delay`. Iceb
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).
 
+<!-- AGENT_EVAL_START -->
+
 ## Agent eval — fault → diagnosis
 
 Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
 
-> **Provenance — captured 2026-08-23 by `make agent-eval` (30 live invocations,
-> post-Phase-18b), replacing the Phase-10 capture.** The two `max|Δroas|` cells
-> the Phase-16 deferral had blanked are restored from this run (`shared_ip_spike`
-> 25.678, `co_view_bug` 4.111); every correctness cell reproduced (30/30, FP
-> 0/10) and the near-miss pair held both ways. `duplicate_flood`'s top-hypothesis
-> spread differs from Phase 10 — an abstention's hypothesis spread is a
-> measurement, never a pin. (This note is hand-added inside the regenerated
-> section; the next `make agent-eval` wipes it — re-date it then.)
+> _Captured 2026-08-23 by `make agent-eval` (30 live invocations); this whole block is regenerated wholesale by the next sweep — the numbers below are that run's measurement._
 
 ### Fault → top hypothesis → correct?
 
@@ -427,3 +422,5 @@ The discriminator each scenario turns on, captured once per profile from ClickHo
 ### Honesty boundary
 
 These are small-profile results reported as measured. `co_view_bug`'s abstention is a **labeled capability boundary**, not a gap papered over: the co-view *adjusted* factor is a DECISIONS won't-do (BACKLOG 26 — the honest per-genre expected baseline does not exist in serving data, and sourcing it from the producer's multiplier would couple reporting to generation parameters). The agent correctly declines to diagnose from noise. Verdict/hypothesis stability across reps is a measurement, never a gated assertion (the AI edge is carved out of the byte-identical guarantee, CLAUDE.md).
+
+<!-- AGENT_EVAL_END -->
