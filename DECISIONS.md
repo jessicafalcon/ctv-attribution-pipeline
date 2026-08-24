@@ -2564,3 +2564,37 @@ below, never deleted.
   literal). On `bench_large` the write ratio is a modest 1.1× (156 of 165 keys restated),
   vs 17.9× on `long_delay` — both are the same structural saving (only changed keys
   rewritten), sized by how much the profile's reconcile pass restates.
+
+### fix/poison-message-disposition (2026-08-24)
+
+- **Disposition for a consume-time schema failure: fail loud and halt the pass —
+  never skip-and-continue (BACKLOG 87).** A payload that fails decode/validation at
+  consume time must stop the drain, not be dropped. Skip-and-continue is forbidden
+  by the determinism policy (CLAUDE.md "Determinism policy"): a bounded, replayable
+  drain that silently skips one message no longer reproduces the same output from the
+  same seed, breaking the byte-identical guarantee. A dead-letter topic is the
+  continuous-follow (streaming) answer, where dropping-then-quarantining a poison
+  message keeps the stream live; it is the wrong shape for a batch drain that reads a
+  finite seeded log start→end and exits. Noted here as the future DLQ design, NOT
+  built — a DLQ with no producer of poison messages is speculative code (no profile
+  emits a malformed payload today, so the gap was a missing *decision*, not an
+  observed fault).
+- **Current behavior already fails loud at the three decode sites — this item is docs
+  + one test, NO code change.** `common.kafka.drain` returns raw bytes; consume-time
+  validation lives in the callers' bare `model_validate_json` comprehensions
+  (`streaming/dataflow.py:157,163` for Exposure/Conversion; `resolve/graph_loader.py:37`
+  for Household). None wraps decode in try/except, so a `ValidationError` propagates out
+  of the comprehension and halts the pass — no message is skipped. `tests/test_poison_message.py`
+  pins it (a `[good, malformed, good]` batch through the decode comprehension raises rather
+  than returning a length-2 list) so a future edit cannot regress to skip-and-continue.
+- **The loud failure is inscrutable, and that is left as-is (accepted limitation).** The
+  propagated `ValidationError` carries no topic/offset/which-message context — the
+  comprehension iterates over raw `bytes` with no offset threaded through. Making the crash
+  scrutable (wrapping the decode with topic/offset context) is a *write-path* behavior
+  change and takes the fix-amendment ritual (an Invariants amendment, committed alone,
+  approval before implementing); out of scope for this docs-and-test item. Revisit trigger:
+  the continuous-follow phase, which inherits this as the dead-letter design and will need
+  the message identity to quarantine it anyway.
+- **The three decode sites are NOT refactored into a shared helper here.** Folding them into
+  one decode function is also a write-path change (it moves who-decodes-what); deferred with
+  the scrutability work above, same trigger.
