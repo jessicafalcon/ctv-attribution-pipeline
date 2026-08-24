@@ -37,8 +37,10 @@ the item's PR merges.
   either outcome beside the Phase-13 cost levers: a read win, or another
   documented negative with its mechanism. Do NOT resize the profile (BACKLOG:
   producer queue cap ~100k messages). `fix/` branch.
-- [ ] **4. Poison-message disposition** (new; DECISIONS entry + one unit
-  test — docs first, no dead-letter build, which would be speculative code).
+- [ ] **4. Poison-message disposition** (BACKLOG: "No stated disposition for a
+  message that fails schema validation at consume time"; DECISIONS entry + one
+  unit test — docs first, no dead-letter build, which would be speculative
+  code).
   Nothing states what happens to a message that fails schema validation at
   consume time. Recommended disposition: fail loud and halt the pass — a
   bounded, replayable drain must never skip-and-continue, because a silent
@@ -47,7 +49,9 @@ the item's PR merges.
   feeding `common.kafka` drain's decode path a malformed payload. If current
   behavior turns out to be skip-or-inscrutable-crash, that is a finding to
   report first (a write-path behavior change takes the fix-amendment ritual).
-- [ ] **5. Crash-recovery proof** (new; additive integration tests, no spec).
+- [ ] **5. Crash-recovery proof** (BACKLOG: "The land → load seam's crash
+  idempotency is argued, never demonstrated"; additive integration tests, no
+  spec).
   The land → load seam is idempotent by construction (append-only lake,
   touched-day reloads, ReplacingMergeTree); nothing demonstrates it. Two
   cases: (a) land to the lake, deliberately skip the load (a crash between
