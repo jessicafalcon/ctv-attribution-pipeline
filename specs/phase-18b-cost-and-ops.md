@@ -180,8 +180,8 @@ satisfies.
 | 8. For every alert delivered (mocked or live), the sweep re-observes ClickHouse and NO alert-body text reaches the LLM prompt — the alert is a trigger only, and pipeline output with the agent disabled is byte-identical. | `tests/test_webhook.py::test_alert_text_never_enters_the_sweep_context` |
 
 ```mutations
-agent/webhook.py::_dedupe_by_group_key        constant-return:[]
-agent/webhook.py::alerts                       delete-call
+agent/webhook.py::_dedupe_by_group_key         constant-return:[]
+agent/webhook.py::_dedupe_by_group_key         invert-guard
 queries/cost_report.py::cpu_seconds            constant-return:0.0
 queries/cost_report.py::to_dollars             constant-return:0.0
 producer/schemas.py::_compat_level             constant-return:"NONE"
