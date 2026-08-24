@@ -11,8 +11,10 @@ test oracle, tests/oracle.py).
 Idempotent by table design (DECISIONS Phase 3/17): re-materializing a day
 re-inserts the same rows, which ReplacingMergeTree collapses on its sort key —
 attributed_conversions on (conversion_id, version processed_at),
-exposures_landed on (campaign_id, event_time, exposure_id). Synchronous chunked
-inserts; async inserts are a SCALING lever, not built.
+exposures_landed on (campaign_id, event_time, exposure_id). Chunked inserts; the
+async-insert lever (`async_insert=1, wait_for_async_insert=1`) is built on this
+writer (Phase 18b), OFF unless `LAKE_ASYNC_INSERT=1` — `make run` opts in, the
+golden / oracle / capture paths leave it off (see `_async_insert_enabled`).
 
 The loader also owns the ROLLUP DIRTY SET (Phase 18a). It is the only writer of
 the serving tables and it knows exactly which day it just loaded, so it is the
@@ -23,6 +25,7 @@ then recomputes only the keys whose recorded version differs from the version th
 rollup was last computed against (`rollup_refreshed`, one row per key).
 """
 
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from itertools import batched
@@ -35,6 +38,28 @@ from lake.read_exposures import read_exposures_for_days
 from producer.models import AttributedConversion, Exposure
 
 _BATCH = 256  # rows per ClickHouse insert → fewer, larger parts
+
+
+def _async_insert_enabled() -> bool:
+    """Async inserts are OFF unless `LAKE_ASYNC_INSERT=1` (set by `make run`). The
+    golden / oracle / capture paths (`make run-hot`, `make metrics-capture`, the
+    offline suite) leave it unset, so their rows stay on the known synchronous path
+    and no frozen pin or captured metric moves for a server-side-batching reason.
+    `make run` opts in; the LIVE parity check proves the rows are byte-identical
+    either way (Invariant 1)."""
+    return os.environ.get("LAKE_ASYNC_INSERT", "0") == "1"
+
+
+def _async_settings(async_insert: bool | None = None) -> dict:
+    """ClickHouse insert settings for the async lever. Enabled → buffer rows
+    server-side into fewer, larger parts (`async_insert=1`) AND block until the
+    buffer is flushed (`wait_for_async_insert=1`), so a read right after a load sees
+    every row — no eventual-visibility race, the property that keeps serving rows
+    byte-identical (Invariants 1, 2). `async_insert` overrides the env for callers
+    that pin the flag directly (the parity test)."""
+    enabled = _async_insert_enabled() if async_insert is None else async_insert
+    return {"async_insert": 1, "wait_for_async_insert": 1} if enabled else {}
+
 
 # DDL column order (clickhouse/ddl.sql); pinned to the models by
 # tests/test_column_contract.py.
@@ -90,22 +115,33 @@ def _exposure_values(r: Exposure) -> list:
     ]
 
 
-def insert_attributed(client: Client, rows: Sequence[AttributedConversion]) -> None:
+def insert_attributed(
+    client: Client,
+    rows: Sequence[AttributedConversion],
+    *,
+    async_insert: bool | None = None,
+) -> None:
+    settings = _async_settings(async_insert) or None
     for chunk in batched(rows, _BATCH):
         client.insert(
             "attributed_conversions",
             [_attributed_values(r) for r in chunk],
             column_names=ATTRIBUTED_COLS,
+            settings=settings,
         )
     metrics.ROWS_LOADED.labels(table="attributed_conversions").inc(len(rows))
 
 
-def insert_exposures(client: Client, rows: Sequence[Exposure]) -> None:
+def insert_exposures(
+    client: Client, rows: Sequence[Exposure], *, async_insert: bool | None = None
+) -> None:
+    settings = _async_settings(async_insert) or None
     for chunk in batched(rows, _BATCH):
         client.insert(
             "exposures_landed",
             [_exposure_values(r) for r in chunk],
             column_names=EXPOSURE_COLS,
+            settings=settings,
         )
     metrics.ROWS_LOADED.labels(table="exposures_landed").inc(len(rows))
 

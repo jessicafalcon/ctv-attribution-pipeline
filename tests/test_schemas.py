@@ -45,7 +45,7 @@ def test_extra_fields_are_rejected() -> None:
         TOPIC_MODELS["exposures"].model_validate(payload)
 
 
-def test_register_schemas_sets_none_then_posts_each_subject(
+def test_register_schemas_sets_backward_then_posts_each_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
@@ -58,7 +58,7 @@ def test_register_schemas_sets_none_then_posts_each_subject(
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     ids = register_schemas("http://registry.test")
 
-    # Each subject: PUT compatibility NONE, then POST the version — in that order.
+    # Each subject: PUT compatibility BACKWARD, then POST the version — in that order.
     assert [(url, method) for url, method, _ in calls] == [
         step
         for t in TOPIC_MODELS
@@ -72,7 +72,7 @@ def test_register_schemas_sets_none_then_posts_each_subject(
         assert body["schemaType"] == "JSON"
         assert json.loads(body["schema"]) == topic_schema(topic)
     puts = [body for _, method, body in calls if method == "PUT"]
-    assert all(body == {"compatibility": "NONE"} for body in puts)
+    assert all(body == {"compatibility": "BACKWARD"} for body in puts)
     assert set(ids) == {f"{t}-value" for t in TOPIC_MODELS}
 
 
@@ -92,13 +92,13 @@ def test_register_schemas_rejects_non_http_url() -> None:
         register_schemas("ftp://registry.test")
 
 
-def test_register_subject_puts_none_before_posting(
+def test_register_subject_sets_backward_before_posting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression guard for the BACKLOG Phase-2 registry item: compatibility
-    must be set to NONE (PUT /config/<subject>) BEFORE the version is posted —
-    that ordering is what dodges the registry's default BACKWARD 409 when a
-    changed model re-registers."""
+    """Compatibility is declared per subject (PUT /config/<subject>) BEFORE the
+    version is posted, so the subject's mode is set even for its FIRST version.
+    Phase 18b makes the mode BACKWARD (the data contract), replacing the Phase-2
+    NONE — the ordering is unchanged, the level is not."""
     from producer.models import Conversion
 
     calls: list[tuple[str, str, dict[str, Any]]] = []
@@ -115,4 +115,28 @@ def test_register_subject_puts_none_before_posting(
         ("http://registry.test/config/demo-value", "PUT"),
         ("http://registry.test/subjects/demo-value/versions", "POST"),
     ]
-    assert calls[0][2] == {"compatibility": "NONE"}
+    assert calls[0][2] == {"compatibility": "BACKWARD"}
+
+
+def test_compat_level_is_backward_the_single_named_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The offline sentinel for the mutations block: the mode is BACKWARD and
+    `set_compatibility` posts exactly what `_compat_level()` returns. A
+    `constant-return:"NONE"` mutation on `_compat_level` is KILLED here without a
+    live registry."""
+    from producer.schemas import _compat_level
+
+    assert _compat_level() == "BACKWARD"
+
+    posted: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: Any, timeout: float | None = None) -> Any:
+        posted.append(json.loads(req.data))
+        return contextlib.closing(io.BytesIO(json.dumps({}).encode()))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    from producer.schemas import set_compatibility
+
+    set_compatibility("http://registry.test", "demo-value")
+    assert posted == [{"compatibility": "BACKWARD"}]

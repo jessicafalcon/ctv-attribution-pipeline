@@ -8,8 +8,17 @@ invisible in CI (UTC). This pins the fix independent of the machine's timezone.
 """
 
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
-from lake.load_serving import _attributed_values, _exposure_values
+import pytest
+
+from lake.load_serving import (
+    _async_insert_enabled,
+    _async_settings,
+    _attributed_values,
+    _exposure_values,
+    insert_exposures,
+)
 from producer.models import AttributedConversion, Exposure
 
 T_NAIVE = datetime(2026, 8, 8, 12, 2, 51, 841000)  # the naive-UTC read shape
@@ -55,3 +64,58 @@ def test_loader_values_are_tz_aware_utc_whatever_the_input_shape() -> None:
     vals = _attributed_values(row)
     for i in (1, 2, 16):  # event_time, ingest_time, processed_at
         assert vals[i] == T_NAIVE.replace(tzinfo=UTC)
+
+
+class _CapturingClient:
+    """A fake ClickHouse client that records the settings each insert is given."""
+
+    def __init__(self) -> None:
+        self.settings_seen: list[Any] = []
+
+    def insert(self, table: str, data: Any, column_names: Any, settings: Any) -> None:
+        self.settings_seen.append(settings)
+
+
+def _one_exposure() -> Exposure:
+    return Exposure(
+        exposure_id="e-1",
+        event_time=T_NAIVE,
+        ingest_time=T_NAIVE,
+        campaign_id="c",
+        household_id="h",
+        ip="1",
+        app_id="a",
+        program_genre="g",
+        spend=1.0,
+    )
+
+
+def test_async_flag_defaults_off_and_make_run_enables_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OFF unless LAKE_ASYNC_INSERT=1 (set by `make run`). The mutation sentinel:
+    a `constant-return:True` on `_async_insert_enabled` flips the default and is
+    KILLED here (invert-guard would ERROR — the function is a guardless return)."""
+    monkeypatch.delenv("LAKE_ASYNC_INSERT", raising=False)
+    assert _async_insert_enabled() is False
+    monkeypatch.setenv("LAKE_ASYNC_INSERT", "1")
+    assert _async_insert_enabled() is True
+    monkeypatch.setenv("LAKE_ASYNC_INSERT", "0")
+    assert _async_insert_enabled() is False
+
+
+def test_the_insert_settings_carry_async_insert_and_wait() -> None:
+    """Enabled → both async_insert and wait_for_async_insert; disabled → no
+    settings. `wait_for_async_insert=1` is what keeps the read-after-load race out
+    (Invariant 2), so it must always accompany async_insert."""
+    assert _async_settings(True) == {"async_insert": 1, "wait_for_async_insert": 1}
+    assert _async_settings(False) == {}
+
+    # The setting is actually threaded to client.insert (None when disabled).
+    client_on = _CapturingClient()
+    insert_exposures(client_on, [_one_exposure()], async_insert=True)
+    assert client_on.settings_seen == [{"async_insert": 1, "wait_for_async_insert": 1}]
+
+    client_off = _CapturingClient()
+    insert_exposures(client_off, [_one_exposure()], async_insert=False)
+    assert client_off.settings_seen == [None]

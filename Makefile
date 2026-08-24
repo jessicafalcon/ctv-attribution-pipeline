@@ -1,6 +1,6 @@
 # Later phases add: bench, agent-run, agent-eval (see CLAUDE.md → Commands).
 
-.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
+.PHONY: setup up down seed resolve run run-hot lake-reset replay-serving lake-maintain reconcile-dagster dagster-ui scale-curve eval report restate bench cost-levers rollup-bench cost-report context agent-run agent-eval metrics-capture test-alerts test test-int test-int-medium test-int-long-delay test-int-shared-ip test-int-agent test-int-lakehouse check-docs lint review-gate mutate
 
 PROFILE ?= tiny
 # resolve replay input: fixtures/<profile> or out (data/out/<profile>). Keep the
@@ -116,10 +116,16 @@ resolve:
 # (recovers long-window misses AND the deferred shared-IP conversions → lake →
 # reload → rollup refresh + pre/post report snapshots). Run after `make up &&
 # make seed`. Every row in ClickHouse arrived through the lake (Phase 17).
+# Phase 18b envs, ON only here (off in the golden/oracle/capture paths so their pins
+# never move): LAKE_ASYNC_INSERT=1 batches inserts server-side; PUSHGATEWAY_URL makes
+# each stage push its terminal registry to the Pushgateway (persisted for Prometheus to
+# scrape → the alert rules evaluate on live data). The gateway is wiped once at the start.
+PUSH_URL := http://127.0.0.1:9091
 run:
-	uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
-	uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
-	uv run python -m observability.ch_scrape
+	PUSHGATEWAY_URL=$(PUSH_URL) uv run python -m observability.push --reset
+	LAKE_ASYNC_INSERT=1 PUSHGATEWAY_URL=$(PUSH_URL) uv run python -m streaming.dataflow --profile $(call _Q,$(value PROFILE))
+	LAKE_ASYNC_INSERT=1 PUSHGATEWAY_URL=$(PUSH_URL) uv run python -m reconcile.reconcile --profile $(call _Q,$(value PROFILE))
+	PUSHGATEWAY_URL=$(PUSH_URL) uv run python -m observability.ch_scrape
 
 # Hot path only (engine, NO reconciliation). Used by the hot-path
 # oracle suites — the frozen tiny golden and pinned tiny accuracy (Phase 3/4),
@@ -213,6 +219,14 @@ cost-levers:
 # whose reconcile pass restates something (long_delay).
 rollup-bench:
 	uv run python -m queries.rollup_bench --profile $(call _Q,$(value PROFILE))
+
+# Phase 18b: per-query cost from system.query_log. Tags each report/restate/bench
+# query with a distinct log_comment, reads its cost back (as cost_rw), writes
+# query_cost_daily, and rewrites the "Cost per report query" block in docs/RESULTS.md.
+# Refuses a profile/DB mismatch via the eval_meta marker (BACKLOG 43). Run after
+# `make run PROFILE=<p>` populated the serving tables.
+cost-report:
+	PUSHGATEWAY_URL=$(PUSH_URL) uv run python -m queries.cost_report --profile $(call _Q,$(value PROFILE))
 
 # Dump each stage's terminal Prometheus registry from a REAL run (the provenance
 # of the promtool alert fixtures). A CLEAN-STACK capture: `make down && make

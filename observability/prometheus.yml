@@ -1,5 +1,6 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s # evaluate alert rules promptly (Phase 18b live path), not the 1m default
 
 alerting:
   alertmanagers:
@@ -8,9 +9,9 @@ alerting:
 
 # Phase-7 alert rules (observability/rules/alerts.yml, mounted at /etc/prometheus/
 # rules). Non-recursive glob, so the promtool test fixture under rules/tests/ is
-# NOT loaded as a rule file. The batch stages aren't scraped live (they exit
-# before a scrape), so these rules load and validate but fire only under the
-# deferred live-push path (BACKLOG); they are proven by `make test-alerts`.
+# NOT loaded as a rule file. Since Phase 18b the batch stages PUSH their terminal
+# registry to the Pushgateway (scraped below), so these rules evaluate on live data;
+# they are also proven deterministically by `make test-alerts`.
 rule_files:
   - /etc/prometheus/rules/*.yml
 
@@ -24,6 +25,13 @@ scrape_configs:
     static_configs:
       - targets: ["redpanda:9644"]
 
-  # Pipeline stages (producer_, engine_ — which also emits the in-process
-  # resolve_ series since Phase 16 — reconcile_, agent_) are added as they gain
-  # /metrics endpoints in later phases.
+  # Pipeline stages (producer_, engine_ + resolve_, reconcile_, clickhouse_) are
+  # finite drains that exit before a pull-scrape, so since Phase 18b they PUSH their
+  # terminal registry to the Pushgateway and Prometheus scrapes THAT. honor_labels
+  # keeps the job/instance labels each stage pushed, so a rule sees e.g.
+  # reconcile_restatement_roas_abs_delta as the stage set it, not relabelled to
+  # job="pushgateway".
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]

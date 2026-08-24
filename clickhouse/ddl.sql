@@ -175,3 +175,26 @@ create table if not exists eval_meta
 )
 engine = ReplacingMergeTree
 order by k;
+
+-- Per-query cost, from system.query_log (Phase 18b, Done-when 2). Keyed
+-- (day, query_tag) — one row per tagged report/restate/bench query per day, filled
+-- by `make cost-report` via the cost_rw writer. OUTSIDE the byte-identical guarantee
+-- (Invariant 3): query_duration_ms / cpu_seconds / usd vary run to run, like Iceberg
+-- metadata or a Dagster run id, and NO pipeline path reads this table. read_rows /
+-- read_bytes are server-computed and stable; usd is an ILLUSTRATIVE conversion of a
+-- measured cpu_seconds by a config rate, never a billed figure. Version = measured_at
+-- (max event_time of the tag's query_log rows), so the latest measurement wins.
+create table if not exists query_cost_daily
+(
+    day               Date,
+    query_tag         String,
+    query_duration_ms UInt64,
+    read_rows         UInt64,
+    read_bytes        UInt64,
+    memory_usage      UInt64,
+    cpu_seconds       Float64,
+    usd               Float64,
+    measured_at       DateTime64(3, 'UTC')
+)
+engine = ReplacingMergeTree(measured_at)
+order by (day, query_tag);

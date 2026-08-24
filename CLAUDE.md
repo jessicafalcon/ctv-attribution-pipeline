@@ -92,7 +92,8 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   registered in the UI code location — destructive, one entry point); ONE headless
   CLI, `run.py` (`load | reconcile`, `--profile` required — it binds the lake);
   `replay.py` / `maintenance.py` are library code for `lake/destructive.py`.
-- `clickhouse/` — DDL, users (agent user is SELECT-only), migrations.
+- `clickhouse/` — DDL, users (agent user is SELECT-only; `metrics_ro` reads system
+  storage tables; `cost_rw` reads `system.query_log` + writes `query_cost_daily`), migrations.
 - `queries/` — reporting SQL, restatement view, benchmark harness.
 - `observability/` — prometheus.yml, alert rules (five; `PartCountHigh` is the
   Phase-18a storage one), grafana dashboards (JSON), `gen_alert_fixtures.py` (bakes
@@ -140,7 +141,12 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   reloads touched days → rollup + snapshots; a single pass, not a daemon); the full
   pipeline over the seeded stream. Every row in ClickHouse arrived through the lake
   (Phase 17). One lake per PROFILE, `data/lake/<profile>`, bound by each entry
-  point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override)
+  point's `--profile` (no default root; `LAKE_ROOT` is a pytest-only tmp override).
+  Phase 18b: this path sets `LAKE_ASYNC_INSERT=1` (the loader batches inserts
+  server-side) and `PUSHGATEWAY_URL` (each stage pushes its terminal registry to the
+  Pushgateway after it exits, so Prometheus scrapes it and the alert rules evaluate on
+  live data; the gateway is wiped once at the start) — both OFF in `run-hot` and every
+  golden/oracle/capture path
 - `make run-hot` — engine → lake → load only (the load refreshes its rollup keys), no
   reconciliation; both `run` and `run-hot` end with the one-shot `clickhouse_` storage
   scrape, which exits non-zero if ClickHouse's part counts have not settled (BACKLOG); backs the hot-path
@@ -182,6 +188,15 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   set the refresh recomputed (`changed ⊆ dirty`; equality is evidence, not the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
   `make run PROFILE=<p>` on a profile whose reconcile pass restates something
   (`long_delay`)
+- `make cost-report PROFILE=<p>` — per-query cost from `system.query_log` (Phase 18b):
+  tags each report/restate/bench query with a distinct `log_comment`, reads its cost back
+  as the SELECT-`system.query_log`+INSERT-`query_cost_daily` `cost_rw` writer, derives
+  `cpu_seconds` (`ProfileEvents`) and an illustrative `usd` (config rate, never a SQL
+  literal), writes `query_cost_daily` (RMT, key `(day, query_tag)`), pushes cost gauges to
+  the Pushgateway (Grafana panel), and rewrites the "Cost per report query" block in
+  `docs/RESULTS.md`. `query_cost_daily` is quarantined non-determinism (durations vary
+  run to run) — no pipeline path reads it. PROFILE-guarded like `rollup-bench`. Run after
+  `make run PROFILE=<p>`
 - `make eval` — attribution precision/recall vs truth for the given `PROFILE`
   (default `tiny`)
 - `make report` — 4 advertiser metrics per campaign, from the raw serving tables
@@ -410,11 +425,13 @@ AI sits at the edge; the pipeline is deterministic.
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
-  reconcile_, agent_, clickhouse_ (the storage scrape, `observability/ch_scrape.py` —
-  how ClickHouse stores the data, never what the data says: `clickhouse_active_parts`,
-  `clickhouse_unmerged_parts` (level-0 parts, the deterministic view of pending
-  collapse work), `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its
-  HELP text)).
+  reconcile_, agent_, clickhouse_ (metrics read from ClickHouse's own SYSTEM tables,
+  never pipeline data content — storage from `system.parts`/`system.merges` via
+  `observability/ch_scrape.py`: `clickhouse_active_parts`, `clickhouse_unmerged_parts`
+  (level-0 parts, the deterministic view of pending collapse work),
+  `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its HELP text); query
+  cost from `system.query_log` via `queries/cost_report.py` (Phase 18b):
+  `clickhouse_query_cost_cpu_seconds`, `clickhouse_query_cost_usd`).
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
 - Engine features (dedup, lateness, eviction) are added one at a time, each
@@ -621,15 +638,16 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**Current phase: 18a (cost and ops levers) — in review (PR #38)** on
-`phase-18a-cost-and-ops` (spec `specs/phase-18a-cost-and-ops.md`, reconciled
-2026-08-22 — the branch's commit 1; `main` merged in 2026-08-23 to bring it current;
-`## Invariants` added review-round 1; round-1 + coherence fixes applied, gate 5/5,
-mutate 7/7, coherence-auditor clear). **Last merged: `fix/review-gate-pytest9`
-(PR #37, 2026-08-23); last phase: 19 (PR #33, 2026-08-22).**
-Next in order: 18b (its spec carries a "Pre-branch reconciliation required" banner;
-its branch's commit 1 is that amendment — DECISIONS "Process").
-Open BACKLOG rows: **42** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+**Current phase: 18b (cost and ops levers, second half) — in review** on
+`phase-18b-cost-and-ops` (spec `specs/phase-18b-cost-and-ops.md`, reconciled
+2026-08-23 — the branch's commit 1, approved; `## Invariants` written from commit 1;
+amendment 2 approved for Done-when 4a's live assertion). Async inserts on the loader,
+`query_cost_daily` + `cost_rw`, schema compatibility BACKWARD, the live alert firing
+path (Pushgateway) + webhook `groupKey` dedupe, the shard-key note. Review-round 1 +
+coherence audit + fix-range re-review all cleared (record-only findings fixed); gate
+5/5, mutate 7/7, coherence-auditor clear. **Last merged phase: 18a (PR #38,
+2026-08-23)**; last fix: `fix/review-gate-pytest9` (PR #37, 2026-08-23).
+Open BACKLOG rows: **41** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

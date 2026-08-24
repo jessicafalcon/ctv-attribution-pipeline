@@ -34,6 +34,8 @@ into [`docs/RESULTS.md`](docs/RESULTS.md); the direction is the claim, not the m
 | FINAL-avoidance (`argMax` GROUP BY) / bloom skip index | DOCUMENTED NEGATIVE | `FINAL` reads 0.26× the bytes of the manual collapse; the skip index prunes 0 granules |
 | PREWHERE the window predicate | WIN | 1.21× fewer bytes, same rows |
 | incremental rollup refresh (dirty set, `make rollup-bench`) | WIN on writes | 17.9× fewer rows written; reads do not fall at this size — one granule |
+| async inserts on the loader (`make run`, Phase 18b) | WIN on write parts | `async_insert=1, wait_for_async_insert=1` → fewer, larger parts; serving rows byte-identical, off in the golden paths |
+| per-query cost (`make cost-report` → `query_cost_daily`) | MEASURED | cpu-seconds + illustrative $ per report/restate/bench query; quarantined non-determinism, no pipeline path reads it |
 
 **Agent eval:** 30/30 correct diagnoses, false-positive rate 0/10 = 0% (Phase 10, live,
 30 invocations; the near-miss pair — genuine lift vs shared-IP inflation — held both ways).
@@ -172,9 +174,10 @@ makes a 90-day window possible without 90 days of processor state.
 **Observability.** Prometheus metrics per stage (`producer_`, `resolve_`, `engine_`,
 `lake_`, `reconcile_`), a Grafana dashboard (JSON, committed), and Alertmanager rules
 for the deterministic conditions (consumer lag, watermark stall, match-rate band,
-restatement magnitude). Alerts fire a webhook to the agent (the live scrape →
-Alertmanager → webhook push path is a documented cut — see
-[Next steps](#next-steps--what-was-cut-and-why)).
+restatement magnitude). Alerts fire a webhook to the agent — the live scrape →
+Alertmanager → webhook push path is built (Phase 18b: each batch stage pushes its
+terminal registry to a Pushgateway that Prometheus scrapes, and Alertmanager routes
+firing alerts to the agent).
 
 **The agent — attribution-integrity guardian.** Threshold alerts catch "lag is high";
 they cannot catch a **plausible-but-wrong attribution number** — a ROAS inflated by a
@@ -335,7 +338,8 @@ cited. Rationale per phase: [`DECISIONS.md`](DECISIONS.md).
 | 16 | 08-21 | #28 | *post-plan* — simplify the core (deletion-first): ambiguous shared-IP conversions deferred hot (reason ambiguous_ip) → hot wrong-household 0 by construction, reconciliation owns the one most-recent-exposure tiebreak (`pick_household`, candidates re-enumerated from `device_graph`); resolve is an in-process map step (`conversions_resolved` topic/subject/stage gone — two event topics); Bytewax removed (`dataflow.py` drives `attribute.py`; `-1` package). Pins: tiny hot 47/35/32, medium hot 129/92/91, long_delay hot 80/75/44 → post 112/75/73 (recall 0.587→0.973 unchanged); shared_ip_spike post-reconcile 69/80 (== old hot). `reason` column (ambiguous_ip \| state_miss, null when attributed) added to the attributed model/DDL/sink; tiny `expected/attributed.jsonl` re-frozen once with sign-off (5 decision rows change; all rows gain `reason`) | PASSED (4 review agents × 3 passes; 0 blockers at exit) | `phase-16-simplify-core` |
 | 17 | 08-21 | #31 | *post-plan* — lake of record: the Iceberg lake (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(8, household_id)`) is the system of record and ClickHouse a derived projection loaded by Dagster per touched day; `candidate_households` persisted on the deferred row (19-column contract) so reconciliation explodes it and needs no device graph / broker; bucket-aligned reconcile over the lake (== single pass byte-for-byte on long_delay + shared_ip_spike); `--lake-land`/dual-write gone; `make replay-serving` (Kafka-free), `make lake-reset` (one of the three destructive paths, `lake/destructive.py`), `make lake-maintain`; tiny golden re-frozen once (additive column, 0 decision changes — now a rule); clickhouse-connect naive-datetime write gotcha found live. Every pin unchanged | PASSED (3 review rounds — see DECISIONS "Process") | `phase-17-lake-of-record` |
 | 19 | 08-22 | #33 | *post-plan* — docs reshape (runs BEFORE 18a/18b, DECISIONS "Process"): README first screen = constraint → two paths → pinned tables; DECISIONS split into "still in force" + per-phase appendix, superseded entries annotated in place; ARCHITECTURE §3 as the post-17 end state; CLAUDE.md status table moved here; `make check-docs` = links/anchors + generated-block + exact-token guard (was `check-runbook`; closes BACKLOG 37) | merged 08-22 | `phase-19-docs-reshape` |
-| 18a | 08-22 | #38 | *post-plan* — cost and ops levers, first half: the Dagster loader records the `(campaign_id, hour)` keys each load touches (`rollup_dirty`) and refreshes them after every load — the rollup row's version is `max(stamp)` over the summarized rows (data-derived, no caller offset), so the reconcile pass's reload is a genuinely incremental second pass (19 of 340 keys rewritten, 17.9× fewer rows written; reads unchanged at one granule). Per-key watermark (`rollup_refreshed`), never a global max: the first cut left 321 of 340 keys permanently unrefreshed. `report_snapshots` gains `snapshot_version` as its RMT version (migrated by create → backfill → `exchange tables` → drop; ClickHouse has no `alter … modify engine`). Storage measured by a one-shot `clickhouse_` scrape as a SELECT-only `metrics_ro`; ONE new alert rule, `PartCountHigh > 150` (the server's `parts_to_delay_insert`) — silence from real captures, firing from a labelled synthetic input; no merge-lag rule, because no capture can fire one. `queries/bench_common.py` graduated | in review | `phase-18a-cost-and-ops` |
+| 18a | 08-22 | #38 | *post-plan* — cost and ops levers, first half: the Dagster loader records the `(campaign_id, hour)` keys each load touches (`rollup_dirty`) and refreshes them after every load — the rollup row's version is `max(stamp)` over the summarized rows (data-derived, no caller offset), so the reconcile pass's reload is a genuinely incremental second pass (19 of 340 keys rewritten, 17.9× fewer rows written; reads unchanged at one granule). Per-key watermark (`rollup_refreshed`), never a global max: the first cut left 321 of 340 keys permanently unrefreshed. `report_snapshots` gains `snapshot_version` as its RMT version (migrated by create → backfill → `exchange tables` → drop; ClickHouse has no `alter … modify engine`). Storage measured by a one-shot `clickhouse_` scrape as a SELECT-only `metrics_ro`; ONE new alert rule, `PartCountHigh > 150` (the server's `parts_to_delay_insert`) — silence from real captures, firing from a labelled synthetic input; no merge-lag rule, because no capture can fire one. `queries/bench_common.py` graduated | merged 08-23 | `phase-18a-cost-and-ops` |
+| 18b | 08-23 | — | *post-plan* — cost and ops levers, second half: async inserts on the loader (`async_insert=1, wait_for_async_insert=1`, `LAKE_ASYNC_INSERT=1` in `make run`, off in golden paths; serving rows byte-identical, no read-after-load race — proven live). Per-query cost from `system.query_log` into `query_cost_daily` (RMT `(day, query_tag)`) via a new SELECT-`system.query_log`+INSERT-only `cost_rw` writer; cpu-seconds + illustrative $ (config rate, never SQL); quarantined non-determinism, no pipeline path reads it. Schema registry set to BACKWARD (add-optional accepted, remove-required 409 — proven live). Live alert firing PATH: batch stages push their terminal registry to a digest-pinned Pushgateway, Prometheus scrapes it and the five rules evaluate on live data (`RestatementMagnitude` ACTIVE proven live); Alertmanager routes firing → `agent/webhook.py`, proven with a synthetic alert; webhook dedupes by `groupKey` (one sweep per group). Shard-key note: `household_id`. `for: 5m`→AM-firing timing stays promtool's (amendment 2) | in review | `phase-18b-cost-and-ops` |
 
 Next in order: **18b** (async inserts, `query_cost_daily`, BACKWARD compat, live alert
 firing) — specs under `specs/`, reconciled against main before each branch opens.
@@ -368,11 +372,12 @@ not speculative code.
   becomes TTL'd state keyed on `event_time + max_resend_delay`. The seeded duplicate is
   timestamp-identical to its original, so a real deployment (with genuinely-later re-send
   timestamps) is needed to exercise TTL sizing — see SCALING.md.
-- **Live Alertmanager firing path.** The webhook endpoint and the alert rules both exist
-  and are tested (promtool against real captured registries), but the batch stages exit
-  before a scrape, so the live scrape → Alertmanager → webhook chain (and the Grafana
-  panels that only populate under it) needs a push path (Pushgateway / textfile
-  collector) — Phase 18b. The scheduled-sweep trigger `make agent-run` stands in for it.
+- **Live Alertmanager firing path — delivered (Phase 18b).** Was a scope cut through
+  Phase 17 (the batch stages exit before a pull-scrape). Phase 18b built the push path:
+  each stage pushes its terminal registry to a Pushgateway that Prometheus scrapes after
+  the stage exits, the alert rules evaluate on live data, and Alertmanager routes firing
+  alerts to the agent webhook. Kept in this list as a delivered-since note (see the
+  History row and ARCHITECTURE §3.3), not a standing cut.
 - **Co-view adjustment as a reporting factor** — a won't-do. The honest per-genre
   expected baseline does not exist in serving data, and sourcing it from the producer's
   multiplier would couple reporting to generation parameters. Co-viewing stays a

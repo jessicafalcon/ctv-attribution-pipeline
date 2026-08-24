@@ -154,7 +154,10 @@ Two event topics plus one reference topic. `exposures` is partitioned by
 `household_id`; `conversions` by `device_id` (the engine re-keys it to
 `household_id` in-process at the resolve step). `device_graph` is a compacted
 topic holding the current graph. Each topic has a JSON Schema in the registry;
-the producer and every consumer validate against it. Partition count is a
+the producer and every consumer validate against it. Every subject is registered at
+**BACKWARD compatibility** (Phase 18b), so the registry is a real data contract: a
+producer may add an optional field, but removing or renaming a required one is
+rejected at registration (409). Partition count is a
 documented scaling lever (SCALING.md notes the household-keyed re-partition a
 continuous multi-partition engine would need). There is no intermediate
 resolved-conversions topic: the resolve step is in-process (why: DECISIONS
@@ -262,8 +265,11 @@ test oracle, `tests/oracle.py` — DECISIONS Phase 17).
 
 - `attributed_conversions`: **ReplacingMergeTree** keyed on `conversion_id` with
   `processed_at` as version, so a replay or a reconciliation correction supersedes
-  the earlier row. Readers use `FINAL` or `argMax` at read. Inserts are synchronous
-  today; async inserts are a scaling lever (see SCALING.md), not a current property.
+  the earlier row. Readers use `FINAL` or `argMax` at read. The loader's inserts carry
+  the **async-insert lever** (Phase 18b: `async_insert=1, wait_for_async_insert=1`,
+  fewer/larger parts) — built on `lake/load_serving.py`, default on in `make run`, off in
+  the golden/oracle/capture paths so their pins never move; serving rows are byte-identical
+  either way (see SCALING.md).
 - `exposures_landed`: raw exposures, for the naive benchmark and the reconcile
   source-equivalence proof.
 - `campaign_hourly`: rollup table **refreshed on a schedule** (or a refreshable
@@ -450,7 +456,7 @@ and recommends; humans and deterministic config act. Outputs are schema-constrai
 |---|---|
 | Streaming at scale | Two-stream Redpanda ingestion, in-process resolve, windowed/watermarked engine on a batch drain (framework choice deferred to Phase 18+; SCALING.md Flink mapping) |
 | Deep compute / lakehouse | Windowed stateful joins, reconciliation path; the Iceberg lake is the system of record (`raw.exposures` + `raw.attributed_conversions`, `day × bucket(household_id)`), ClickHouse a derived projection loaded by Dagster per touched day, reconciliation a bucket-aligned DuckDB-over-Iceberg join, replay from the lake with no Kafka (Phase 17). Object store / REST catalog / Spark-Trino compute are the SCALING port |
-| OLAP reporting stack | ClickHouse: ReplacingMergeTree, scheduled rollups, restatements (synchronous inserts today; async is a scaling lever, SCALING.md) |
+| OLAP reporting stack | ClickHouse: ReplacingMergeTree, incremental rollups, restatements; the loader's async-insert lever is built (Phase 18b, `async_insert=1, wait_for_async_insert=1`, env-gated on in `make run`, off in the golden paths — larger buffers at scale are the same lever, SCALING.md) |
 | "Faster/cheaper query, and why" | Naive-vs-optimized benchmark with measured deltas and explanations |
 | On-call / incident readiness | Prometheus, Grafana, Alertmanager rules, runbook-style SCALING.md |
 | Data contracts | Pydantic-derived JSON Schemas enforced via schema registry at produce and consume |
@@ -718,3 +724,26 @@ attribution actually runs on, a windowed, late-tolerant, cross-device stream joi
 with a reconciliation path serving an OLAP reporting layer with restatements,
 validates it against ground truth, and puts an AI agent where it earns its keep:
 guarding the integrity of the numbers advertisers bet their budgets on.*
+- **`system.query_log` is written asynchronously and is NOT per-user filtered
+  (Phase 18b).** A tagged query is not visible in `system.query_log` until a
+  `SYSTEM FLUSH LOGS` (the log buffer flushes on a timer otherwise), so `make
+  cost-report` flushes before reading. Per-query cost is keyed by the `log_comment`
+  setting; CPU time is the map column `ProfileEvents['OSCPUVirtualTimeMicroseconds']`.
+  Unlike `system.parts` (whose rows ARE filtered to the tables a user may see — the
+  Phase-18a `metrics_ro` SHOW-TABLES gotcha), `system.query_log` returns every user's
+  rows to any principal with `SELECT` on it — so `cost_rw` (SELECT `system.query_log`
+  only) reads the cost of queries the *default* user ran. Verified live on 24.8.
+- **Alertmanager v0.28 removed the v1 alerts API (Phase 18b).** `POST /api/v1/alerts`
+  returns `410 Gone`; inject alerts via `POST /api/v2/alerts` (a JSON array with
+  `labels`/`annotations`/`startsAt`/`endsAt`, `endsAt` in the future to stay firing).
+- **Pushgateway scrape needs `honor_labels: true` (Phase 18b).** Without it Prometheus
+  overwrites the pushed `job`/`instance` labels with `job="pushgateway"`, and a rule
+  keyed on the stage's own metric labels no longer matches. `global.evaluation_interval`
+  also defaults to 1 minute — set to 15s so a pushed metric drives a rule promptly on
+  the live path rather than up to a minute later.
+- **Container → host reachability for the Alertmanager → agent webhook (Phase 18b).**
+  Alertmanager (in a container) reaches the host-run `agent/webhook.py` via
+  `host.docker.internal`; that name resolves natively on Docker Desktop and, on Linux CI,
+  needs `extra_hosts: ["host.docker.internal:host-gateway"]` on the service. A host
+  process the container must reach has to bind `0.0.0.0` (a `127.0.0.1`-only listener is
+  unreachable from the container through the host gateway).

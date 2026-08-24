@@ -1,0 +1,47 @@
+<clickhouse>
+  <!--
+    The query-cost writer's principal (Phase 18b, Done-when 2). Identity lives in
+    users.d like agent-ro.xml / metrics-ro.xml / allow-network.xml, reconstructed from
+    this file at every container start — it cannot drift the way a SQL-created user in
+    the mutable access/ store can.
+
+    `cost_rw` is a WRITER, so it gets its OWN principal rather than widening the
+    read-only metrics_ro (which stays SELECT-only on system metadata). Exactly two
+    grants:
+      - SELECT ON system.query_log — to read back the cost of the tagged report /
+        restate / bench queries. Verified live (Phase 18b): a user with only this
+        grant sees ANOTHER user's rows in system.query_log (query_log is not
+        row-filtered per user the way system.parts is), so the default user runs the
+        tagged queries and cost_rw reads their cost.
+      - INSERT ON default.query_cost_daily — to write the per-query cost table, and
+        nothing else. It cannot SELECT a single pipeline row: every read of
+        attributed_conversions / exposures_landed / … is ACCESS_DENIED (code 497,
+        verified live), the same posture as metrics_ro.
+
+    Grant form, NOT <readonly>1</readonly> (it needs INSERT anyway): a SELECT/INSERT
+    grant is enforced at the access-control layer and leaves the benign session
+    settings clickhouse-connect sends on connect alone. Inline <grants> is supported
+    since ClickHouse 22.4 (image is 24.8).
+
+    `agent_ro`'s and `metrics_ro`'s grants are UNCHANGED — a third principal, not a
+    wider existing one.
+
+    Passwordless, ::/0, same local-dev posture as the other users.d principals: the
+    host publishes 8123 on 127.0.0.1 only (compose), so the service stays off the LAN.
+    Not for shared/multi-user hosts (BACKLOG). No secret is committed; a hardened
+    deploy points CLICKHOUSE_COST_USER / _PASSWORD at its own credential, which lives
+    in .env and never in CI.
+  -->
+  <users>
+    <cost_rw>
+      <password></password>
+      <networks replace="replace">
+        <ip>::/0</ip>
+      </networks>
+      <grants>
+        <query>GRANT SELECT ON system.query_log</query>
+        <query>GRANT INSERT ON default.query_cost_daily</query>
+      </grants>
+    </cost_rw>
+  </users>
+</clickhouse>

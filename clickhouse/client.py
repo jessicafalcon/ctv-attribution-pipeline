@@ -36,6 +36,22 @@ def connect_agent() -> Client:
     )
 
 
+def connect_cost() -> Client:
+    """The query-cost writer's handle (`cost_rw`, Phase 18b). Granted exactly SELECT
+    ON system.query_log and INSERT ON default.query_cost_daily
+    (clickhouse/users.d/cost-rw.xml) — it reads the cost of the tagged report/restate/
+    bench queries and writes query_cost_daily, and cannot read a pipeline row. A
+    writer gets its own principal, not a wider metrics_ro. Passwordless local-dev
+    posture; overridable via CLICKHOUSE_COST_USER for a hardened deploy."""
+    return get_client(
+        host=os.environ.get("CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
+        username=os.environ.get("CLICKHOUSE_COST_USER", "cost_rw"),
+        password=os.environ.get("CLICKHOUSE_COST_PASSWORD", ""),
+        database=os.environ.get("CLICKHOUSE_DB", "default"),
+    )
+
+
 def read_attributed_decisions(client: Client) -> dict[str, tuple]:
     """The attribution DECISION per conversion_id from FINAL state: the columns
     the engine computes, robust to timestamp round-trip formatting. FINAL

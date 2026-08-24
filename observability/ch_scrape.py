@@ -203,6 +203,11 @@ def main(argv: list[str] | None = None) -> None:
     values = scrape()
     if args.metrics_out:
         write_to_textfile(args.metrics_out, _registry())
+    # Push the terminal storage registry to the Pushgateway (Phase 18b) — no-op unless
+    # PUSHGATEWAY_URL is set (make run); carries clickhouse_active_parts.
+    from observability.push import push_registry
+
+    push_registry(_registry(), "clickhouse")
     parts = sum(v for k, v in values.items() if k.startswith("parts:"))
     unmerged = sum(v for k, v in values.items() if k.startswith("unmerged:"))
     print(
