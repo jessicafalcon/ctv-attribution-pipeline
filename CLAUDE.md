@@ -638,13 +638,15 @@ never auto-fixed, ignored, or committed around.
 
 ## Current status
 
-**Current phase: 18b (cost and ops levers, second half) — in build** on
+**Current phase: 18b (cost and ops levers, second half) — in review** on
 `phase-18b-cost-and-ops` (spec `specs/phase-18b-cost-and-ops.md`, reconciled
-2026-08-23 — the branch's commit 1, approved; `## Invariants` written from commit 1,
-not backfilled). Async inserts on the loader, `query_cost_daily` + `cost_rw`, schema
-compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook `groupKey`
-dedupe, the shard-key note. **Last merged phase: 18a (PR #38, 2026-08-23)**; last fix:
-`fix/review-gate-pytest9` (PR #37, 2026-08-23).
+2026-08-23 — the branch's commit 1, approved; `## Invariants` written from commit 1;
+amendment 2 approved for Done-when 4a's live assertion). Async inserts on the loader,
+`query_cost_daily` + `cost_rw`, schema compatibility BACKWARD, the live alert firing
+path (Pushgateway) + webhook `groupKey` dedupe, the shard-key note. Review-round 1 +
+coherence audit + fix-range re-review all cleared (record-only findings fixed); gate
+5/5, mutate 7/7, coherence-auditor clear. **Last merged phase: 18a (PR #38,
+2026-08-23)**; last fix: `fix/review-gate-pytest9` (PR #37, 2026-08-23).
 Open BACKLOG rows: **41** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
