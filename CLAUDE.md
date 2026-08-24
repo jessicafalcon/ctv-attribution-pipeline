@@ -425,11 +425,13 @@ AI sits at the edge; the pipeline is deterministic.
   pyiceberg (+ pyiceberg-core write engine), pyarrow, duckdb, dagster,
   dagster-webserver (Phase 12 lakehouse landing + orchestration).
 - Prometheus metric names prefixed by stage: producer_, resolve_, engine_, lake_ (the lake → ClickHouse load),
-  reconcile_, agent_, clickhouse_ (the storage scrape, `observability/ch_scrape.py` —
-  how ClickHouse stores the data, never what the data says: `clickhouse_active_parts`,
-  `clickhouse_unmerged_parts` (level-0 parts, the deterministic view of pending
-  collapse work), `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its
-  HELP text)).
+  reconcile_, agent_, clickhouse_ (metrics read from ClickHouse's own SYSTEM tables,
+  never pipeline data content — storage from `system.parts`/`system.merges` via
+  `observability/ch_scrape.py`: `clickhouse_active_parts`, `clickhouse_unmerged_parts`
+  (level-0 parts, the deterministic view of pending collapse work),
+  `clickhouse_merge_backlog_seconds` (0 in a settled capture — see its HELP text); query
+  cost from `system.query_log` via `queries/cost_report.py` (Phase 18b):
+  `clickhouse_query_cost_cpu_seconds`, `clickhouse_query_cost_usd`).
 - Fault scenarios are producer profiles under producer/profiles/, not
   ad-hoc scripts.
 - Engine features (dedup, lateness, eviction) are added one at a time, each
@@ -643,7 +645,7 @@ not backfilled). Async inserts on the loader, `query_cost_daily` + `cost_rw`, sc
 compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook `groupKey`
 dedupe, the shard-key note. **Last merged phase: 18a (PR #38, 2026-08-23)**; last fix:
 `fix/review-gate-pytest9` (PR #37, 2026-08-23).
-Open BACKLOG rows: **40** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+Open BACKLOG rows: **41** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

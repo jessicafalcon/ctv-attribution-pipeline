@@ -99,9 +99,15 @@ def test_a_synthetic_firing_alert_is_delivered_from_alertmanager_to_the_agent() 
         )
 
     webhook.app.dependency_overrides[webhook.get_sweep] = lambda: mock_sweep
-    # 0.0.0.0 so the alertmanager container reaches it via host.docker.internal.
+    # 0.0.0.0 so the alertmanager container reaches it via host.docker.internal. SAFE
+    # here only because this is a test-only bind with a MOCKED sweep, torn down in
+    # finally; a STANDING agent webhook must be loopback-bound + authed, never 0.0.0.0
+    # (BACKLOG "The live-firing test binds the agent webhook on 0.0.0.0").
     config = uvicorn.Config(
-        webhook.app, host="0.0.0.0", port=AGENT_PORT, log_level="warning"
+        webhook.app,
+        host="0.0.0.0",  # noqa: S104 — test-only; see the BACKLOG note above
+        port=AGENT_PORT,
+        log_level="warning",
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)

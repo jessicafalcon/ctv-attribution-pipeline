@@ -180,6 +180,8 @@ satisfies.
 | 8. For every alert delivered (mocked or live), the sweep re-observes ClickHouse and NO alert-body text reaches the LLM prompt — the alert is a trigger only, and pipeline output with the agent disabled is byte-identical. | `tests/test_webhook.py::test_alert_text_never_enters_the_sweep_context` |
 
 ```mutations
+lake/load_serving.py::_async_insert_enabled    constant-return:True
+lake/load_serving.py::_async_settings          constant-return:{}
 agent/webhook.py::_dedupe_by_group_key         constant-return:[]
 agent/webhook.py::_dedupe_by_group_key         invert-guard
 queries/cost_report.py::cpu_seconds            constant-return:0.0
@@ -190,11 +192,16 @@ producer/schemas.py::_compat_level             constant-return:"NONE"
 Coverage notes (why these lines and not others):
 - `swap-sort-key` is not used: no pipeline function this phase touches sorts with a key
   lambda; `query_cost_daily`'s ordering is a DDL sort key, not a Python `sorted(…)`.
-- Invariants 1, 2 (async byte-identity / no-race), 4's LIVE half and 6 (BACKWARD
-  registration) are SQL / ClickHouse-server / schema-registry properties with no offline
-  kill — the offline sweep would SURVIVE them by construction. They are carried by their
-  LIVE Evidence rows under `make test-int-long-delay`, not by this block (the 18a
-  precedent for its invariant 3).
+- The async lever's PLUMBING is offline-killable and IS in the block:
+  `_async_insert_enabled constant-return:True` (flips the default → the default-off unit
+  pin fails) and `_async_settings constant-return:{}` (drops the settings → the
+  settings-shape unit pin fails). What has NO offline kill is the RESULT invariants —
+  1 (async byte-identity), 2 (no read-after-load race), 4's LIVE half, 6 (BACKWARD
+  registration): SQL / ClickHouse-server / registry properties the offline sweep would
+  SURVIVE by construction, carried by their LIVE Evidence rows under
+  `make test-int-long-delay` (the 18a precedent for its invariant 3). Review-round-1
+  finding #4: the block is the offline-killable inventory, so the plumbing lines belong
+  in it even though the result invariants stay LIVE.
 - `producer/schemas.py::_compat_level constant-return:"NONE"` is the offline sentinel for
   Done-when 3's mechanism (the default flips `NONE` → `BACKWARD`): a unit pin asserts the
   posted level, so reverting the constant is KILLED without a live registry. If the
