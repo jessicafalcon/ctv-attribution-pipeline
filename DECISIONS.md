@@ -2591,8 +2591,10 @@ below, never deleted.
   Because the correct code raises at the decode comprehension before any broker is
   touched, the test is offline and fast; a regression that wrapped a real site in
   `try/except: continue` would swallow the poison row and NOT raise there, so the test
-  goes red exactly when the invariant is violated (verified by mutating a site to
-  skip-and-continue → test fails). An earlier draft re-implemented the comprehension in a
+  goes red exactly when the invariant is violated (verified by mutating each of the three
+  sites to skip-and-continue → the matching test fails). The two `run_engine` tests also
+  stub `load_graph_index` so a swallowed row fails as a crisp `AssertionError` at the site
+  under test rather than via an incidental downstream broker call. An earlier draft re-implemented the comprehension in a
   local helper — code-reviewer + functionality-tester flagged that it pinned pydantic, not
   the pipeline (a skip-and-continue at the named sites left it green), so it was replaced
   with the real-path test above.

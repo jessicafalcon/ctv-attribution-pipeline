@@ -20,10 +20,12 @@ real code path, not be swallowed:
 correct code raises a pydantic `ValidationError` at the decode comprehension
 before any broker is touched, so the committed test never connects. A regression
 that wraps a decode site in `try/except: continue` would NOT raise a
-`ValidationError` there — it would swallow the poison row and fall through to a
-different (non-pydantic) failure or none at all — so these tests go red exactly
-when the invariant is violated at the site they name. Offline: no broker, no
-services (the patched seams keep every path off the network).
+`ValidationError` there — it swallows the poison row and falls through past the
+decode, so `pytest.raises` goes red. The two `run_engine` tests also stub
+`load_graph_index` (`_no_resolve`) so that a swallowed row fails as a crisp
+`AssertionError` at the site under test rather than via an incidental
+unresolvable-broker call downstream. Offline: no broker, no services (the patched
+seams keep every path off the network).
 """
 
 import pytest
@@ -56,6 +58,17 @@ _GOOD_HOUSEHOLD = (
 _MALFORMED = b'{"exposure_id": "e2", "spend": -1}'
 
 
+def _no_resolve(broker):
+    """Stand-in for `load_graph_index` in the run_engine tests: reaching resolve
+    means the poison row was swallowed and decode did NOT halt. Raise a crisp,
+    broker-free error so a skip-and-continue regression fails as an assertion at
+    the site under test (not `ValidationError`, so `pytest.raises` still goes red)
+    rather than via an incidental unresolvable-broker call."""
+    raise AssertionError(
+        "decode must halt before resolve; the poison row was swallowed"
+    )
+
+
 def test_run_engine_halts_on_malformed_exposure(monkeypatch) -> None:
     """A poison exposure mid-drain raises out of the real exposures decode
     (dataflow.py:157) — run_engine does not skip it and carry on."""
@@ -66,6 +79,7 @@ def test_run_engine_halts_on_malformed_exposure(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr(dataflow, "_drain_topic", fake_drain)
+    monkeypatch.setattr(dataflow, "load_graph_index", _no_resolve)
     with pytest.raises(ValidationError):
         dataflow.run_engine("unused:9092")
 
@@ -81,6 +95,7 @@ def test_run_engine_halts_on_malformed_conversion(monkeypatch) -> None:
         return [_GOOD_CONVERSION, _MALFORMED, _GOOD_CONVERSION]
 
     monkeypatch.setattr(dataflow, "_drain_topic", fake_drain)
+    monkeypatch.setattr(dataflow, "load_graph_index", _no_resolve)
     with pytest.raises(ValidationError):
         dataflow.run_engine("unused:9092")
 
