@@ -296,64 +296,6 @@ Two honesty boundaries on what this proves:
   profile trips the alerts; the clean profile trips only the restatement its own
   deferral landing causes," nothing stronger.
 
-## Agent eval — fault → diagnosis
-
-Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
-
-> **Provenance — measured in Phase 10, pre-Phase-16; not re-run.** (Since Phase 17
-> `make agent-eval` resets each scenario's lake itself, so the BACKLOG-49 re-run is
-> safe to schedule; API tokens, ask first.) The three
-> tables below were captured by `make agent-eval` (30 live invocations) before
-> Phase 16 deferred shared-IP conversions to reconciliation. Since then the
-> context a fault profile presents has moved in one place: three profiles carry
-> ambiguous conversions (`shared_ip_spike` 25, `late_burst` 1, `co_view_bug` 1)
-> that are now credited by the reconcile pass (the deferral landing).
-> `late_burst`'s one is a revenue-0 `site_visit`, so it cannot move any
-> campaign's ROAS and its 26.604 cell stands; the other two restate, so their
-> `max|Δroas|` is no longer 0 — those two cells are blanked below rather than
-> shown stale. Verdicts,
-> `ip_resolved_fraction` and `ambig` are not affected by construction, but the
-> catalog has not been re-validated live (API tokens). Re-run: BACKLOG 49.
-
-### Fault → top hypothesis → correct?
-
-| scenario | kind | expected outcome | correct | verdict spread | top-hypothesis spread |
-|---|---|---|---|---|---|
-| `shared_ip_spike` | fault_recall | CONFIDENT device_graph_mismatch | 5/5 | 5× CONFIDENT | 5× device_graph_mismatch |
-| `real_lift` | negative_confirmation | abstain or CONFIDENT real_performance_change (never device_graph_mismatch) | 5/5 | 5× CONFIDENT | 5× real_performance_change |
-| `late_burst` | fault_recall | CONFIDENT late_arrival_distortion | 5/5 | 5× CONFIDENT | 5× late_arrival_distortion |
-| `co_view_bug` | capability_boundary | abstain (capability boundary) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 5× co_view_inflation |
-| `duplicate_flood` | control | abstain (control) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 3× upstream_data_change, 2× real_performance_change |
-| `no_fault_baseline` | control | abstain (control) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 5× real_performance_change |
-
-**False-positive rate (controls `duplicate_flood`, `no_fault_baseline`): 0/10 = 0%.** The two abstentions are distinct: `duplicate_flood` and `no_fault_baseline` abstain because nothing is wrong (the FP controls); `co_view_bug` abstains because the fault is undiagnosable from serving data by design (a labeled capability boundary — the co-view adjusted factor is a DECISIONS won't-do), so it is not folded into the FP rate.
-
-### Near-miss pair — a genuine lift vs shared-IP inflation
-
-| profile | ip_resolved_fraction | match_rate | top-hypothesis spread | verdict spread |
-|---|---|---|---|---|
-| `real_lift` | 0.061 | 1.000 | 5× real_performance_change | 5× CONFIDENT |
-| `shared_ip_spike` | 0.420 | 0.992 | 5× device_graph_mismatch | 5× CONFIDENT |
-
-Both profiles raise reported ROAS, but the discriminator is `ip_resolved_fraction` — elevated on `shared_ip_spike` (wrong-household inflation → `device_graph_mismatch`), flat on `real_lift` (a genuine lift → `real_performance_change`). The agent must tell them apart on that named number, not on "ROAS went up".
-
-### Per-profile live context headline (deterministic, LLM-free)
-
-The discriminator each scenario turns on, captured once per profile from ClickHouse (FG2 — BACKLOG 31). These are seed-reproducible, so the row is the cross-profile live pin, not the non-reproducible verdicts above.
-
-| scenario | match_rate | ip_resolved_fraction | ambig | max_cand | max\|Δroas\| | near_edge |
-|---|---|---|---|---|---|---|
-| `shared_ip_spike` | 0.992 | 0.420 | 25 | 3 | — (restates since Phase 16) | 0.000 |
-| `real_lift` | 1.000 | 0.061 | 0 | 1 | 0.000 | 0.000 |
-| `late_burst` | 1.000 | 0.065 | 1 | 2 | 26.604 | 0.000 |
-| `co_view_bug` | 0.988 | 0.067 | 1 | 3 | — (restates since Phase 16) | 0.000 |
-| `duplicate_flood` | 0.984 | 0.074 | 0 | 1 | 0.000 | 0.000 |
-| `no_fault_baseline` | 0.977 | 0.039 | 0 | 1 | 0.000 | 0.000 |
-
-### Honesty boundary
-
-These are small-profile results reported as measured. `co_view_bug`'s abstention is a **labeled capability boundary**, not a gap papered over: the co-view *adjusted* factor is a DECISIONS won't-do (BACKLOG 26 — the honest per-genre expected baseline does not exist in serving data, and sourcing it from the producer's multiplier would couple reporting to generation parameters). The agent correctly declines to diagnose from noise. Verdict/hypothesis stability across reps is a measurement, never a gated assertion (the AI edge is carved out of the byte-identical guarantee, CLAUDE.md).
-
 ## Lake of record (Phase 17) — provenance
 
 Since Phase 17 every row reaches ClickHouse through the lake: engine → Iceberg
@@ -433,3 +375,55 @@ hot output), not re-captured from a live `make reconcile-dagster`; the 32-row re
 itself is live-pinned by `make test-int-lakehouse` / `test-int-long-delay`. Iceberg snapshot ids / commit times and Dagster run ids
 are non-deterministic and are never asserted on — only row content is (DECISIONS
 Phase 12).
+
+## Agent eval — fault → diagnosis
+
+Every fault profile plus the no-fault baseline, run 5× (30 live invocations), scored against the pure rubric in `agent/eval/scoring.py` (unit-tested offline — the live sweep only supplies the LLM outputs). The agent is non-reproducible by construction (temperature is unset on the Claude-5 family, DECISIONS Phase 9), so each cell reports a spread over reps, not a single-run claim; the reps measure residual stability.
+
+> **Provenance — captured 2026-08-23 by `make agent-eval` (30 live invocations,
+> post-Phase-18b), replacing the Phase-10 capture.** The two `max|Δroas|` cells
+> the Phase-16 deferral had blanked are restored from this run (`shared_ip_spike`
+> 25.678, `co_view_bug` 4.111); every correctness cell reproduced (30/30, FP
+> 0/10) and the near-miss pair held both ways. `duplicate_flood`'s top-hypothesis
+> spread differs from Phase 10 — an abstention's hypothesis spread is a
+> measurement, never a pin. (This note is hand-added inside the regenerated
+> section; the next `make agent-eval` wipes it — re-date it then.)
+
+### Fault → top hypothesis → correct?
+
+| scenario | kind | expected outcome | correct | verdict spread | top-hypothesis spread |
+|---|---|---|---|---|---|
+| `shared_ip_spike` | fault_recall | CONFIDENT device_graph_mismatch | 5/5 | 5× CONFIDENT | 5× device_graph_mismatch |
+| `real_lift` | negative_confirmation | abstain or CONFIDENT real_performance_change (never device_graph_mismatch) | 5/5 | 5× CONFIDENT | 5× real_performance_change |
+| `late_burst` | fault_recall | CONFIDENT late_arrival_distortion | 5/5 | 5× CONFIDENT | 5× late_arrival_distortion |
+| `co_view_bug` | capability_boundary | abstain (capability boundary) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 5× co_view_inflation |
+| `duplicate_flood` | control | abstain (control) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 2× co_view_inflation, 2× real_performance_change, 1× upstream_data_change |
+| `no_fault_baseline` | control | abstain (control) | 5/5 | 5× AMBIGUOUS_NEEDS_HUMAN | 5× real_performance_change |
+
+**False-positive rate (controls `duplicate_flood`, `no_fault_baseline`): 0/10 = 0%.** The two abstentions are distinct: `duplicate_flood` and `no_fault_baseline` abstain because nothing is wrong (the FP controls); `co_view_bug` abstains because the fault is undiagnosable from serving data by design (a labeled capability boundary — the co-view adjusted factor is a DECISIONS won't-do), so it is not folded into the FP rate.
+
+### Near-miss pair — a genuine lift vs shared-IP inflation
+
+| profile | ip_resolved_fraction | match_rate | top-hypothesis spread | verdict spread |
+|---|---|---|---|---|
+| `real_lift` | 0.061 | 1.000 | 5× real_performance_change | 5× CONFIDENT |
+| `shared_ip_spike` | 0.420 | 0.992 | 5× device_graph_mismatch | 5× CONFIDENT |
+
+Both profiles raise reported ROAS, but the discriminator is `ip_resolved_fraction` — elevated on `shared_ip_spike` (wrong-household inflation → `device_graph_mismatch`), flat on `real_lift` (a genuine lift → `real_performance_change`). The agent must tell them apart on that named number, not on "ROAS went up".
+
+### Per-profile live context headline (deterministic, LLM-free)
+
+The discriminator each scenario turns on, captured once per profile from ClickHouse (FG2 — BACKLOG 31). These are seed-reproducible, so the row is the cross-profile live pin, not the non-reproducible verdicts above.
+
+| scenario | match_rate | ip_resolved_fraction | ambig | max_cand | max\|Δroas\| | near_edge |
+|---|---|---|---|---|---|---|
+| `shared_ip_spike` | 0.992 | 0.420 | 25 | 3 | 25.678 | 0.000 |
+| `real_lift` | 1.000 | 0.061 | 0 | 1 | 0.000 | 0.000 |
+| `late_burst` | 1.000 | 0.065 | 1 | 2 | 26.604 | 0.000 |
+| `co_view_bug` | 0.988 | 0.067 | 1 | 3 | 4.111 | 0.000 |
+| `duplicate_flood` | 0.984 | 0.074 | 0 | 1 | 0.000 | 0.000 |
+| `no_fault_baseline` | 0.977 | 0.039 | 0 | 1 | 0.000 | 0.000 |
+
+### Honesty boundary
+
+These are small-profile results reported as measured. `co_view_bug`'s abstention is a **labeled capability boundary**, not a gap papered over: the co-view *adjusted* factor is a DECISIONS won't-do (BACKLOG 26 — the honest per-genre expected baseline does not exist in serving data, and sourcing it from the producer's multiplier would couple reporting to generation parameters). The agent correctly declines to diagnose from noise. Verdict/hypothesis stability across reps is a measurement, never a gated assertion (the AI edge is carved out of the byte-identical guarantee, CLAUDE.md).

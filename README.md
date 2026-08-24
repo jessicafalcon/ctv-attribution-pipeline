@@ -37,8 +37,9 @@ into [`docs/RESULTS.md`](docs/RESULTS.md); the direction is the claim, not the m
 | async inserts on the loader (`make run`, Phase 18b) | WIN on write parts | `async_insert=1, wait_for_async_insert=1` → fewer, larger parts; serving rows byte-identical, off in the golden paths |
 | per-query cost (`make cost-report` → `query_cost_daily`) | MEASURED | cpu-seconds + illustrative $ per report/restate/bench query; quarantined non-determinism, no pipeline path reads it |
 
-**Agent eval:** 30/30 correct diagnoses, false-positive rate 0/10 = 0% (Phase 10, live,
-30 invocations; the near-miss pair — genuine lift vs shared-IP inflation — held both ways).
+**Agent eval:** 30/30 correct diagnoses, false-positive rate 0/10 = 0% (recaptured
+2026-08-23, live, 30 invocations; the near-miss pair — genuine lift vs shared-IP
+inflation — held both ways, in Phase 10 and again on the recapture).
 
 **What this does NOT show.** This is a simulation of the pipeline *shape* attribution
 requires, not a reproduction of any vendor's device graph or integrations. The engine
@@ -252,7 +253,8 @@ reproduced by the command it states.
   (0.061), never `device_graph_mismatch`. `co_view_bug` correctly **abstains** — a
   labeled capability boundary, kept out of the FP denominator. The agent is
   non-reproducible by construction (no temperature control on the Claude-5 family), so
-  the reps measure stability; the numbers are dated Phase 10 and not re-run.
+  the reps measure stability; the numbers are the 2026-08-23 recapture (the
+  Phase-10 result reproduced — 30/30, FP 0/10).
 
 ## Scaling
 
