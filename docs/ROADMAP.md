@@ -41,7 +41,7 @@ the item's PR merges.
   (135,168 rows both sides); the dirty set is 156 of 165 keys (shared-IP deferrals
   spread across every campaign/hour), so no granule can be skipped. Recorded in the
   RESULTS "Rollup refresh" block (now `bench_large`) + DECISIONS `fix/rollup-bench-read`.
-- [ ] **4. Poison-message disposition** (BACKLOG: "No stated disposition for a
+- [x] **4. Poison-message disposition** (BACKLOG: "No stated disposition for a
   message that fails schema validation at consume time"; DECISIONS entry + one
   unit test — docs first, no dead-letter build, which would be speculative
   code).
@@ -53,6 +53,15 @@ the item's PR merges.
   feeding `common.kafka` drain's decode path a malformed payload. If current
   behavior turns out to be skip-or-inscrutable-crash, that is a finding to
   report first (a write-path behavior change takes the fix-amendment ritual).
+  **DONE (`fix/poison-message-disposition`, 2026-08-24):** STEP-0 finding —
+  current behavior already fails loud (the three decode sites are bare
+  `model_validate_json` comprehensions, no try/except; a malformed payload
+  raises `ValidationError` and halts, never skips), so this was docs + one test,
+  NO code change. Disposition recorded in DECISIONS (fail loud and halt; DLQ
+  noted not built); `tests/test_poison_message.py` pins the loud halt. The loud
+  failure is INSCRUTABLE (no topic/offset context) — left as an accepted
+  limitation, deferred to the continuous-follow phase (a scrutability wrap is a
+  write-path change → fix-amendment ritual).
 - [ ] **5. Crash-recovery proof** (BACKLOG: "The land → load seam's crash
   idempotency is argued, never demonstrated"; additive integration tests, no
   spec).
