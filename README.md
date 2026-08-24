@@ -33,7 +33,7 @@ into [`docs/RESULTS.md`](docs/RESULTS.md); the direction is the claim, not the m
 | projection ordered by `event_time` | WIN | 1.54× fewer rows on a date-scoped slice |
 | FINAL-avoidance (`argMax` GROUP BY) / bloom skip index | DOCUMENTED NEGATIVE | `FINAL` reads 0.26× the bytes of the manual collapse; the skip index prunes 0 granules |
 | PREWHERE the window predicate | WIN | 1.21× fewer bytes, same rows |
-| incremental rollup refresh (dirty set, `make rollup-bench`) | WIN on writes | 17.9× fewer rows written; reads do not fall at this size — one granule |
+| incremental rollup refresh (dirty set, `make rollup-bench`) | WIN on writes | 1.1× fewer rows written (only changed keys rewritten; here reconcile restates 156 of 165); reads do not fall even at ~7 granules — the dirty keys span every granule |
 | async inserts on the loader (`make run`, Phase 18b) | WIN on write parts | `async_insert=1, wait_for_async_insert=1` → fewer, larger parts; serving rows byte-identical, off in the golden paths |
 | per-query cost (`make cost-report` → `query_cost_daily`) | MEASURED | cpu-seconds + illustrative $ per report/restate/bench query; quarantined non-determinism, no pipeline path reads it |
 

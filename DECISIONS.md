@@ -2534,3 +2534,33 @@ below, never deleted.
   capability), plus a labelled SYNTHETIC firing alert delivered Alertmanager→`agent/webhook.py`
   (the mis-wired-receiver bug); PROMTOOL — the rule fires with `for: 5m` timing via `eval_time`;
   CONFIG — the AM webhook receiver points at the agent. Nothing is left to a 5.5-min timer.
+
+### fix/rollup-bench-read (2026-08-23)
+
+- **The dirty-set refresh's READ side is a DOCUMENTED NEGATIVE — reads do not fall
+  even on a multi-granule table (BACKLOG 73).** 18a measured `long_delay` (one 8192-row
+  granule, nothing to prune) and deferred the multi-granule read question to a profile
+  that spans many. Measured now on `bench_large` — `exposures_landed` 55,000 rows in 8
+  marks (~7 granules), `attributed_conversions` 25,168 in 5 marks — the incremental
+  refresh reads exactly what the full rebuild reads (135,168 rows both sides). Mechanism:
+  the dirty set is 156 of 165 `(campaign_id, hour)` keys, because reconciliation's
+  shared-IP deferrals (`shared_ip_fraction` 0.2) restate nearly every campaign/hour, so
+  at least one dirty key lands in every granule's key range and the `(campaign_id, hour)`
+  predicate skips no marks. Granule pruning needs the dirty keys ABSENT from whole
+  granules the rebuild would otherwise scan; this fault produces the opposite. This is
+  the same shape of honest negative as the Phase-13 cost-levers bloom skip index (the
+  schema doesn't reward it), and it sits beside those levers in `docs/RESULTS.md`.
+- **No read-direction assert added; the committed RESULTS block is now `bench_large`'s.**
+  The roadmap said record, not gate — a profile-conditional read assert is fragile (the
+  outcome turns on where the fault's keys fall, not a structural property). Rows read stay
+  PRINTED, not asserted; the write-direction assert (incremental writes fewer) is
+  profile-independent and unchanged. There is one `ROLLUP_BENCH_START/END` block and the
+  tool regenerates it whole per run, so rather than a throwaway run, `bench_large` owns the
+  committed block as a superset — it shows the write saving AND the real read measurement
+  on a multi-granule table, profile stated. `long_delay` remains a valid lighter run.
+  `queries/rollup_bench.py`'s `format_report`/`render`/docstring now derive the read-side
+  verdict + mechanism from the measured granule count, so the block reads honestly for
+  whichever profile generated it (no hardcoded single-granule prose, no `long_delay`
+  literal). On `bench_large` the write ratio is a modest 1.1× (156 of 165 keys restated),
+  vs 17.9× on `long_delay` — both are the same structural saving (only changed keys
+  rewritten), sized by how much the profile's reconcile pass restates.

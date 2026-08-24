@@ -183,11 +183,13 @@ Control plane: Docker Compose · Makefile · GitHub Actions CI (tiny profile).
   refresh on a populated stack, each run into its OWN scratch table (the live rollup is
   never the oracle's medium; the tool also applies the DDL, so it is not read-only):
   asserts the two agree (6dp) and that the incremental refresh WRITES fewer rows (direction only; rows read
-  are printed with the granule counts explaining why they do not fall at profile size),
+  are printed, NOT asserted, with a granule-derived verdict + mechanism explaining the read outcome),
   and gates the loader↔rollup contract — every key whose rollup row changed is in the
   set the refresh recomputed (`changed ⊆ dirty`; equality is evidence, not the rule). Rewrites the "Rollup refresh" block in `docs/RESULTS.md`. Run after
-  `make run PROFILE=<p>` on a profile whose reconcile pass restates something
-  (`long_delay`)
+  `make run PROFILE=<p>` on a profile whose reconcile pass restates something.
+  `bench_large` is the recorded multi-granule profile (the committed RESULTS block is
+  its measurement — reads do NOT fall even at ~7 granules, BACKLOG 73); `long_delay`
+  is the lighter single-granule run (the write-direction assert is profile-independent)
 - `make cost-report PROFILE=<p>` — per-query cost from `system.query_log` (Phase 18b):
   tags each report/restate/bench query with a distinct `log_comment`, reads its cost back
   as the SELECT-`system.query_log`+INSERT-`query_cost_daily` `cost_rw` writer, derives
@@ -648,7 +650,7 @@ mutate 7/7). Next work is BACKLOG-driven, not pre-planned: the top candidate is 
 Phase-18b caveat: BACKWARD now 409s an in-place required-column retype, so the migration
 must add an optional Decimal field + dual-write, not retype). A new phase starts the
 usual way: architect writes/approves the spec (Invariants-first), implementer builds.
-Open BACKLOG rows: **42** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
+Open BACKLOG rows: **41** (`grep -cE '^\| \*\*' BACKLOG.md` — the un-struck rows;
 reviewed at every phase exit). The per-phase table (0–17, 19 + the fix PRs, then the Tooling list) lives in `README.md` → History;
 rationale in `DECISIONS.md` ("Decisions still in force", then the per-phase appendix);
 headline numbers in `docs/RESULTS.md`. No API keys in repo.

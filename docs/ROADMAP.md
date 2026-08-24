@@ -30,13 +30,17 @@ the item's PR merges.
   banner with the new capture date, and re-verify the 30/30 and FP 0/10
   headline. README cites those numbers — if they move, surface the change,
   never smooth it. Capture + docs PR.
-- [ ] **3. Dirty-key READ measurement on `bench_large`** (BACKLOG: "The
+- [x] **3. Dirty-key READ measurement on `bench_large`** (BACKLOG: "The
   incremental rollup refresh's READ side is unmeasured on a multi-granule
   table"). Run the `make rollup-bench` measurement against `bench_large`
   (~7 granules of exposures) after `make run PROFILE=bench_large`. Record
   either outcome beside the Phase-13 cost levers: a read win, or another
   documented negative with its mechanism. Do NOT resize the profile (BACKLOG:
-  producer queue cap ~100k messages). `fix/` branch.
+  producer queue cap ~100k messages). `fix/` branch. **DONE (`fix/rollup-bench-read`,
+  2026-08-23):** documented negative — reads do not fall even at ~7 granules
+  (135,168 rows both sides); the dirty set is 156 of 165 keys (shared-IP deferrals
+  spread across every campaign/hour), so no granule can be skipped. Recorded in the
+  RESULTS "Rollup refresh" block (now `bench_large`) + DECISIONS `fix/rollup-bench-read`.
 - [ ] **4. Poison-message disposition** (BACKLOG: "No stated disposition for a
   message that fails schema validation at consume time"; DECISIONS entry + one
   unit test — docs first, no dead-letter build, which would be speculative
