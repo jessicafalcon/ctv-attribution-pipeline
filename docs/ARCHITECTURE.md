@@ -724,3 +724,26 @@ attribution actually runs on, a windowed, late-tolerant, cross-device stream joi
 with a reconciliation path serving an OLAP reporting layer with restatements,
 validates it against ground truth, and puts an AI agent where it earns its keep:
 guarding the integrity of the numbers advertisers bet their budgets on.*
+- **`system.query_log` is written asynchronously and is NOT per-user filtered
+  (Phase 18b).** A tagged query is not visible in `system.query_log` until a
+  `SYSTEM FLUSH LOGS` (the log buffer flushes on a timer otherwise), so `make
+  cost-report` flushes before reading. Per-query cost is keyed by the `log_comment`
+  setting; CPU time is the map column `ProfileEvents['OSCPUVirtualTimeMicroseconds']`.
+  Unlike `system.parts` (whose rows ARE filtered to the tables a user may see — the
+  Phase-18a `metrics_ro` SHOW-TABLES gotcha), `system.query_log` returns every user's
+  rows to any principal with `SELECT` on it — so `cost_rw` (SELECT `system.query_log`
+  only) reads the cost of queries the *default* user ran. Verified live on 24.8.
+- **Alertmanager v0.28 removed the v1 alerts API (Phase 18b).** `POST /api/v1/alerts`
+  returns `410 Gone`; inject alerts via `POST /api/v2/alerts` (a JSON array with
+  `labels`/`annotations`/`startsAt`/`endsAt`, `endsAt` in the future to stay firing).
+- **Pushgateway scrape needs `honor_labels: true` (Phase 18b).** Without it Prometheus
+  overwrites the pushed `job`/`instance` labels with `job="pushgateway"`, and a rule
+  keyed on the stage's own metric labels no longer matches. `global.evaluation_interval`
+  also defaults to 1 minute — set to 15s so a pushed metric drives a rule promptly on
+  the live path rather than up to a minute later.
+- **Container → host reachability for the Alertmanager → agent webhook (Phase 18b).**
+  Alertmanager (in a container) reaches the host-run `agent/webhook.py` via
+  `host.docker.internal`; that name resolves natively on Docker Desktop and, on Linux CI,
+  needs `extra_hosts: ["host.docker.internal:host-gateway"]` on the service. A host
+  process the container must reach has to bind `0.0.0.0` (a `127.0.0.1`-only listener is
+  unreachable from the container through the host gateway).

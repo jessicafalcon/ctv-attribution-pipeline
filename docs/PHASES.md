@@ -414,10 +414,25 @@ the metric does. The migration for `snapshot_version` is create → backfill →
 confirmed `migrate-snapshots` target (never added — the rebuild preserves every row), a read-side assert that only holds on a profile the
 DONE command never runs.
 
-## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (PROPOSED)
+## Phase 18b — Cost and ops levers: async inserts, query cost, BACKWARD compat, live alert firing (in review)
 
 **Goal.** Async inserts measured, a query-cost table (`query_cost_daily`), schema
 compatibility BACKWARD, the live alert firing path (Pushgateway) + webhook
 `groupKey` dedupe, the shard-key note. The other half of the 2026-08-22 split;
 depends on 18a merged. Spec: `specs/phase-18b-cost-and-ops.md` — same
-reconciliation banner, same commit-1 rule.
+reconciliation banner, same commit-1 rule (reconciled + amendment 2 approved 2026-08-23).
+
+**Delivered.** (1) Async inserts on the loader (`lake/load_serving.py`,
+`async_insert=1, wait_for_async_insert=1`, `LAKE_ASYNC_INSERT=1` in `make run`, off in
+the golden paths) — serving rows byte-identical, no read-after-load race, proven live.
+(2) `query_cost_daily` filled from `system.query_log` by a new `cost_rw` writer
+(SELECT `system.query_log` + INSERT its table only); `cpu_seconds` from `ProfileEvents`,
+illustrative `usd` from a config rate; quarantined non-determinism (no pipeline path
+reads it); `make cost-report` rewrites the RESULTS block and pushes a Grafana cost panel.
+(3) Schema registry set to BACKWARD (add-optional accepted, remove-required 409 — proven
+live against Redpanda). (4) Live alert firing PATH: batch stages push their terminal
+registry to a digest-pinned Pushgateway, Prometheus scrapes it and the five rules
+evaluate on live data (`RestatementMagnitude` ACTIVE proven live); Alertmanager routes
+firing → `agent/webhook.py` (proven with a synthetic alert); the webhook dedupes by
+`groupKey`. The `for: 5m`→AM-firing timing stays promtool's (amendment 2). (5) SCALING.md
+names `household_id` as the 500k shard key, with why-not-`campaign_id`.

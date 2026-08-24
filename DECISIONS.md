@@ -2427,3 +2427,61 @@ below, never deleted.
   a "do not re-litigate" decision, which 18b's commit 1 would have read against its
   own banner (review gate, round 2).
 
+
+### Phase 18b
+
+- **Async inserts live on the LOADER, behind a flag, default OFF.** `streaming/sink.py`
+  was deleted in Phase 17; the ONE serving-table writer is `lake/load_serving.py`, so the
+  `async_insert=1, wait_for_async_insert=1` lever is on its `client.insert` calls, gated by
+  `LAKE_ASYNC_INSERT`. `make run` opts in; `run-hot`, `metrics-capture`, the offline suite
+  and every oracle path leave it unset, so no frozen pin or captured metric moves for a
+  server-side-batching reason. `wait_for_async_insert=1` keeps the read path
+  synchronous-from-the-caller, so a read right after a load sees every row (no
+  eventual-visibility race) — proven live equal to a synchronous load and to the direct
+  oracle. Rejected: default ON (the Evidence test name's first draft) — it would have put
+  every unproven-parity path on async and risked drifting 18a's captures; opting in only in
+  `make run` is the lower-blast-radius choice.
+- **`query_cost_daily` is QUARANTINED non-determinism.** Query durations and cpu-seconds
+  vary run to run, so the cost table is OUTSIDE the byte-identical guarantee — the same
+  carve-out as Iceberg snapshot ids and Dagster run ids — and NO serving / report /
+  reconcile / lake path reads it (a grep guard pins the quarantine). `read_rows` /
+  `read_bytes` are server-computed and stable; the `usd` column is an illustrative
+  conversion of a MEASURED `cpu_seconds` (`ProfileEvents['OSCPUVirtualTimeMicroseconds']`)
+  by a config `$/cpu-second` rate, computed in Python — never a billed figure and never a
+  SQL literal.
+- **A new `cost_rw` writer, not a wider `metrics_ro`.** Done-when 2 needs `SELECT
+  system.query_log` + `INSERT query_cost_daily`; 18a's `metrics_ro` is a read-only metadata
+  principal. A writer gets its own `users.d` principal (verified live: it sees another
+  user's `query_log` rows, writes its table, and is denied every pipeline read, code 497).
+  `agent_ro` and `metrics_ro` are unchanged. This supersedes the pre-split "reuse
+  `metrics_ro`" instruction (right while both consumers were readers).
+- **Schema registry runs at BACKWARD, the data contract.** Every subject posts BACKWARD
+  (the single `_compat_level` place), replacing the Phase-2 dev `NONE`. Verified live
+  against the pinned Redpanda registry: adding an optional field is accepted (old golden
+  fixtures still validate against the new consumer), removing a required field is rejected
+  409 (`PROPERTY_REMOVED_FROM_CLOSED_CONTENT_MODEL` — the models are
+  `additionalProperties: false`).
+- **Pushgateway for the batch stages' live metrics.** The stages are finite drains that
+  exit before a pull-scrape, so each PUSHES its terminal registry to a digest-pinned,
+  loopback-bound Pushgateway that persists it for Prometheus to scrape — closing the "batch
+  stages exit before a scrape" gap every prior phase deferred. `make run` wipes the gateway
+  once (admin API) then each stage pushes; gated on `PUSHGATEWAY_URL` so the golden paths
+  never depend on a running gateway. Rejected: a node_exporter textfile collector (a second
+  file-drop convention for the same job).
+- **Webhook sweeps are bounded by GROUP, not alert count.** `agent/webhook.py` triggers one
+  sweep per firing `groupKey`, not per alert — Alertmanager posts one webhook per group, and
+  the sweep re-observes the whole DB, so a second sweep for the same group would only burn
+  tokens. The trigger-only LLM boundary is unchanged (the sweep still takes no argument, so
+  no alert text reaches it).
+- **Done-when 4a live assertion (amendment 2, architect ruling).** The shipped
+  `RestatementMagnitude` rule carries `for: 5m`, so a real-data Alertmanager-FIRING assertion
+  is a ~5.5-min wall-clock wait — rejected as slow and a clock-timed flake vector. Retuning
+  `for:` on the four shipped rules to make a test fast was ALSO rejected: whether a
+  batch-pushed settled terminal metric warrants the 5-minute transient debounce is a real
+  alert-semantics question, but it is its own pinned decision for every consumer, not a
+  test-timing fix smuggled in through 4a. So the assertion is split by what each layer proves
+  deterministically and fast: LIVE — `RestatementMagnitude` ACTIVE (pending/firing) in
+  Prometheus on the pushed real reconcile metric (push→scrape→evaluate, the genuinely new
+  capability), plus a labelled SYNTHETIC firing alert delivered Alertmanager→`agent/webhook.py`
+  (the mis-wired-receiver bug); PROMTOOL — the rule fires with `for: 5m` timing via `eval_time`;
+  CONFIG — the AM webhook receiver points at the agent. Nothing is left to a 5.5-min timer.
