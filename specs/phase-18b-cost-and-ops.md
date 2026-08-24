@@ -146,7 +146,7 @@ Every Done-when item names the test or command output that proves it.
 
 | Done-when | Proof (test file / `make` target / command output) |
 |---|---|
-| 1a (async flag on the loader, off in gate-0) | `tests/test_load_serving.py::test_async_flag_defaults_on_and_can_be_disabled`, `::test_the_insert_settings_carry_async_insert_and_wait` |
+| 1a (async flag on the loader, off by default) | `tests/test_load_serving.py::test_async_flag_defaults_off_and_make_run_enables_it`, `::test_the_insert_settings_carry_async_insert_and_wait` |
 | 1b (serving rows byte-identical with async on vs off) | LIVE `tests/integration/test_async_insert.py::test_serving_rows_are_byte_identical_with_async_on_and_off` (and equal to `tests/oracle.py`) |
 | 1c (fewer parts, measured) | `make bench` / the `bench_large` measurement line "parts/min async < sync" (direction assert; magnitude printed, never pinned) |
 | 2a (per-query cost written to the table) | `make cost-report PROFILE=long_delay` output line + LIVE `tests/integration/test_cost_report.py::test_each_measured_query_lands_one_row_keyed_by_its_tag` |
