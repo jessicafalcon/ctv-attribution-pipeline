@@ -21,8 +21,8 @@ things come out of one pass:
               keys leave whole granules untouched — measured NOT to: reconciliation's
               shared-IP deferrals spread across every campaign and hour, so the dirty
               set covers almost every `(campaign_id, hour)` key and at least one falls
-              in every granule's range (BACKLOG 73, DECISIONS 18b). A read assert would
-              claim a saving the data does not show.
+              in every granule's range (BACKLOG 73, DECISIONS fix/rollup-bench-read).
+              A read assert would claim a saving the data does not show.
   the gate  — the dirty set is the contract between the loader and the rollup, and a
               wrong one is SILENTLY wrong while the equality oracle still passes. The
               rule: every key whose aggregate changed is in the dirty set
@@ -240,9 +240,10 @@ def _final_rows(client: Client, table: str = "campaign_hourly") -> list[tuple]:
 
 
 def _granules(client: Client) -> list[tuple]:
-    """rows and marks per source table — the printout's evidence for why rows read
-    cannot fall here. One granule is 8192 rows; a table inside one mark range has
-    nothing for a key predicate to skip."""
+    """rows and marks per source table — the printout's evidence for the read-side
+    verdict. One granule is 8192 rows and reads back as one mark plus a boundary mark,
+    so marks > 2 means the table spans more than one granule (`_read_finding` keys the
+    read outcome off this)."""
     return client.query(
         "select table, sum(rows), sum(marks) from system.parts "
         "where active and table in ('exposures_landed', 'attributed_conversions') "
