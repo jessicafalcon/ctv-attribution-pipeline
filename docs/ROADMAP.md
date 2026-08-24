@@ -22,7 +22,7 @@ the item's PR merges.
   Do NOT canonicalize (`OPTIMIZE … FINAL`) inside this test — an idempotency
   test should observe the table as the second pass left it. Test-only: no spec
   amendment. `fix/` branch.
-- [ ] **2. Agent-eval re-run** (BACKLOG: "Profiles whose deferred shared-IP
+- [x] **2. Agent-eval re-run** (BACKLOG: "Profiles whose deferred shared-IP
   conversions carry revenue now restate after `make run`"). Re-run
   `make agent-eval` (API tokens — ask first; since Phase 17 it resets each
   scenario's lake itself), then in `docs/RESULTS.md`: restore the two blanked
