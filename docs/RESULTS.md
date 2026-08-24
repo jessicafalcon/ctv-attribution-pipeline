@@ -136,27 +136,31 @@ believe an incremental refresh that changed an answer.
 The block below is regenerated verbatim by that command and is the ONLY place its
 numbers live (the Phase-14 rule — a hand-authored figure inside a regenerated block goes
 stale the next time the block is written). Two caveats belong with it and are kept out
-here, because they are prose rather than measurements. The rows-read comparison is
-bounded by table SIZE: below one 8,192-row granule a key predicate has nothing to prune,
-so no read saving can appear at this profile whatever the dirty set does. And the write
+here, because they are prose rather than measurements. The read-side outcome turns on
+WHERE the dirty keys fall, not only on table size: on `bench_large` the source tables
+span ~7 granules, yet reads still do not fall — reconciliation's shared-IP deferrals
+restate nearly every `(campaign_id, hour)` key, so at least one dirty key lands in every
+granule and the dirty-key predicate skips no marks. A read saving would need the dirty
+keys clustered into whole granules the full rebuild would otherwise scan; this fault does
+not produce that clustering (BACKLOG 73, measured). And the write
 saving is the pipeline's OWN second pass, not a constructed scenario — `make run`
 refreshes every key on the hot load and only the reconcile-touched keys on the reload,
 which is the pair measured below.
 
 <!-- ROLLUP_BENCH_START -->
 
-_Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on a rollup of 340 `(campaign_id, hour)` keys of which the reconcile pass changed 19. Rows read/written are ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to merged steady state first._
+_Measured by `make rollup-bench PROFILE=bench_large` after `make run`, on a rollup of 165 `(campaign_id, hour)` keys of which the reconcile pass changed 156. Rows read/written are ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to merged steady state first._
 
 | measure | full rebuild | dirty-set refresh | |
 |---|---|---|---|
-| rows written | 340 | 19 | 17.9× fewer — **asserted** (direction only) |
-| rows read | 835 | 835 | unchanged — printed, **not** asserted |
+| rows written | 165 | 156 | 1.1× fewer — **asserted** (direction only) |
+| rows read | 135,168 | 135,168 | unchanged — printed, **not** asserted |
 
-**The write saving is the structural one.** Rewriting only the 19 changed keys instead of all 340 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
+**The write saving is the structural one.** Rewriting only the 156 changed keys instead of all 165 is what an incremental rollup buys, and it is what stops `campaign_hourly` gaining a full copy per refresh — the un-merged part growth RUNBOOK incident #1 is about.
 
-**Rows read do not move: `attributed_conversions` 115 rows in 2 marks; `exposures_landed` 360 rows in 2 marks.** A granule is 8,192 rows, so both source tables sit inside ONE — a dirty-key predicate has nothing to skip, and the incremental refresh reads exactly what the full rebuild reads. The saving here is entirely in what is WRITTEN. Whether a dirty-key filter can also prune READS is answerable only on a multi-granule table (`bench_large`, ≈7 granules of exposures) and is a BACKLOG row for 18b, which already runs that profile.
+**Rows read — unchanged (multi-granule): `attributed_conversions` 25,168 rows in 5 marks; `exposures_landed` 55,000 rows in 8 marks.** Even though the source tables span multiple granules, the dirty set is 156 of 165 `(campaign_id, hour)` keys — the shared-IP deferrals reconciliation recovers are spread across every campaign and hour, so at least one dirty key falls in every granule's key range and the predicate skips no marks. Granule pruning needs the dirty keys ABSENT from whole granules; here they are everywhere. The saving here is entirely in what is WRITTEN.
 
-**Dirty-set gate:** the keys reconciliation changed vs the keys the pipeline's own second-pass refresh recomputed — identical (19 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
+**Dirty-set gate:** the keys reconciliation changed vs the keys the pipeline's own second-pass refresh recomputed — identical (156 keys), over-refresh 0 keys. The contract is `changed ⊆ dirty` (a missed key serves a stale rollup while the full-refresh oracle still passes); equality is evidence, not the rule.
 
 <!-- ROLLUP_BENCH_END -->
 

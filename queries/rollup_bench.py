@@ -1,7 +1,9 @@
 """`make rollup-bench` — full rollup rebuild vs dirty-set refresh (Phase 18a).
 
 Run after `make run PROFILE=<p>` on a profile whose reconcile pass changed something
-(`long_delay` is the gate profile). Three things come out of one pass:
+(`long_delay` is the lighter gate profile; `bench_large` is the recorded
+multi-granule profile — the committed RESULTS block is its measurement). Three
+things come out of one pass:
 
   equality  — the dirty-set refresh leaves `campaign_hourly FINAL` identical to what a
               full rebuild leaves, to 6 dp. The full rebuild is the ORACLE; an
@@ -11,12 +13,16 @@ Run after `make run PROFILE=<p>` on a profile whose reconcile pass changed somet
               (magnitude-free, Phase 7/13 precedent): rewriting only the changed keys
               is what an incremental rollup buys, and it is what keeps campaign_hourly
               from gaining a full copy per refresh (RUNBOOK incident #1's real cost).
-              Rows read are PRINTED, not asserted, and the printout says why: at
-              profile scale the source tables are a SINGLE granule, so a dirty-key
-              predicate has nothing to prune and costs more than it saves (the
-              dirty-key lookup itself reads). A read-side win needs a multi-granule
-              table — measured on bench_large when 18b's query-cost work runs it
-              (BACKLOG). Asserting it here would be claiming scale we do not run.
+              Rows read are PRINTED, not asserted, and the printout derives its own
+              read-side verdict from the measured granule counts. On a single-granule
+              table (`long_delay`, exposures_landed in one 8192-row granule) a
+              dirty-key predicate has nothing to prune. On a multi-granule table
+              (`bench_large`, ≈7 granules of exposures) it CAN prune only if the dirty
+              keys leave whole granules untouched — measured NOT to: reconciliation's
+              shared-IP deferrals spread across every campaign and hour, so the dirty
+              set covers almost every `(campaign_id, hour)` key and at least one falls
+              in every granule's range (BACKLOG 73, DECISIONS fix/rollup-bench-read).
+              A read assert would claim a saving the data does not show.
   the gate  — the dirty set is the contract between the loader and the rollup, and a
               wrong one is SILENTLY wrong while the equality oracle still passes. The
               rule: every key whose aggregate changed is in the dirty set
@@ -234,14 +240,57 @@ def _final_rows(client: Client, table: str = "campaign_hourly") -> list[tuple]:
 
 
 def _granules(client: Client) -> list[tuple]:
-    """rows and marks per source table — the printout's evidence for why rows read
-    cannot fall here. One granule is 8192 rows; a table inside one mark range has
-    nothing for a key predicate to skip."""
+    """rows and marks per source table — the printout's evidence for the read-side
+    verdict. One granule is 8192 rows and reads back as one mark plus a boundary mark,
+    so marks > 2 means the table spans more than one granule (`_read_finding` keys the
+    read outcome off this)."""
     return client.query(
         "select table, sum(rows), sum(marks) from system.parts "
         "where active and table in ('exposures_landed', 'attributed_conversions') "
         "group by table order by table"
     ).result_rows
+
+
+def _multi_granule(m: dict) -> bool:
+    """True when a source table spans more than one granule. ClickHouse records one
+    mark per granule plus a final boundary mark, so >2 marks == >1 granule (a
+    single 8192-row granule reads back as 2 marks)."""
+    return any(marks > 2 for _, _, marks in m["granules"])
+
+
+def _read_finding(m: dict) -> tuple[str, str]:
+    """(verdict, mechanism) for the read side, derived from the measured numbers —
+    so the report reads honestly for whatever profile generated it. Three cases:
+    a read win (the dirty-key predicate pruned granules), reads unchanged on a
+    single-granule table (nothing to prune), reads unchanged on a multi-granule
+    table (the dirty keys span every granule, so no mark range can be skipped)."""
+    full_r = m["full"]["read_rows"]
+    inc_r = m["incremental"]["read_rows"]
+    if inc_r < full_r:
+        return (
+            "read win",
+            f"The dirty-key predicate `(campaign_id, hour)` prunes granules the full "
+            f"rebuild scans: incremental reads {inc_r:,} vs {full_r:,}, because the "
+            f"dirty set touches only some of exposures_landed's granules and the "
+            f"leading sort key `(campaign_id, event_time, …)` lets ClickHouse skip "
+            f"the rest.",
+        )
+    if not _multi_granule(m):
+        return (
+            "unchanged (single granule)",
+            "Both source tables sit inside ONE 8,192-row granule, so a dirty-key "
+            "predicate has nothing to skip and the incremental refresh reads exactly "
+            "what the full rebuild reads.",
+        )
+    return (
+        "unchanged (multi-granule)",
+        f"Even though the source tables span multiple granules, the dirty set is "
+        f"{m['dirty']} of {m['total_keys']} `(campaign_id, hour)` keys — the shared-IP "
+        f"deferrals reconciliation recovers are spread across every campaign and hour, "
+        f"so at least one dirty key falls in every granule's key range and the "
+        f"predicate skips no marks. Granule pruning needs the dirty keys ABSENT from "
+        f"whole granules; here they are everywhere.",
+    )
 
 
 def format_report(m: dict) -> str:
@@ -250,6 +299,7 @@ def format_report(m: dict) -> str:
         if m["incremental"]["written_rows"]
         else "n/a"
     )
+    verdict, mechanism = _read_finding(m)
     lines = [
         "rollup refresh — full rebuild vs dirty-set refresh",
         "(same campaign_hourly FINAL rows, verified equal to 6 dp)",
@@ -265,15 +315,13 @@ def format_report(m: dict) -> str:
         "rows written incremental < full",
         "",
         f"rows read     full={m['full']['read_rows']}  "
-        f"incremental={m['incremental']['read_rows']}  (printed, NOT asserted)",
+        f"incremental={m['incremental']['read_rows']}  "
+        f"({verdict}; printed, NOT asserted)",
         "  "
         + "; ".join(
             f"{t}: {rows} rows in {marks} marks" for t, rows, marks in m["granules"]
         ),
-        "  a granule is 8192 rows — inside one, a dirty-key predicate has nothing to",
-        "  prune, so the incremental refresh reads what the full rebuild reads. A read",
-        "  saving needs a multi-granule table (bench_large, BACKLOG); the write saving",
-        "  above is the structural one.",
+        "  " + mechanism,
     ]
     return "\n".join(lines)
 
@@ -281,8 +329,10 @@ def format_report(m: dict) -> str:
 def render(m: dict) -> str:
     """The docs/RESULTS.md block, regenerated verbatim by this command (the
     `cost-levers` / `scale-curve` pattern, so `make check-docs` guards it). Both
-    numbers are stated — the write saving AND the read cost — with the mark counts
-    that explain the second, so a reader cannot take the headline for a read win."""
+    numbers are stated — the write saving AND the read outcome — with the mark counts
+    and a granule-derived mechanism, so the block reads honestly for whatever profile
+    generated it: a reader cannot take the headline for a read win, nor read a
+    single-granule caveat on a multi-granule run."""
     granules = "; ".join(
         f"`{t}` {rows:,} rows in {marks} marks" for t, rows, marks in m["granules"]
     )
@@ -292,12 +342,19 @@ def render(m: dict) -> str:
         if m["equal_sets"]
         else f"{m['changed']} changed ⊆ {m['dirty']} dirty"
     )
+    verdict, mechanism = _read_finding(m)
+    read_cell = (
+        "fewer — printed, **not** asserted"
+        if m["incremental"]["read_rows"] < m["full"]["read_rows"]
+        else "unchanged — printed, **not** asserted"
+    )
     return "\n".join(
         [
             _START,
             "",
-            "_Measured by `make rollup-bench PROFILE=long_delay` after `make run`, on "
-            f"a rollup of {m['total_keys']} `(campaign_id, hour)` keys of which the "
+            f"_Measured by `make rollup-bench PROFILE={m['profile']}` after "
+            f"`make run`, on a rollup of {m['total_keys']} `(campaign_id, hour)` keys "
+            f"of which the "
             f"reconcile pass changed {m['changed']}. Rows read/written are "
             "ClickHouse's own `X-ClickHouse-Summary`, both tables canonicalized to "
             "merged steady state first._",
@@ -308,8 +365,7 @@ def render(m: dict) -> str:
             f"{m['incremental']['written_rows']:,} | "
             f"{write_ratio:.1f}× fewer — **asserted** (direction only) |",
             f"| rows read | {m['full']['read_rows']:,} | "
-            f"{m['incremental']['read_rows']:,} | unchanged — printed, "
-            "**not** asserted |",
+            f"{m['incremental']['read_rows']:,} | {read_cell} |",
             "",
             f"**The write saving is the structural one.** Rewriting only the "
             f"{m['incremental']['written_rows']} changed keys instead of all "
@@ -317,13 +373,8 @@ def render(m: dict) -> str:
             "stops `campaign_hourly` gaining a full copy per refresh — the un-merged "
             "part growth RUNBOOK incident #1 is about.",
             "",
-            f"**Rows read do not move: {granules}.** A granule is 8,192 rows, so "
-            "both source tables sit inside ONE — a dirty-key predicate has nothing "
-            "to skip, and the incremental refresh reads exactly what the full "
-            "rebuild reads. The saving here is entirely in what is WRITTEN. "
-            "Whether a dirty-key filter can also prune READS is answerable only on "
-            "a multi-granule table (`bench_large`, ≈7 granules of exposures) and is "
-            "a BACKLOG row for 18b, which already runs that profile.",
+            f"**Rows read — {verdict}: {granules}.** {mechanism} The saving here is "
+            "entirely in what is WRITTEN.",
             "",
             "**Dirty-set gate:** the keys reconciliation changed vs the keys the "
             "pipeline's own second-pass refresh recomputed — "
@@ -363,6 +414,7 @@ def main(argv: list[str] | None = None) -> None:
     assert_profile_marker(db_profile_marker(client), profile)
     apply_ddl(client)
     measured = run(client)
+    measured["profile"] = profile
     write_results(render(measured))
     print(format_report(measured))
     print("\nwrote docs/RESULTS.md → 'Rollup refresh: full rebuild vs dirty set'")
