@@ -94,7 +94,8 @@ def test_async_flag_defaults_off_and_make_run_enables_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """OFF unless LAKE_ASYNC_INSERT=1 (set by `make run`). The mutation sentinel:
-    an `invert-guard` on `_async_insert_enabled` flips the default and is KILLED."""
+    a `constant-return:True` on `_async_insert_enabled` flips the default and is
+    KILLED here (invert-guard would ERROR — the function is a guardless return)."""
     monkeypatch.delenv("LAKE_ASYNC_INSERT", raising=False)
     assert _async_insert_enabled() is False
     monkeypatch.setenv("LAKE_ASYNC_INSERT", "1")

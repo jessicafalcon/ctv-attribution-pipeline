@@ -147,7 +147,7 @@ Every Done-when item names the test or command output that proves it.
 | Done-when | Proof (test file / `make` target / command output) |
 |---|---|
 | 1a (async flag on the loader, off by default) | `tests/test_load_serving.py::test_async_flag_defaults_off_and_make_run_enables_it`, `::test_the_insert_settings_carry_async_insert_and_wait` |
-| 1b (serving rows byte-identical with async on vs off) | LIVE `tests/integration/test_async_insert.py::test_serving_rows_are_byte_identical_with_async_on_and_off` (and equal to `tests/oracle.py`) |
+| 1b (serving rows byte-identical with async on vs off, both tables) | LIVE `tests/integration/test_async_insert.py::test_serving_rows_are_byte_identical_with_async_on_and_off` (exposures_landed) + `::test_attributed_rows_are_byte_identical_with_async_on_and_off` (attributed_conversions) |
 | 1c (fewer parts, measured) | `make bench` / the `bench_large` measurement line "parts/min async < sync" (direction assert; magnitude printed, never pinned) |
 | 2a (per-query cost written to the table) | `make cost-report PROFILE=long_delay` output line + LIVE `tests/integration/test_cost_report.py::test_each_measured_query_lands_one_row_keyed_by_its_tag` |
 | 2b (cpu_seconds and dollars derived, not literal) | `tests/test_cost_report.py::test_cpu_seconds_is_the_profileevents_value`, `::test_dollars_come_from_the_config_rate_not_a_hardcoded_sql_literal` |
@@ -170,7 +170,7 @@ satisfies.
 
 | Invariant ("for all …, … holds") | Falsified by (scenario test) |
 |---|---|
-| 1. For every lever this phase adds (async insert on/off, per-query cost tagging), the serving-table row content is identical to a run without it — the lever changes cost, never an answer (6dp row-equality, Phase-13 harness; equal to `tests/oracle.py`). | LIVE `tests/integration/test_async_insert.py::test_serving_rows_are_byte_identical_with_async_on_and_off` |
+| 1. For every lever this phase adds (async insert on/off, per-query cost tagging), the serving-table row content is identical to a run without it — the lever changes cost, never an answer (6dp row-equality, Phase-13 harness; equal to `tests/oracle.py`). BOTH serving tables. | LIVE `tests/integration/test_async_insert.py::test_serving_rows_are_byte_identical_with_async_on_and_off` (exposures) + `::test_attributed_rows_are_byte_identical_with_async_on_and_off` (attributed) |
 | 2. For every async insert, `wait_for_async_insert=1` holds: the call returns only after its rows are flushed and queryable, so a read issued immediately after a day's load sees every row — no async-buffer race. | LIVE `tests/integration/test_async_insert.py::test_a_read_right_after_a_load_sees_every_row` |
 | 3. For every measured cost, `query_cost_daily` is OUTSIDE the byte-identical guarantee (durations vary run to run, like Iceberg metadata / Dagster ids) AND no serving / report / reconcile path reads it — so no pipeline answer depends on a measured cost. | `tests/test_cost_report.py::test_no_pipeline_path_reads_query_cost_daily` (import/read guard over `queries/`, `reconcile/`, `orchestration/`, `lake/`) |
 | 4. For every measured query, it carries a distinct `log_comment` tag, so each `query_cost_daily` row aggregates exactly one query's `system.query_log` rows, never a whole session's. | LIVE `tests/integration/test_cost_report.py::test_each_measured_query_lands_one_row_keyed_by_its_tag`; `tests/test_cost_report.py::test_every_measured_query_is_tagged` |

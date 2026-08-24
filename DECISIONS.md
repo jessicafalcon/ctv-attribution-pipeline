@@ -143,7 +143,10 @@ below, never deleted.
 
 - **Alerts are proven by `promtool test rules` against REAL captured stage registries;
   `ConsumerLag` is the batch backlog proxy and `WatermarkStall` the peak-lateness
-  proxy; no annotations until the live push path.** ([Phase 7](#phase-7))
+  proxy. The live push path is built (Phase 18b: stages push to a Pushgateway,
+  Prometheus scrapes it, the rules evaluate on live data, Alertmanager routes firing to
+  the agent); the Phase-7 four carry no annotations by a deliberate scope choice, not a
+  deferral.** ([Phase 7](#phase-7), [Phase 18b](#phase-18b))
 - **The docs' accuracy tables trace to `tests/pins.py` and the scaling / cost-lever
   numbers to a `make`-regenerated block (`scale-curve`, `cost-levers`) — guarded; the
   agent-eval and lakehouse tables are dated captures, the benchmark table is
@@ -970,7 +973,11 @@ below, never deleted.
   oracle (circular — the fixture would reflect the generator's arithmetic, not the
   stage's) and a Pushgateway/textfile live path (a new service; it's the deferred
   path, BACKLOG). Chosen because it adds no service, stays deterministic, and is the
-  honest proof for the two time-based alerts.
+  honest proof for the two time-based alerts. *(Superseded Phase 18b: the Pushgateway
+  live path IS now built — the "deferred path, BACKLOG" clause no longer holds. The
+  sibling claim stays true: `make test-alerts` still proves firing + `for: 5m` timing
+  offline via `eval_time`, not a live scrape, so promtool remains the deterministic
+  timing proof; the live push path proves push→scrape→evaluate on real data instead.)*
 - **"Consumer lag" is `resolve_input_backlog` — a batch proxy, not group lag.** The
   stages read from `OFFSET_BEGINNING` every pass with no committed group offsets
   (BACKLOG 19), so redpanda consumer-group lag isn't tracked. The honest batch

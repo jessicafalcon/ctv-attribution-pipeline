@@ -174,9 +174,10 @@ makes a 90-day window possible without 90 days of processor state.
 **Observability.** Prometheus metrics per stage (`producer_`, `resolve_`, `engine_`,
 `lake_`, `reconcile_`), a Grafana dashboard (JSON, committed), and Alertmanager rules
 for the deterministic conditions (consumer lag, watermark stall, match-rate band,
-restatement magnitude). Alerts fire a webhook to the agent (the live scrape →
-Alertmanager → webhook push path is a documented cut — see
-[Next steps](#next-steps--what-was-cut-and-why)).
+restatement magnitude). Alerts fire a webhook to the agent — the live scrape →
+Alertmanager → webhook push path is built (Phase 18b: each batch stage pushes its
+terminal registry to a Pushgateway that Prometheus scrapes, and Alertmanager routes
+firing alerts to the agent).
 
 **The agent — attribution-integrity guardian.** Threshold alerts catch "lag is high";
 they cannot catch a **plausible-but-wrong attribution number** — a ROAS inflated by a
@@ -371,11 +372,12 @@ not speculative code.
   becomes TTL'd state keyed on `event_time + max_resend_delay`. The seeded duplicate is
   timestamp-identical to its original, so a real deployment (with genuinely-later re-send
   timestamps) is needed to exercise TTL sizing — see SCALING.md.
-- **Live Alertmanager firing path.** The webhook endpoint and the alert rules both exist
-  and are tested (promtool against real captured registries), but the batch stages exit
-  before a scrape, so the live scrape → Alertmanager → webhook chain (and the Grafana
-  panels that only populate under it) needs a push path (Pushgateway / textfile
-  collector) — Phase 18b. The scheduled-sweep trigger `make agent-run` stands in for it.
+- **Live Alertmanager firing path — delivered (Phase 18b).** Was a scope cut through
+  Phase 17 (the batch stages exit before a pull-scrape). Phase 18b built the push path:
+  each stage pushes its terminal registry to a Pushgateway that Prometheus scrapes after
+  the stage exits, the alert rules evaluate on live data, and Alertmanager routes firing
+  alerts to the agent webhook. Kept in this list as a delivered-since note (see the
+  History row and ARCHITECTURE §3.3), not a standing cut.
 - **Co-view adjustment as a reporting factor** — a won't-do. The honest per-genre
   expected baseline does not exist in serving data, and sourcing it from the producer's
   multiplier would couple reporting to generation parameters. Co-viewing stays a
