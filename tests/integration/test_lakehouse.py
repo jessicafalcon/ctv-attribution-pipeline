@@ -18,6 +18,11 @@ it is safe to run standalone), then proves the spec's Done-when:
   source-equivalence proof, kept, now with the lake pass as the product path);
 - Phase 12 #3 (kept): the Dagster-orchestrated pass writes the same reconciled
   rows a single pass would — now via lake append + reload.
+
+BACKLOG 88 (crash recovery at the land → load seam): two additive demonstrations
+that an interrupted load is recoverable by construction — (a) a load that never
+ran after a land, (b) a load that stopped after a subset of touched days — each
+converges on restart to the uninterrupted oracle's serving rows. No code change.
 """
 
 import os
@@ -28,6 +33,7 @@ import pytest
 
 from clickhouse.client import connect
 from lake.load_serving import ATTRIBUTED_COLS, EXPOSURE_COLS
+from orchestration.replay import SERVING_TABLES
 from orchestration.run import main as dagster_main
 from orchestration.run import materialize_load
 from producer.models import Exposure
@@ -130,6 +136,74 @@ def test_accumulated_lake_reloads_byte_identically(oracle_run) -> None:
     after_exp = _serving(client, "exposures_landed", EXPOSURE_COLS, _EXP_ORDER)
     assert after_att == before_att
     assert after_exp == before_exp
+
+
+# --- Crash recovery at the land → load seam (BACKLOG 88) -------------------
+#
+# Invariant: for all interruptions of the land → load seam — a load that never
+# ran after a land, or a load that stopped after a subset of touched days —
+# completing the load afterward converges to exactly the serving rows the
+# uninterrupted oracle produces (row content, 6dp; RMT FINAL read). The seam is
+# idempotent by construction (append-only lake, touched-day reloads, and the
+# ReplacingMergeTree collapses re-inserts on FINAL) — these two tests DEMONSTRATE
+# it; no production code change accompanies them.
+#
+# The stack's ClickHouse is already loaded (`make run-hot`), so to make "the load
+# never ran" / "only a subset of days loaded" OBSERVABLE, each case first empties
+# the serving tables — the sanctioned `SERVING_TABLES` truncate `make replay-serving`
+# uses, no new destructive path — to establish the crash state, then runs the load
+# as the recovery. Placed BEFORE the reconcile tests below on purpose: those land
+# reconciled corrections into this module's tmp lake (LAKE_ROOT), which would move
+# the current row per conversion_id off the hot oracle these tests compare to. Each
+# test self-heals (it ends with every day reloaded). No `OPTIMIZE … FINAL` is
+# issued: a recovery test must observe the table as the recovery left it (same
+# rationale as fix/reconcile-idempotency-6dp, BACKLOG 65).
+
+
+def _truncate_serving(client) -> None:
+    """Empty the loaded serving tables — the crash state (nothing loaded). The
+    sanctioned `SERVING_TABLES` set, truncated exactly as `orchestration.replay`'s
+    `truncate_and_reload` (make replay-serving) does."""
+    for table in SERVING_TABLES:
+        client.command(f"truncate table {table}")
+
+
+def test_load_after_a_skipped_load_recovers_the_oracle_rows(oracle_run) -> None:
+    # Case (a): a crash BETWEEN land and load. The run is landed in the lake
+    # (fixture); truncating the serving tables is the "load never ran" state.
+    # Running the load over the touched days is the recovery on restart, and it
+    # converges to the uninterrupted oracle's rows (6dp).
+    client = connect()
+    att, exp = _oracle(oracle_run)
+    assert att, "long_delay must attribute rows"
+    days = land_run(oracle_run)  # touched days (re-land is idempotent on read)
+    _truncate_serving(client)
+    assert not _att(client) and not _exp(client), "crash state: nothing loaded"
+    materialize_load(days)  # the recovery
+    assert _att(client) == att
+    assert _exp(client) == exp
+
+
+def test_load_resumed_after_a_partial_multi_day_load_converges(oracle_run) -> None:
+    # Case (b): a crash PARTWAY THROUGH a multi-day load. Load a strict subset of
+    # the touched days (the load stopped one day short), then re-run the full set
+    # (restart) — convergence to the uninterrupted oracle's rows (6dp).
+    client = connect()
+    att, exp = _oracle(oracle_run)
+    days = land_run(oracle_run)
+    ordered = sorted(days)
+    assert len(ordered) >= 2, "long_delay must span ≥2 touched days for a partial load"
+    subset = set(ordered[:-1])  # stopped one touched day short of the full set
+    _truncate_serving(client)
+    materialize_load(subset)
+    # genuinely partial: the held-back day is a touched day, so it carries rows the
+    # subset load has not landed yet — strictly fewer serving rows than the full run.
+    assert len(_att(client)) + len(_exp(client)) < len(att) + len(exp), (
+        "the subset load must be genuinely partial"
+    )
+    materialize_load(days)  # restart over the full set
+    assert _att(client) == att
+    assert _exp(client) == exp
 
 
 def _clickhouse_exposures(client) -> dict[str, list[Exposure]]:
